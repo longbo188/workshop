@@ -1,0 +1,1250 @@
+// 筛选条件横排样式
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+  
+  .filter-item {
+    flex: 1;
+    min-width: 150px;
+    max-width: 200px;
+    
+    ion-label {
+      font-size: 0.9em;
+      font-weight: 500;
+      color: var(--ion-color-medium);
+      margin-bottom: 4px;
+    }
+    
+    ion-select,
+    ion-input {
+      --padding-start: 12px;
+      --padding-end: 12px;
+      --padding-top: 8px;
+      --padding-bottom: 8px;
+    }
+  }
+  
+  .filter-button {
+    flex: 0 0 auto;
+    min-width: auto;
+    max-width: none;
+    display: flex;
+    align-items: flex-end;
+    
+    .button-stack {
+      display: flex;
+      flex-direction: row;
+      gap: 8px;
+      width: 100%;
+    }
+    
+    ion-button {
+      height: 40px;
+      --padding-start: 16px;
+      --padding-end: 16px;
+      width: 100%;
+    }
+  }
+}
+
+// 响应式设计 - 平板优化
+@media (max-width: 1024px) and (min-width: 768px) {
+  .filter-row {
+    gap: 12px;
+    
+    .filter-item {
+      min-width: 120px;
+      max-width: 180px;
+    }
+    
+    .filter-button {
+      .button-stack {
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      
+      ion-button {
+        font-size: 0.9em;
+        --padding-start: 12px;
+        --padding-end: 12px;
+      }
+    }
+  }
+}
+
+// 响应式设计 - 小屏幕时改为垂直布局
+@media (max-width: 768px) {
+  .filter-row {
+    flex-direction: column;
+    align-items: stretch;
+    
+    .filter-item {
+      min-width: unset;
+      max-width: unset;
+      flex: none;
+    }
+    
+    .filter-button {
+      align-items: center;
+      
+      .button-stack {
+        flex-direction: column;
+      }
+      
+      ion-button {
+        width: 100%;
+      }
+    }
+  }
+}
+
+.efficiency-card {
+  margin-bottom: 16px;
+}
+
+// Excel 风格效率表格
+.excel-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.excel-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  min-width: 1000px;
+  table-layout: fixed;
+  
+  // 平板优化：减小最小宽度和字体大小
+  @media (max-width: 1024px) and (min-width: 768px) {
+    min-width: 900px;
+    font-size: 12px;
+    
+    th, td {
+      padding: 6px 8px;
+    }
+  }
+
+  th,
+  td {
+    border: 1px solid #e1e5eb;
+    padding: 8px 10px;
+    text-align: center;
+    background: #fff;
+    color: #333;
+    word-break: break-word;
+    display: table-cell;
+    vertical-align: middle;
+  }
+  
+  td {
+    min-width: 90px;
+    max-width: 320px;
+  }
+  
+  tr {
+    display: table-row;
+  }
+
+  thead {
+    th {
+      background: #f4f7fb;
+      font-weight: 600;
+      color: #2c3e50;
+    }
+    
+    tr:first-child th:nth-child(1) {
+      width: 50px !important;
+      min-width: 50px !important;
+      max-width: 50px !important;
+    }
+    
+    tr:first-child th:nth-child(2) {
+      width: 200px !important;
+      min-width: 200px !important;
+      max-width: 200px !important;
+    }
+    
+    tr:first-child th:nth-child(3) {
+      width: 120px !important;
+      min-width: 120px !important;
+      max-width: 120px !important;
+    }
+    
+    tr:first-child th:nth-child(4) {
+      width: 120px !important;
+      min-width: 120px !important;
+      max-width: 120px !important;
+    }
+    
+    tr:first-child th:nth-child(5) {
+      width: 120px !important;
+      min-width: 120px !important;
+      max-width: 120px !important;
+    }
+    
+    tr:first-child th:nth-child(6) {
+      width: 120px !important;
+      min-width: 120px !important;
+      max-width: 120px !important;
+    }
+    
+    tr:first-child th:nth-child(7) {
+      width: 120px !important;
+      min-width: 120px !important;
+      max-width: 120px !important;
+    }
+    
+    tr:first-child th:nth-child(8) {
+      width: 100px !important;
+      min-width: 100px !important;
+      max-width: 100px !important;
+    }
+    
+    tr:first-child th:nth-child(9) {
+      width: 100px !important;
+      min-width: 100px !important;
+      max-width: 100px !important;
+    }
+    
+    tr:first-child th:nth-child(10) {
+      width: 150px !important;
+      min-width: 150px !important;
+      max-width: 150px !important;
+    }
+    
+    // 平板优化：减小列宽
+    @media (max-width: 1024px) and (min-width: 768px) {
+      tr:first-child th:nth-child(2) {
+        width: 150px !important;
+        min-width: 150px !important;
+        max-width: 150px !important;
+      }
+      
+      tr:first-child th:nth-child(3),
+      tr:first-child th:nth-child(4),
+      tr:first-child th:nth-child(5),
+      tr:first-child th:nth-child(6),
+      tr:first-child th:nth-child(7) {
+        width: 100px !important;
+        min-width: 100px !important;
+        max-width: 100px !important;
+      }
+      
+      tr:first-child th:nth-child(8),
+      tr:first-child th:nth-child(9) {
+        width: 80px !important;
+        min-width: 80px !important;
+        max-width: 80px !important;
+      }
+      
+      tr:first-child th:nth-child(10) {
+        width: 120px !important;
+        min-width: 120px !important;
+        max-width: 120px !important;
+      }
+    }
+
+    .filter-row th {
+      background: #f9fbff;
+      padding: 4px 6px;
+    }
+    
+    .filter-row th:nth-child(1) {
+      width: 50px !important;
+      min-width: 50px !important;
+      max-width: 50px !important;
+    }
+    
+    .filter-row th:nth-child(2) {
+      width: 200px !important;
+      min-width: 200px !important;
+      max-width: 200px !important;
+    }
+    
+    .filter-row th:nth-child(3) {
+      width: 120px !important;
+      min-width: 120px !important;
+      max-width: 120px !important;
+    }
+    
+    .filter-row th:nth-child(4) {
+      width: 120px !important;
+      min-width: 120px !important;
+      max-width: 120px !important;
+    }
+    
+    .filter-row th:nth-child(5) {
+      width: 120px !important;
+      min-width: 120px !important;
+      max-width: 120px !important;
+    }
+    
+    .filter-row th:nth-child(6) {
+      width: 120px !important;
+      min-width: 120px !important;
+      max-width: 120px !important;
+    }
+    
+    .filter-row th:nth-child(7) {
+      width: 100px !important;
+      min-width: 100px !important;
+      max-width: 100px !important;
+    }
+    
+    .filter-row th:nth-child(8) {
+      width: 100px !important;
+      min-width: 100px !important;
+      max-width: 100px !important;
+    }
+    
+    .filter-row th:nth-child(9) {
+      width: 150px !important;
+      min-width: 150px !important;
+      max-width: 150px !important;
+    }
+  }
+
+  tbody tr:nth-child(even) {
+    background: #fafbfd;
+  }
+
+  tbody tr:hover {
+    background: #eef4ff;
+  }
+
+  .col-index {
+    width: 50px;
+    min-width: 50px;
+    max-width: 60px;
+    text-align: center;
+  }
+
+  .table-empty-row td {
+    text-align: center;
+    padding: 16px 8px;
+    color: #999;
+    font-size: 13px;
+  }
+}
+
+// 列宽定义
+.col-task-name {
+  width: 200px;
+}
+
+.col-phase {
+  width: 120px;
+}
+
+.col-assignee {
+  width: 120px;
+}
+
+.col-standard-hours {
+  width: 120px;
+}
+
+.col-actual-hours {
+  width: 120px;
+}
+
+.col-efficiency {
+  width: 100px;
+}
+
+.col-exception {
+  width: 100px;
+}
+
+.col-ops {
+  width: 150px;
+}
+
+// 表格筛选样式
+.table-filter-input,
+.table-filter-select {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  font-size: 12px;
+  background: white;
+  box-sizing: border-box;
+  margin: 0;
+  display: block;
+}
+
+.table-filter-select {
+  height: 28px;
+  cursor: pointer;
+}
+
+// 确保筛选行的th是水平排列的
+.excel-table .filter-row {
+  display: table-row;
+}
+
+.excel-table .filter-row th {
+  display: table-cell;
+  vertical-align: middle;
+}
+
+.table-filter-input {
+  height: 28px;
+}
+
+// 月度效率表格标题行样式
+.monthly-header-row {
+  background: #f4f7fb;
+  font-weight: 600;
+  color: #2c3e50;
+
+  td {
+    text-align: left;
+    padding: 6px 10px;
+  }
+}
+
+// 月度效率合计行样式
+.monthly-total-row {
+  font-weight: 600;
+  background: #fffbe6;
+}
+
+// 一行显示的任务卡片样式
+.efficiency-card-row {
+  margin-bottom: 8px;
+  
+  .efficiency-row-content {
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+}
+
+// 任务信息区域
+.task-info {
+  flex: 1;
+  min-width: 300px;
+  max-width: 500px;
+  
+  .task-title {
+    font-size: 1em;
+    font-weight: 600;
+    color: var(--ion-color-dark);
+    line-height: 1.3;
+    word-break: break-word;
+    white-space: normal;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    
+    .task-name {
+      color: var(--ion-color-dark);
+      font-weight: 600;
+    }
+    
+    .worker-name {
+      color: var(--ion-color-dark);
+      font-weight: 600;
+    }
+    
+    .phase-name {
+      color: var(--ion-color-dark);
+      font-weight: 600;
+    }
+    
+    .separator {
+      color: var(--ion-color-medium);
+      font-weight: 400;
+      margin: 0 2px;
+    }
+  }
+}
+
+// 效率指标区域
+.efficiency-metrics {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 300px;
+}
+
+// 指标chip样式
+.metric-chip {
+  font-size: 0.8em;
+  --padding-start: 6px;
+  --padding-end: 6px;
+  height: 28px;
+  
+  ion-label {
+    font-size: 0.8em;
+  }
+}
+
+.efficiency-chip {
+  font-size: 0.85em;
+  --padding-start: 8px;
+  --padding-end: 8px;
+  height: 32px;
+  font-weight: 600;
+  
+  ion-label {
+    font-size: 0.85em;
+  }
+}
+
+// 操作按钮区域
+.action-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  
+  .calculation-details-btn {
+    --border-radius: 16px;
+    font-size: 0.8em;
+    --padding-start: 8px;
+    --padding-end: 8px;
+    height: 32px;
+  }
+}
+
+// 响应式设计
+@media (max-width: 768px) {
+  .efficiency-card-row {
+    .efficiency-row-content {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 12px;
+    }
+    
+    .task-info {
+      min-width: unset;
+      max-width: unset;
+      
+      .task-title {
+        font-size: 0.95em;
+        justify-content: center;
+        text-align: center;
+      }
+    }
+    
+    .efficiency-metrics {
+      min-width: unset;
+      justify-content: center;
+    }
+    
+    .action-buttons {
+      justify-content: center;
+    }
+  }
+}
+
+@media (max-width: 480px) {
+  .efficiency-card-row {
+    .efficiency-row-content {
+      padding: 8px 12px;
+    }
+    
+    .task-title {
+      font-size: 1em;
+    }
+    
+    .efficiency-metrics {
+      gap: 4px;
+    }
+    
+    .metric-chip {
+      font-size: 0.75em;
+      height: 24px;
+      --padding-start: 4px;
+      --padding-end: 4px;
+    }
+    
+    .efficiency-chip {
+      font-size: 0.8em;
+      height: 28px;
+      --padding-start: 6px;
+      --padding-end: 6px;
+    }
+  }
+}
+
+// 原有的efficiency-metrics样式已移到上面，这里删除重复定义
+
+.button-group {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.button-group ion-button {
+  flex: 1;
+}
+
+.work-reports,
+.exception-reports {
+  margin-top: 16px;
+}
+
+.work-reports h4,
+.exception-reports h4 {
+  margin-bottom: 8px;
+  color: var(--ion-color-primary);
+}
+
+ion-list {
+  background: transparent;
+}
+
+ion-item {
+  --background: var(--ion-color-light);
+  --border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+ion-chip {
+  margin: 2px;
+}
+
+ion-note {
+  font-size: 0.9em;
+  color: var(--ion-color-medium);
+}
+
+.worker-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  color: var(--ion-color-primary);
+  font-weight: 500;
+  
+  ion-icon {
+    font-size: 1em;
+    color: var(--ion-color-primary);
+  }
+}
+
+// 计算过程详情样式
+.calculation-details-btn {
+  margin-left: 8px;
+  --border-radius: 16px;
+  font-size: 0.8em;
+}
+
+.calculation-details {
+  margin-top: 16px;
+  padding: 16px;
+  background: var(--ion-color-light);
+  border-radius: 8px;
+  border-left: 4px solid var(--ion-color-primary);
+}
+
+.calculation-details h4 {
+  margin: 0 0 16px 0;
+  color: var(--ion-color-primary);
+  font-weight: bold;
+}
+
+.calculation-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.step {
+  background: white;
+  padding: 12px;
+  border-radius: 6px;
+  border-left: 3px solid var(--ion-color-secondary);
+}
+
+.step h5 {
+  margin: 0 0 8px 0;
+  color: var(--ion-color-secondary);
+  font-size: 1em;
+}
+
+.step h6 {
+  margin: 8px 0 4px 0;
+  color: var(--ion-color-tertiary);
+  font-size: 0.9em;
+}
+
+.step ul {
+  margin: 4px 0;
+  padding-left: 16px;
+}
+
+.step li {
+  margin: 2px 0;
+  font-size: 0.9em;
+}
+
+.sub-step {
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--ion-color-light-tint);
+  border-radius: 4px;
+}
+
+.day-detail {
+  margin: 8px 0;
+  padding: 8px;
+  background: white;
+  border-radius: 4px;
+  border: 1px solid var(--ion-color-light-shade);
+}
+
+.day-detail strong {
+  color: var(--ion-color-primary);
+  display: block;
+  margin-bottom: 4px;
+}
+
+.exception-breakdown {
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--ion-color-warning-tint);
+  border-radius: 4px;
+}
+
+.exception-breakdown h6 {
+  margin: 0 0 4px 0;
+  color: var(--ion-color-warning-shade);
+}
+
+// 响应式设计
+@media (max-width: 768px) {
+  .efficiency-metrics {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .calculation-details-btn {
+    margin-left: 0;
+    margin-top: 8px;
+  }
+  
+  .calculation-steps {
+    gap: 12px;
+  }
+  
+  .step {
+    padding: 8px;
+  }
+}
+
+// 异常时间段样式
+.exception-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.approval-info {
+  font-size: 0.8em;
+}
+
+.approval-note {
+  font-size: 0.8em;
+  max-width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+// 异常时间段标题样式
+.exception-reports h4 {
+  color: var(--ion-color-warning);
+  font-weight: bold;
+  border-bottom: 2px solid var(--ion-color-warning);
+  padding-bottom: 4px;
+}
+
+// 异常时间段项目样式
+.exception-reports ion-item {
+  --background: var(--ion-color-warning-tint);
+  --border-radius: 8px;
+  margin-bottom: 8px;
+  border-left: 4px solid var(--ion-color-warning);
+}
+
+// 异常时间段标签样式
+.exception-reports ion-label h3 {
+  color: var(--ion-color-warning-shade);
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+
+.exception-reports ion-label p {
+  margin: 2px 0;
+  font-size: 0.9em;
+}
+
+// 计算过程详情样式
+.calculation-details {
+  margin-top: 16px;
+  padding: 16px;
+  background: var(--ion-color-primary-tint);
+  border-radius: 8px;
+  border-left: 4px solid var(--ion-color-primary);
+  width: 100%;
+  max-width: none;
+  min-width: 400px;
+}
+
+.calculation-details-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.calculation-details h4 {
+  margin: 0;
+  color: var(--ion-color-primary-shade);
+  font-weight: bold;
+  font-size: 1.1em;
+  flex: 1;
+}
+
+.calculation-toggle-btn {
+  --border-radius: 16px;
+  font-size: 0.8em;
+  --padding-start: 8px;
+  --padding-end: 8px;
+}
+
+.calculation-step-item {
+  --background: white;
+  --border-radius: 6px;
+  margin-bottom: 8px;
+  border-left: 3px solid var(--ion-color-primary);
+  --padding-start: 16px;
+  --padding-end: 16px;
+  --padding-top: 12px;
+  --padding-bottom: 12px;
+}
+
+.calculation-step-item ion-label h3 {
+  color: var(--ion-color-primary-shade);
+  font-weight: bold;
+  margin-bottom: 4px;
+  font-size: 0.95em;
+}
+
+.calculation-info,
+.calculation-time,
+.calculation-description,
+.calculation-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 0.95em;
+  color: var(--ion-color-dark);
+  flex-wrap: wrap;
+}
+
+.calculation-info ion-icon,
+.calculation-time ion-icon,
+.calculation-description ion-icon,
+.calculation-result ion-icon {
+  color: var(--ion-color-primary);
+  font-size: 1em;
+}
+
+.duration {
+  color: var(--ion-color-primary);
+  font-weight: bold;
+  margin-left: 4px;
+}
+
+.day-calculation-details {
+  margin-top: 12px;
+  padding: 8px;
+  background: var(--ion-color-light);
+  border-radius: 6px;
+}
+
+.day-calculation-details h6 {
+  margin: 0 0 8px 0;
+  color: var(--ion-color-primary-shade);
+  font-size: 0.9em;
+  font-weight: bold;
+}
+
+.day-detail-item {
+  margin-bottom: 8px;
+  padding: 8px;
+  background: white;
+  border-radius: 4px;
+  border-left: 2px solid var(--ion-color-primary);
+}
+
+.day-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  font-size: 0.9em;
+}
+
+.day-total {
+  color: var(--ion-color-primary);
+  font-weight: bold;
+}
+
+.day-detail-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.exception-breakdown {
+  margin-top: 8px;
+}
+
+.exception-breakdown-item {
+  margin-bottom: 4px;
+}
+
+// 计算统计信息样式
+.calculation-stats {
+  padding: 12px;
+  background: white;
+  border-radius: 6px;
+  border: 1px solid var(--ion-color-primary-shade);
+  margin-top: 12px;
+}
+
+.calculation-total,
+.calculation-summary {
+  margin: 6px 0;
+  font-size: 0.95em;
+  color: var(--ion-color-dark);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.calculation-total ion-icon,
+.calculation-summary ion-icon {
+  color: var(--ion-color-primary);
+  font-size: 1em;
+}
+
+// 异常时间段摘要样式
+.exception-summary {
+  margin-top: 16px;
+  padding: 16px;
+  background: var(--ion-color-warning-tint);
+  border-radius: 8px;
+  border-left: 4px solid var(--ion-color-warning);
+  width: 100%;
+  max-width: none;
+  min-width: 400px;
+}
+
+.exception-summary-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.exception-summary h4 {
+  margin: 0;
+  color: var(--ion-color-warning-shade);
+  font-weight: bold;
+  font-size: 1.1em;
+  flex: 1;
+}
+
+.exception-toggle-btn {
+  --border-radius: 16px;
+  font-size: 0.8em;
+  --padding-start: 8px;
+  --padding-end: 8px;
+}
+
+.exception-summary-item {
+  --background: white;
+  --border-radius: 6px;
+  margin-bottom: 8px;
+  border-left: 3px solid var(--ion-color-warning);
+  --padding-start: 16px;
+  --padding-end: 16px;
+  --padding-top: 12px;
+  --padding-bottom: 12px;
+}
+
+.exception-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.exception-header h3 {
+  color: var(--ion-color-warning-shade);
+  font-weight: bold;
+  margin: 0;
+  font-size: 0.95em;
+  flex-shrink: 0;
+  margin-right: 50px;
+}
+
+.exception-header .exception-time {
+  margin: 0;
+  font-size: 0.95em;
+  flex-shrink: 0;
+  margin-right: 50px;
+}
+
+.exception-header .exception-total {
+  margin: 0;
+  font-size: 0.85em;
+  color: var(--ion-color-dark);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.exception-summary-item h3 {
+  color: var(--ion-color-warning-shade);
+  font-weight: bold;
+  margin: 6px 0 4px 0;
+  font-size: 0.95em;
+}
+
+.exception-summary-item ion-label h3 {
+  color: var(--ion-color-warning-shade);
+  font-weight: bold;
+  margin-bottom: 4px;
+  font-size: 0.95em;
+}
+
+.exception-time {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 0.95em;
+  color: var(--ion-color-dark);
+  flex-wrap: wrap;
+}
+
+.exception-time ion-icon {
+  color: var(--ion-color-warning);
+  font-size: 1em;
+}
+
+.duration {
+  color: var(--ion-color-warning);
+  font-weight: bold;
+  margin-left: 4px;
+}
+
+.exception-description {
+  margin: 4px 0;
+  font-size: 0.85em;
+  color: var(--ion-color-medium);
+  font-style: italic;
+}
+
+.exception-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+// 异常统计信息样式
+.exception-stats {
+  padding: 12px;
+  background: white;
+  border-radius: 6px;
+  border: 1px solid var(--ion-color-warning-shade);
+  margin-top: 12px;
+}
+
+.exception-header .exception-total ion-icon {
+  color: var(--ion-color-warning);
+  font-size: 0.9em;
+}
+
+.exception-total {
+  margin: 0;
+  font-size: 0.85em;
+  color: var(--ion-color-dark);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.exception-total ion-icon {
+  color: var(--ion-color-warning);
+  font-size: 0.9em;
+}
+
+.exception-total strong {
+  color: var(--ion-color-warning-shade);
+  font-weight: bold;
+}
+
+.approval-note {
+  max-width: 150px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 768px) {
+  .efficiency-metrics {
+    flex-direction: column;
+  }
+  
+  .button-group {
+    flex-direction: column;
+  }
+  
+  .exception-summary-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  
+  .exception-toggle-btn {
+    align-self: flex-end;
+  }
+  
+  .exception-time {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+  
+  .exception-status {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  
+  .exception-total,
+  .exception-types {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+}
+
+// 可点击的异常记录标签样式
+.clickable-chip {
+  cursor: pointer;
+  transition: all 0.2s ease;
+  
+  &:hover {
+    transform: scale(1.05);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    opacity: 0.8;
+  }
+  
+  &:active {
+    transform: scale(0.95);
+    opacity: 0.6;
+  }
+}
+
+// 报工记录样式
+.work-reports {
+  margin-top: 16px;
+  padding: 12px;
+  background: var(--ion-color-success-tint);
+  border-radius: 8px;
+  border-left: 4px solid var(--ion-color-success);
+}
+
+.work-reports-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.work-reports h4 {
+  margin: 0;
+  color: var(--ion-color-success-shade);
+  font-weight: bold;
+  font-size: 1.1em;
+  flex: 1;
+}
+
+.work-reports-toggle-btn {
+  --border-radius: 16px;
+  font-size: 0.8em;
+  --padding-start: 8px;
+  --padding-end: 8px;
+}
+
+.work-report-item {
+  --background: white;
+  --border-radius: 6px;
+  margin-bottom: 8px;
+  border-left: 3px solid var(--ion-color-success);
+}
+
+.work-report-item ion-label h3 {
+  color: var(--ion-color-success-shade);
+  font-weight: bold;
+  margin-bottom: 4px;
+  font-size: 0.95em;
+}
+
+.work-report-time {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0;
+  font-size: 0.9em;
+  color: var(--ion-color-dark);
+}
+
+.work-report-time ion-icon {
+  color: var(--ion-color-success);
+  font-size: 1em;
+}
+
+.work-report-time .duration {
+  color: var(--ion-color-success);
+  font-weight: bold;
+  margin-left: 4px;
+}
+
+.work-report-notes {
+  margin: 4px 0;
+  font-size: 0.85em;
+  color: var(--ion-color-medium);
+  font-style: italic;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.work-report-notes ion-icon {
+  color: var(--ion-color-success);
+  font-size: 1em;
+}
+
+

@@ -1,0 +1,157 @@
+.exception-report-item {
+  margin-bottom: 16px;
+  --padding-start: 16px;
+  --padding-end: 16px;
+  --padding-top: 16px;
+  --padding-bottom: 16px;
+  
+  ion-label {
+    h2 {
+      font-size: 1.1em;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #2c3e50;
+    }
+    
+    p {
+      margin: 4px 0;
+      font-size: 0.9em;
+      color: #666;
+      
+      strong {
+        color: #2c3e50;
+        font-weight: 500;
+      }
+    }
+  }
+}
+
+.action-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 120px;
+  
+  ion-button {
+    --padding-start: 8px;
+    --padding-end: 8px;
+    height: 32px;
+    font-size: 0.8em;
+  }
+}
+
+.pending-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.approved-actions,
+.processing-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.approval-info,
+.resolution-info {
+  margin-top: 12px;
+  padding: 8px;
+  background-color: #f8f9fa;
+  border-radius: 6px;
+  border-left: 3px solid #28a745;
+  
+  p {
+    margin: 2px 0;
+    font-size: 0.85em;
+  }
+}
+
+.resolution-info {
+  border-left-color: #17a2b8;
+}
+
+ion-badge {
+  font-size: 0.75em;
+  --padding-start: 6px;
+  --padding-end: 6px;
+  height: 20px;
+}
+
+ion-card {
+  margin: 8px 0;
+  
+  ion-card-header {
+    padding-bottom: 8px;
+    
+    ion-card-title {
+      font-size: 1.1em;
+      font-weight: 600;
+    }
+  }
+  
+  ion-card-content {
+    padding-top: 8px;
+  }
+}
+
+ion-modal {
+  --width: 90%;
+  --max-width: 500px;
+  --height: 80%;
+  --max-height: 600px;
+}
+
+// 图片相关样式
+.image-container {
+  margin: 12px 0;
+  
+  p {
+    margin-bottom: 8px;
+    font-weight: 500;
+    color: #2c3e50;
+  }
+}
+
+.exception-image {
+  max-width: 150px;
+  max-height: 150px;
+  border-radius: 8px;
+  border: 2px solid #e0e0e0;
+  cursor: pointer;
+  transition: transform 0.2s ease;
+  
+  &:hover {
+    transform: scale(1.05);
+    border-color: #007bff;
+  }
+}
+
+.exception-image-modal {
+  max-width: 200px;
+  max-height: 200px;
+  border-radius: 8px;
+  border: 2px solid #e0e0e0;
+  cursor: pointer;
+  transition: transform 0.2s ease;
+  
+  &:hover {
+    transform: scale(1.05);
+    border-color: #007bff;
+  }
+}
+
+.image-view-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 400px;
+}
+
+.full-size-image {
+  max-width: 100%;
+  max-height: 80vh;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+

@@ -1,0 +1,1548 @@
+﻿<ion-header>
+  <ion-toolbar>
+    <ion-title>主管派工</ion-title>
+    <ion-buttons slot="end">
+      <ion-button id="task-manage-button" *ngIf="canImportTasks">
+        <ion-icon name="grid-outline"></ion-icon>
+        任务管理
+      </ion-button>
+      <ion-popover trigger="task-manage-button" triggerAction="click">
+        <ng-template>
+          <ion-content>
+            <ion-list>
+              <ion-item button (click)="openImportModal()">
+                <ion-label>批量导入任务</ion-label>
+                <ion-icon name="cloud-upload-outline" slot="start"></ion-icon>
+              </ion-item>
+              <ion-item button (click)="openCreateTaskModal()">
+                <ion-label>新增任务</ion-label>
+                <ion-icon name="add-circle-outline" slot="start"></ion-icon>
+              </ion-item>
+              <ion-item button (click)="openEditTaskModal()">
+                <ion-label>修改任务</ion-label>
+                <ion-icon name="create-outline" slot="start"></ion-icon>
+              </ion-item>
+              <ion-item button (click)="openDeleteTaskModal()">
+                <ion-label>删除任务</ion-label>
+                <ion-icon name="trash-outline" slot="start"></ion-icon>
+              </ion-item>
+            </ion-list>
+          </ion-content>
+        </ng-template>
+      </ion-popover>
+      <ion-button (click)="openStdHoursModal()" *ngIf="currentUser?.role === 'admin' || (currentUser?.role === 'staff' && currentUser?.department === '工程部')" fill="outline">
+        <ion-icon name="time-outline"></ion-icon>
+        导入工时
+      </ion-button>
+      <ion-button (click)="openVizModal()" fill="clear">
+        <ion-icon name="stats-chart-outline"></ion-icon>
+        派工任务可视化
+      </ion-button>
+    </ion-buttons>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content class="ion-padding">
+  <ion-spinner *ngIf="isLoading" name="crescent"></ion-spinner>
+  <ion-card *ngIf="errorMsg">
+    <ion-card-content style="color:#c0392b;">{{ errorMsg }}</ion-card-content>
+  </ion-card>
+
+  <!-- 搜索和筛选区域 -->
+  <div *ngIf="!isLoading" class="search-filters">
+    <ion-card>
+      <ion-card-content>
+        <div class="search-row">
+          <ion-item>
+            <ion-input 
+              [(ngModel)]="searchKeyword" 
+              (ionInput)="onSearchChange()"
+              placeholder="搜索任务名称、设备号或产品型号..."
+              clearInput="true">
+            </ion-input>
+            <ion-icon name="search" slot="start"></ion-icon>
+          </ion-item>
+          <ion-button (click)="toggleFilters()" fill="outline">
+            <ion-icon name="filter"></ion-icon>
+            筛选
+          </ion-button>
+        </div>
+
+        <!-- 筛选选项 -->
+        <div *ngIf="showFilters" class="filter-options">
+          <ion-row>
+            <ion-col size="3" size-md="3" size-xs="12">
+              <ion-item>
+                <ion-label>优先级</ion-label>
+                <ion-select [(ngModel)]="selectedPriority" (ionChange)="onFilterChange()" placeholder="全部">
+                  <ion-select-option value="">全部</ion-select-option>
+                  <ion-select-option value="urgent">紧急</ion-select-option>
+                  <ion-select-option value="normal">非紧急</ion-select-option>
+                </ion-select>
+              </ion-item>
+            </ion-col>
+            <ion-col size="3" size-md="3" size-xs="12">
+              <ion-item>
+                <ion-label>状态</ion-label>
+                <ion-select [(ngModel)]="selectedStatus" (ionChange)="onFilterChange()" placeholder="全部">
+                  <ion-select-option value="">全部</ion-select-option>
+                  <ion-select-option value="pending">待处理</ion-select-option>
+                  <ion-select-option value="completed">已完成</ion-select-option>
+                </ion-select>
+              </ion-item>
+            </ion-col>
+            <ion-col size="3" size-md="3" size-xs="12">
+              <ion-item>
+                <ion-label>生产阶段</ion-label>
+                <ion-select [(ngModel)]="selectedPhase" (ionChange)="onFilterChange()" placeholder="全部阶段">
+                  <ion-select-option value="">全部阶段</ion-select-option>
+                  <ion-select-option value="machining">机加阶段</ion-select-option>
+                  <ion-select-option value="electrical">电控阶段</ion-select-option>
+                  <ion-select-option value="pre_assembly">组装前段</ion-select-option>
+                  <ion-select-option value="post_assembly">组装后段</ion-select-option>
+                  <ion-select-option value="debugging">调试阶段</ion-select-option>
+                  <ion-select-option value="not_started">未开始</ion-select-option>
+                </ion-select>
+              </ion-item>
+            </ion-col>
+            <ion-col size="3" size-md="3" size-xs="12">
+              <ion-item>
+                <ion-label>分配状态</ion-label>
+                <ion-select [(ngModel)]="selectedAssignmentStatus" (ionChange)="onFilterChange()" placeholder="全部">
+                  <ion-select-option value="">全部</ion-select-option>
+                  <ion-select-option value="assigned">已分配</ion-select-option>
+                  <ion-select-option value="unassigned">未分配</ion-select-option>
+                </ion-select>
+              </ion-item>
+            </ion-col>
+          </ion-row>
+          <ion-button (click)="clearFilters()" fill="clear" size="small">
+            <ion-icon name="refresh"></ion-icon>
+            清除筛选
+          </ion-button>
+        </div>
+      </ion-card-content>
+    </ion-card>
+
+  </div>
+
+  <div class="task-container" *ngIf="!isLoading">
+    <!-- 任务列表 -->
+    <ion-card class="task-list">
+      <ion-card-header>
+        <ion-card-title>
+          {{ selectedView === 'unassigned' ? '未分配任务' : 
+             selectedView === 'assigned' ? '已分配任务' : 
+             selectedView === 'urgent' ? '紧急任务' : '全部任务' }}
+          <ion-badge color="primary" style="margin-left: 8px;">
+            {{ getDisplayTasks().length }}
+          </ion-badge>
+        </ion-card-title>
+      </ion-card-header>
+      <ion-card-content>
+        <ng-container *ngIf="selectedView === 'all'">
+          <div class="task-table-wrapper">
+            <div class="table-toolbar">
+              <ion-button id="column-visibility-button" fill="outline" size="small">
+                <ion-icon name="options-outline"></ion-icon>
+                列显示
+              </ion-button>
+              <ion-button fill="outline" size="small" color="success" (click)="exportToExcel()">
+                <ion-icon name="download-outline"></ion-icon>
+                导出Excel
+              </ion-button>
+            </div>
+            <div class="table-ops-note">
+              说明：“协助人员填报”按钮用于填写各阶段协助人员及协助时间，并提交给经理审批；“列显示”用于隐藏或显示不需要查看的列。
+            </div>
+            <ion-popover trigger="column-visibility-button" triggerAction="click">
+              <ng-template>
+                <ion-content class="column-visibility-popover">
+        <ion-list>
+                    <ion-item lines="none" *ngFor="let col of columnVisibilityOptions">
+                      <ion-checkbox
+                        slot="start"
+                        [checked]="tableColumnVisibility[col.key]"
+                        (ionChange)="toggleColumnVisibility(col.key, $event.detail.checked)">
+                      </ion-checkbox>
+                      <ion-label>{{ col.label }}</ion-label>
+                    </ion-item>
+                    <ion-item lines="full">
+                      <ion-button expand="block" fill="clear" (click)="resetColumnVisibility()">重置显示</ion-button>
+                    </ion-item>
+                  </ion-list>
+                </ion-content>
+              </ng-template>
+            </ion-popover>
+            <div class="excel-table-scroll">
+              <table class="excel-table">
+                <colgroup>
+                  <col *ngIf="columnVisible('index')" class="col-index">
+                  <col *ngIf="columnVisible('device')" class="col-device">
+                  <col *ngIf="columnVisible('model')" class="col-model">
+                  <col *ngIf="columnVisible('priority')" class="col-priority">
+                  <col *ngIf="columnVisible('status')" class="col-status">
+                  <col *ngIf="columnVisible('currentPhase')" class="col-phase">
+                  <col *ngIf="columnVisible('productionTime')" class="col-date">
+                  <col *ngIf="columnVisible('promisedTime')" class="col-date">
+                  <col *ngIf="columnVisible('progress')" class="col-progress">
+                  <col *ngIf="columnVisible('machining')" class="col-stage">
+                  <col *ngIf="columnVisible('electrical')" class="col-stage">
+                  <col *ngIf="columnVisible('pre_assembly')" class="col-stage">
+                  <col *ngIf="columnVisible('post_assembly')" class="col-stage">
+                  <col *ngIf="columnVisible('debugging')" class="col-stage">
+                  <col class="col-ops">
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th *ngIf="columnVisible('index')">序号</th>
+                    <th *ngIf="columnVisible('device')">设备号</th>
+                    <th *ngIf="columnVisible('model')">型号</th>
+                    <th *ngIf="columnVisible('priority')">优先级</th>
+                    <th *ngIf="columnVisible('status')">状态</th>
+                    <th *ngIf="columnVisible('currentPhase')">当前阶段</th>
+                    <th *ngIf="columnVisible('productionTime')">开工日期</th>
+                    <th *ngIf="columnVisible('promisedTime')">承诺交付</th>
+                    <th *ngIf="columnVisible('progress')">整体进度</th>
+                    <th *ngIf="columnVisible('machining')">
+                      机加
+                      <div class="phase-stats">
+                        <span class="stat-completed">已完成: {{ getPhaseStats('machining').completed }}</span>
+                        <span class="stat-not-completed">未完成: {{ getPhaseStats('machining').notCompleted }}</span>
+                      </div>
+                    </th>
+                    <th *ngIf="columnVisible('electrical')">
+                      电控
+                      <div class="phase-stats">
+                        <span class="stat-completed">已完成: {{ getPhaseStats('electrical').completed }}</span>
+                        <span class="stat-not-completed">未完成: {{ getPhaseStats('electrical').notCompleted }}</span>
+                      </div>
+                    </th>
+                    <th *ngIf="columnVisible('pre_assembly')">
+                      组装前段
+                      <div class="phase-stats">
+                        <span class="stat-completed">已完成: {{ getPhaseStats('pre_assembly').completed }}</span>
+                        <span class="stat-not-completed">未完成: {{ getPhaseStats('pre_assembly').notCompleted }}</span>
+                      </div>
+                    </th>
+                    <th *ngIf="columnVisible('post_assembly')">
+                      组装后段
+                      <div class="phase-stats">
+                        <span class="stat-completed">已完成: {{ getPhaseStats('post_assembly').completed }}</span>
+                        <span class="stat-not-completed">未完成: {{ getPhaseStats('post_assembly').notCompleted }}</span>
+                      </div>
+                    </th>
+                    <th *ngIf="columnVisible('debugging')">
+                      调试
+                      <div class="phase-stats">
+                        <span class="stat-completed">已完成: {{ getPhaseStats('debugging').completed }}</span>
+                        <span class="stat-not-completed">未完成: {{ getPhaseStats('debugging').notCompleted }}</span>
+                      </div>
+                    </th>
+                    <th>操作</th>
+                  </tr>
+                  <tr class="filter-row">
+                    <th *ngIf="columnVisible('index')"></th>
+                    <th *ngIf="columnVisible('device')">
+                      <input 
+                        class="table-filter-input" 
+                        placeholder="筛选设备号" 
+                        [(ngModel)]="tableFilters.device" 
+                        (ngModelChange)="onTableFilterChange()">
+                    </th>
+                    <th *ngIf="columnVisible('model')">
+                      <input 
+                        class="table-filter-input" 
+                        placeholder="筛选型号" 
+                        [(ngModel)]="tableFilters.model" 
+                        (ngModelChange)="onTableFilterChange()">
+                    </th>
+                    <th *ngIf="columnVisible('priority')">
+                      <select 
+                        class="table-filter-select" 
+                        [(ngModel)]="tableFilters.priority" 
+                        (ngModelChange)="onTableFilterChange()">
+                        <option value="">全部</option>
+                        <option value="urgent">紧急</option>
+                        <option value="normal">非紧急</option>
+                      </select>
+                    </th>
+                    <th *ngIf="columnVisible('status')">
+                      <select 
+                        class="table-filter-select" 
+                        [(ngModel)]="tableFilters.status" 
+                        (ngModelChange)="onTableFilterChange()">
+                        <option value="">全部</option>
+                        <option value="pending">待处理</option>
+                        <option value="completed">已完成</option>
+                        <option value="cancelled">已取消</option>
+                      </select>
+                    </th>
+                    <th *ngIf="columnVisible('currentPhase')">
+                      <select 
+                        class="table-filter-select" 
+                        [(ngModel)]="tableFilters.phase" 
+                        (ngModelChange)="onTableFilterChange()">
+                        <option value="">全部</option>
+                        <option value="machining">机加</option>
+                        <option value="electrical">电控</option>
+                        <option value="pre_assembly">组装前段</option>
+                        <option value="post_assembly">组装后段</option>
+                        <option value="debugging">调试</option>
+                      </select>
+                    </th>
+                    <th *ngIf="columnVisible('productionTime')">
+                      <input 
+                        type="date" 
+                        class="table-filter-input" 
+                        placeholder="筛选开工日期" 
+                        [(ngModel)]="tableFilters.productionTime" 
+                        (ngModelChange)="onTableFilterChange()">
+                    </th>
+                    <th *ngIf="columnVisible('promisedTime')">
+                      <input 
+                        type="date" 
+                        class="table-filter-input" 
+                        placeholder="筛选承诺交付日期" 
+                        [(ngModel)]="tableFilters.promisedTime" 
+                        (ngModelChange)="onTableFilterChange()">
+                    </th>
+                    <th *ngIf="columnVisible('progress')">
+                      <input 
+                        type="number" 
+                        class="table-filter-input" 
+                        placeholder="最小进度%" 
+                        min="0" 
+                        max="100"
+                        [(ngModel)]="tableFilters.progress" 
+                        (ngModelChange)="onTableFilterChange()">
+                    </th>
+                    <th *ngIf="columnVisible('machining')">
+                      <select 
+                        class="table-filter-select" 
+                        [(ngModel)]="tableFilters.machining" 
+                        (ngModelChange)="onTableFilterChange()">
+                        <option value="">全部</option>
+                        <option value="completed">已完成</option>
+                        <option value="not_completed">未完成</option>
+                      </select>
+                    </th>
+                    <th *ngIf="columnVisible('electrical')">
+                      <select 
+                        class="table-filter-select" 
+                        [(ngModel)]="tableFilters.electrical" 
+                        (ngModelChange)="onTableFilterChange()">
+                        <option value="">全部</option>
+                        <option value="completed">已完成</option>
+                        <option value="not_completed">未完成</option>
+                      </select>
+                    </th>
+                    <th *ngIf="columnVisible('pre_assembly')">
+                      <select 
+                        class="table-filter-select" 
+                        [(ngModel)]="tableFilters.pre_assembly" 
+                        (ngModelChange)="onTableFilterChange()">
+                        <option value="">全部</option>
+                        <option value="completed">已完成</option>
+                        <option value="not_completed">未完成</option>
+                      </select>
+                    </th>
+                    <th *ngIf="columnVisible('post_assembly')">
+                      <select 
+                        class="table-filter-select" 
+                        [(ngModel)]="tableFilters.post_assembly" 
+                        (ngModelChange)="onTableFilterChange()">
+                        <option value="">全部</option>
+                        <option value="completed">已完成</option>
+                        <option value="not_completed">未完成</option>
+                      </select>
+                    </th>
+                    <th *ngIf="columnVisible('debugging')">
+                      <select 
+                        class="table-filter-select" 
+                        [(ngModel)]="tableFilters.debugging" 
+                        (ngModelChange)="onTableFilterChange()">
+                        <option value="">全部</option>
+                        <option value="completed">已完成</option>
+                        <option value="not_completed">未完成</option>
+                      </select>
+                    </th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr *ngFor="let t of getPaginatedTasks(getDisplayTasks()); let i = index">
+                    <td *ngIf="columnVisible('index')" style="font-weight: 500;">
+                      {{ getTaskIndex(i) }}
+                    </td>
+                    <td *ngIf="columnVisible('device')">
+                      <div class="table-device">
+                    <ion-icon name="hardware-chip"></ion-icon>
+                        <span>{{ t.device_number || ('任务#' + t.id) }}</span>
+                      </div>
+                    </td>
+                    <td *ngIf="columnVisible('model')">{{ t.product_model || '-' }}</td>
+                    <td *ngIf="columnVisible('priority')">
+                      <span class="priority-tag" [class.urgent]="isUrgentPriority(t.priority)">
+                        {{ getPriorityText(t.priority) }}
+                  </span>
+                    </td>
+                    <td *ngIf="columnVisible('status')">
+                      <span class="status-tag"
+                            [class.pending]="t.status === 'pending'"
+                            [class.completed]="t.status === 'completed'"
+                            [class.cancelled]="t.status !== 'pending' && t.status !== 'completed'">
+                        {{ t.status === 'pending' ? '待处理' : t.status === 'completed' ? '已完成' : '已取消' }}
+                  </span>
+                    </td>
+                    <td *ngIf="columnVisible('currentPhase')">{{ t._currentPhaseDisplay || getCurrentPhaseDisplay(t) }}</td>
+                    <td *ngIf="columnVisible('productionTime')">{{ t.production_time ? (t.production_time | date:'yyyy-MM-dd') : '-' }}</td>
+                    <td *ngIf="columnVisible('promisedTime')">{{ t.promised_completion_time ? (t.promised_completion_time | date:'yyyy-MM-dd') : '-' }}</td>
+                    <td *ngIf="columnVisible('progress')">{{ t._progressPercent !== undefined ? t._progressPercent : getTaskProgressPercent(t) }}%</td>
+                    <td class="phase-check-col" *ngIf="columnVisible('machining')" [class.phase-completed]="isPhaseCompleted(t, 'machining')">
+                      <div class="phase-check-content">
+                        <span class="phase-assignee-text">{{ getPhaseAssigneeName(t, 'machining') || '-' }}</span>
+                        <span class="phase-assistant-text" *ngIf="getAssistantNamesForPhase(t, 'machining').length > 0">
+                          协助：{{ getAssistantNamesForPhase(t, 'machining').join('、') }}
+                  </span>
+                      </div>
+                    </td>
+                    <td class="phase-check-col" *ngIf="columnVisible('electrical')" [class.phase-completed]="isPhaseCompleted(t, 'electrical')">
+                      <div class="phase-check-content">
+                        <span class="phase-assignee-text">{{ getPhaseAssigneeName(t, 'electrical') || '-' }}</span>
+                        <span class="phase-assistant-text" *ngIf="getAssistantNamesForPhase(t, 'electrical').length > 0">
+                          协助：{{ getAssistantNamesForPhase(t, 'electrical').join('、') }}
+                        </span>
+                      </div>
+                    </td>
+                    <td class="phase-check-col" *ngIf="columnVisible('pre_assembly')" [class.phase-completed]="isPhaseCompleted(t, 'pre_assembly')">
+                      <div class="phase-check-content">
+                        <span class="phase-assignee-text">{{ getPhaseAssigneeName(t, 'pre_assembly') || '-' }}</span>
+                        <span class="phase-assistant-text" *ngIf="getAssistantNamesForPhase(t, 'pre_assembly').length > 0">
+                          协助：{{ getAssistantNamesForPhase(t, 'pre_assembly').join('、') }}
+                        </span>
+                      </div>
+                    </td>
+                    <td class="phase-check-col" *ngIf="columnVisible('post_assembly')" [class.phase-completed]="isPhaseCompleted(t, 'post_assembly')">
+                      <div class="phase-check-content">
+                        <span class="phase-assignee-text">{{ getPhaseAssigneeName(t, 'post_assembly') || '-' }}</span>
+                        <span class="phase-assistant-text" *ngIf="getAssistantNamesForPhase(t, 'post_assembly').length > 0">
+                          协助：{{ getAssistantNamesForPhase(t, 'post_assembly').join('、') }}
+                        </span>
+                      </div>
+                    </td>
+                    <td class="phase-check-col" *ngIf="columnVisible('debugging')" [class.phase-completed]="isPhaseCompleted(t, 'debugging')">
+                      <div class="phase-check-content">
+                        <span class="phase-assignee-text">{{ getPhaseAssigneeName(t, 'debugging') || '-' }}</span>
+                        <span class="phase-assistant-text" *ngIf="getAssistantNamesForPhase(t, 'debugging').length > 0">
+                          协助：{{ getAssistantNamesForPhase(t, 'debugging').join('、') }}
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="table-actions">
+                        <ion-button *ngIf="canManageAssistants(t)" fill="solid" size="default" class="assist-button-custom" (click)="openAssignAssistantModal(t)">
+                          <ion-icon name="people"></ion-icon>
+                          协助人员填报
+                        </ion-button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr class="table-empty-row" *ngIf="getDisplayTasks().length === 0">
+                    <td [attr.colspan]="getVisibleTableColumnCount()">暂无符合条件的任务</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </ng-container>
+
+        <ng-container *ngIf="selectedView !== 'all'">
+          <div class="task-grid">
+            <ion-card 
+              class="task-card" 
+              [ngClass]="{'all-view': selectedView === 'all'}"
+              *ngFor="let t of getPaginatedTasks(getDisplayTasks())" 
+              (click)="selectedView !== 'all' && onTaskClick(t.id, $event)">
+              <ion-card-header>
+                <div class="task-header">
+                  <div class="task-title" [ngClass]="selectedView === 'all' ? (isUrgentPriority(t.priority) ? 'title-urgent-bg' : 'title-normal-bg') : ''">
+                    <ion-icon name="hardware-chip"></ion-icon>
+                    <strong>{{ t.device_number || ('任务#' + t.id) }}</strong>
+                    <ion-chip *ngIf="selectedView !== 'all'" [color]="isUrgentPriority(t.priority) ? 'danger' : 'medium'" size="small">
+                      {{ getPriorityText(t.priority) }}
+                    </ion-chip>
+                  </div>
+                  <div *ngIf="selectedView !== 'all'" style="display: flex; gap: 4px;">
+                    <ion-button fill="clear" size="small" (click)="onTaskClick(t.id, $event); $event.stopPropagation()">
+                      <ion-icon name="person-add"></ion-icon>
+                      分配
+                    </ion-button>
+                    <ion-button *ngIf="canManageAssistants(t)" fill="clear" size="small" (click)="openAssignAssistantModal(t); $event.stopPropagation()" color="warning">
+                      <ion-icon name="people"></ion-icon>
+                      协助
+                    </ion-button>
+                  </div>
+                </div>
+                <div class="task-meta">
+                  <span class="meta-item">
+                    <ion-icon name="cube"></ion-icon>
+                    型号：{{ t.product_model || '-' }}
+                  </span>
+                  <span class="meta-item">
+                    <ion-icon name="calendar"></ion-icon>
+                    开工：{{ t.production_time ? (t.production_time | date:'yyyy-MM-dd') : '-' }}
+                  </span>
+                  <span class="meta-item">
+                    <ion-icon name="flag"></ion-icon>
+                    承诺：{{ t.promised_completion_time ? (t.promised_completion_time | date:'yyyy-MM-dd') : '-' }}
+                  </span>
+                  <span class="meta-item">
+                    <ion-icon name="build"></ion-icon>
+                    当前阶段：{{ t._currentPhaseDisplay || getCurrentPhaseDisplay(t) }}
+                  </span>
+                  <ng-container *ngIf="getTaskAssignees(t) as assignees">
+                    <span class="meta-item" *ngIf="assignees !== '-'">
+                      <ion-icon name="person"></ion-icon>
+                      {{ assignees }}
+                    </span>
+                  </ng-container>
+                  <span class="meta-item">
+                    <ion-badge [color]="t.status === 'pending' ? 'warning' : t.status === 'completed' ? 'success' : 'medium'" class="status-badge">
+                      {{ t.status === 'pending' ? '待处理' : t.status === 'completed' ? '已完成' : '已取消' }}
+                    </ion-badge>
+                  </span>
+                </div>
+              </ion-card-header>
+              <ion-card-content>
+                <div class="phase-progress">
+                  <div class="progress-header">
+                    <span class="progress-label">整体进度</span>
+                    <span class="progress-percent">{{ t._progressPercent !== undefined ? t._progressPercent : getTaskProgressPercent(t) }}%</span>
+              </div>
+                  <div class="progress-bar-container">
+                    <div class="progress-bar-fill" [style.width.%]="t._progressPercent !== undefined ? t._progressPercent : getTaskProgressPercent(t)"></div>
+            </div>
+                </div>
+
+                <div class="phase-list">
+                  <div class="phase-item"
+                       *ngFor="let phase of (t._phases || getTaskPhases(t))"
+                       [class.completed]="phase.completed"
+                       [class.in-progress]="phase.inProgress"
+                       [class.not-started]="!phase.completed && !phase.inProgress">
+                    <div class="phase-icon">
+                      <ion-icon [name]="phase.icon" [color]="phase.completed ? 'success' : (phase.inProgress ? 'primary' : 'medium')"></ion-icon>
+                    </div>
+                    <div class="phase-info">
+                      <div class="phase-name-row">
+                        <span class="phase-name">{{ phase.name }}</span>
+                        <ion-badge *ngIf="phase.completed" color="success" size="small">已完成</ion-badge>
+                        <ion-badge *ngIf="phase.inProgress && !phase.completed" color="primary" size="small">进行中</ion-badge>
+                        <ion-badge *ngIf="!phase.completed && !phase.inProgress" color="medium" size="small">未开始</ion-badge>
+                        <div class="phase-assistants-inline" *ngIf="getPhaseAssistants(t, phase.key).length > 0">
+                          <ion-icon name="people"></ion-icon>
+                          <span>
+                            协助：
+                            {{ getAssistantNamesForPhase(t, phase.key).join('、') }}
+                          </span>
+                        </div>
+            </div>
+                      <div class="phase-assignee">
+                        <ion-icon name="person" size="small"></ion-icon>
+                        <span>{{ phase.assignee || '未分配' }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </ion-card-content>
+            </ion-card>
+          </div>
+        </ng-container>
+
+        <div *ngIf="getDisplayTasks().length === 0" class="empty">
+          {{ selectedView === 'unassigned' ? '暂无未分配任务' : 
+             selectedView === 'assigned' ? '暂无已分配任务' : 
+             selectedView === 'urgent' ? '暂无紧急任务' : '暂无任务' }}
+        </div>
+        
+        <!-- 分页控件 -->
+        <div *ngIf="getDisplayTasks().length > pageSize" class="pagination">
+          <ion-button (click)="goToPage(currentPage - 1)" [disabled]="currentPage <= 1" fill="clear" size="small">
+            <ion-icon name="chevron-back"></ion-icon>
+          </ion-button>
+          <ion-button *ngFor="let page of getPageNumbers()" 
+                      (click)="goToPage(page)" 
+                      [fill]="page === currentPage ? 'solid' : 'clear'"
+                      size="small">
+            {{ page }}
+          </ion-button>
+          <ion-button (click)="goToPage(currentPage + 1)" [disabled]="currentPage >= getTotalPages(getDisplayTasks())" fill="clear" size="small">
+            <ion-icon name="chevron-forward"></ion-icon>
+          </ion-button>
+        </div>
+      </ion-card-content>
+    </ion-card>
+  </div>
+
+  <!-- 分配任务模态框 -->
+  <ion-modal [isOpen]="isAssignModalOpen" (didDismiss)="closeAssignModal()">
+    <ng-template>
+      <ion-header>
+        <ion-toolbar>
+          <ion-title>分配任务</ion-title>
+          <ion-buttons slot="end">
+            <ion-button (click)="closeAssignModal()">
+              <ion-icon name="close"></ion-icon>
+            </ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-header>
+      
+      <ion-content class="ion-padding">
+        <!-- 任务信息 -->
+        <ion-card *ngIf="selectedTaskForAssign">
+          <ion-card-header>
+            <ion-card-title>任务详情</ion-card-title>
+          </ion-card-header>
+          <ion-card-content>
+            <div class="task-info">
+              <div class="task-name">{{ selectedTaskForAssign.name || ('任务#' + selectedTaskForAssign.id) }}</div>
+              <div class="task-meta">
+                <ion-chip [color]="isUrgentPriority(selectedTaskForAssign.priority) ? 'danger' : 'medium'" size="small">
+                  {{ getPriorityText(selectedTaskForAssign.priority) }}
+                </ion-chip>
+                <span class="status">{{ selectedTaskForAssign.status === 'pending' ? '待处理' : selectedTaskForAssign.status === 'completed' ? '已完成' : '已取消' }}</span>
+              </div>
+              <div class="task-details" *ngIf="selectedTaskForAssign.device_number || selectedTaskForAssign.product_model">
+                <small>{{ selectedTaskForAssign.device_number }} - {{ selectedTaskForAssign.product_model }}</small>
+              </div>
+              <div class="phase-assignments" *ngIf="selectedTaskForAssign.machining_assignee || selectedTaskForAssign.electrical_assignee">
+                <small *ngIf="selectedTaskForAssign.machining_assignee">
+                  机加负责人: {{ selectedTaskForAssign.machining_assignee_name || '用户#' + selectedTaskForAssign.machining_assignee }}
+                </small>
+                <small *ngIf="selectedTaskForAssign.electrical_assignee">
+                  电控负责人: {{ selectedTaskForAssign.electrical_assignee_name || '用户#' + selectedTaskForAssign.electrical_assignee }}
+                </small>
+              </div>
+            </div>
+          </ion-card-content>
+        </ion-card>
+
+        <!-- 阶段选择（仅机加和电控阶段） -->
+        <ion-card *ngIf="canAssignPhases()">
+          <ion-card-header>
+            <ion-card-title>选择阶段</ion-card-title>
+          </ion-card-header>
+          <ion-card-content>
+            <div class="phase-selection">
+              <ion-button 
+                [fill]="selectedPhaseForAssign === 'machining' ? 'solid' : 'outline'"
+                [color]="selectedPhaseForAssign === 'machining' ? 'primary' : 'medium'"
+                (click)="selectPhaseForAssign('machining')"
+                [disabled]="!canAssignPhase('machining')">
+                <ion-icon name="build"></ion-icon>
+                机加阶段
+                <ion-badge *ngIf="!canAssignPhase('machining')" color="danger" slot="end">已完成</ion-badge>
+              </ion-button>
+              <ion-button 
+                [fill]="selectedPhaseForAssign === 'electrical' ? 'solid' : 'outline'"
+                [color]="selectedPhaseForAssign === 'electrical' ? 'primary' : 'medium'"
+                (click)="selectPhaseForAssign('electrical')"
+                [disabled]="!canAssignPhase('electrical')">
+                <ion-icon name="flash"></ion-icon>
+                电控阶段
+                <ion-badge *ngIf="!canAssignPhase('electrical')" color="danger" slot="end">已完成</ion-badge>
+              </ion-button>
+            </div>
+            <div class="phase-note" *ngIf="selectedPhaseForAssign">
+              <small>
+                {{ getPhaseNote() }}
+              </small>
+            </div>
+            <div class="phase-status" *ngIf="selectedTaskForAssign">
+              <small>
+                <strong>当前状态：</strong>
+                机加{{ selectedTaskForAssign.machining_phase === 1 ? '已完成' : '未完成' }}
+                <span *ngIf="selectedTaskForAssign.machining_assignee">(负责人: {{ selectedTaskForAssign.machining_assignee_name || '用户#' + selectedTaskForAssign.machining_assignee }})</span>，
+                电控{{ selectedTaskForAssign.electrical_phase === 1 ? '已完成' : '未完成' }}
+                <span *ngIf="selectedTaskForAssign.electrical_assignee">(负责人: {{ selectedTaskForAssign.electrical_assignee_name || '用户#' + selectedTaskForAssign.electrical_assignee }})</span>
+              </small>
+            </div>
+          </ion-card-content>
+        </ion-card>
+
+        <!-- 用户搜索和筛选 -->
+        <ion-card>
+          <ion-card-content>
+            <ion-item>
+              <ion-input 
+                [(ngModel)]="userSearchKeyword" 
+                placeholder="搜索用户姓名、角色或部门..."
+                clearInput="true">
+              </ion-input>
+              <ion-icon name="search" slot="start"></ion-icon>
+            </ion-item>
+            <ion-item>
+              <ion-label>筛选组</ion-label>
+              <ion-select [(ngModel)]="selectedUserGroup" placeholder="全部组">
+                <ion-select-option value="">全部组</ion-select-option>
+                <ion-select-option *ngFor="let group of availableGroups" [value]="group">{{ group }}</ion-select-option>
+              </ion-select>
+            </ion-item>
+          </ion-card-content>
+        </ion-card>
+
+        <!-- 用户列表 -->
+        <ion-card>
+          <ion-card-header>
+            <ion-card-title>选择用户</ion-card-title>
+          </ion-card-header>
+          <ion-card-content>
+            <div class="user-list">
+              <div class="user-item" *ngFor="let user of getFilteredUsers()" (click)="assignTaskToUser(user.id)">
+                <div class="user-info">
+                  <div class="user-name">{{ user.name }}</div>
+                  <div class="user-role">{{ user.role }}</div>
+                  <div class="user-department" *ngIf="user.department">
+                    <ion-icon name="business"></ion-icon>
+                    {{ user.department }}
+                  </div>
+                  <div class="user-tasks" *ngIf="tasksOfUser(user.id).length > 0">
+                    当前任务: {{ tasksOfUser(user.id).length }} 个
+                  </div>
+                </div>
+                <ion-button fill="outline" size="small">
+                  <ion-icon name="person-add"></ion-icon>
+                  分配
+                </ion-button>
+              </div>
+              <div *ngIf="getFilteredUsers().length === 0" class="empty">
+                没有找到匹配的用户
+              </div>
+            </div>
+          </ion-card-content>
+        </ion-card>
+
+      </ion-content>
+    </ng-template>
+  </ion-modal>
+
+  <!-- 指定协助人员模态框 -->
+  <ion-modal [isOpen]="isAssignAssistantModalOpen" (didDismiss)="closeAssignAssistantModal()">
+    <ng-template>
+      <ion-header>
+        <ion-toolbar>
+          <ion-title>指定协助人员</ion-title>
+          <ion-buttons slot="end">
+            <ion-button (click)="closeAssignAssistantModal()">
+              <ion-icon name="close"></ion-icon>
+            </ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-header>
+      
+      <ion-content class="ion-padding">
+        <div *ngIf="selectedTaskForAssist">
+          <ion-card>
+            <ion-card-header>
+              <ion-card-title>任务详情</ion-card-title>
+            </ion-card-header>
+          <ion-card-content>
+              <div class="task-info">
+                <div class="task-name" style="font-size: 16px; font-weight: 500; margin-bottom: 12px;">
+                  {{ selectedTaskForAssist.device_number || selectedTaskForAssist.name || ('任务#' + selectedTaskForAssist.id) }}
+                </div>
+                <div class="task-meta">
+                  <ion-item lines="none" style="--padding-start: 0; --inner-padding-end: 0;">
+                    <ion-label position="stacked" style="font-weight: 500; margin-bottom: 8px;">选择阶段 *</ion-label>
+                    <ion-select 
+                      [(ngModel)]="selectedPhaseForAssist" 
+                      (ionChange)="onAssistPhaseChange()" 
+                      placeholder="请选择阶段"
+                      interface="popover"
+                      style="width: 100%;">
+                      <ion-select-option *ngFor="let phase of getTaskPhases(selectedTaskForAssist)" [value]="phase.key">
+                        {{ phase.name }}
+                      </ion-select-option>
+                    </ion-select>
+                  </ion-item>
+                  <div *ngIf="!selectedPhaseForAssist" style="color: #999; font-size: 12px; margin-top: 4px;">
+                    请先选择阶段，然后才能选择协助人员
+                  </div>
+                </div>
+              </div>
+          </ion-card-content>
+        </ion-card>
+
+          <!-- 当前协助人员列表 -->
+          <ion-card *ngIf="selectedPhaseForAssist && assistants.length > 0">
+            <ion-card-header>
+              <ion-card-title>当前协助人员</ion-card-title>
+            </ion-card-header>
+            <ion-card-content>
+              <ion-chip *ngFor="let assistant of assistants" color="warning" style="margin: 4px;">
+                <ion-icon name="people"></ion-icon>
+                <ion-label>{{ assistant.user_name }}</ion-label>
+                <ion-icon name="close-circle" (click)="removeAssistant(selectedTaskForAssist, assistant.user_id, selectedPhaseForAssist)"></ion-icon>
+              </ion-chip>
+            </ion-card-content>
+          </ion-card>
+
+          <!-- 选择协助人员 -->
+          <ion-card *ngIf="selectedPhaseForAssist">
+            <ion-card-header>
+              <ion-card-title>选择协助人员</ion-card-title>
+            </ion-card-header>
+            <ion-card-content>
+              <ion-searchbar [(ngModel)]="assistantSearchKeyword" placeholder="搜索协助人员（姓名/部门/组）" debounce="200"></ion-searchbar>
+              <div class="assistant-user-list">
+                <div 
+                  class="assistant-user-item" 
+                  *ngFor="let user of getFilteredAssistantUsers(selectedTaskForAssist, selectedPhaseForAssist)"
+                  [class.selected]="selectedAssistantUserIds?.includes(user.id)"
+                  (click)="toggleAssistantSelection(user.id)">
+                  <div class="info">
+                    <div class="name">{{ user.name }}</div>
+                    <div class="meta">
+                      <span *ngIf="user.department">
+                        <ion-icon name="business"></ion-icon>
+                        {{ user.department }}
+                      </span>
+                      <span *ngIf="user.user_group">
+                        <ion-icon name="albums"></ion-icon>
+                        {{ user.user_group }}
+                      </span>
+                    </div>
+                  </div>
+                  <ion-icon name="checkmark-circle" *ngIf="selectedAssistantUserIds?.includes(user.id)"></ion-icon>
+                </div>
+                <div class="assistant-empty" *ngIf="getFilteredAssistantUsers(selectedTaskForAssist, selectedPhaseForAssist).length === 0">
+                  暂无可用的协助人员
+                </div>
+              </div>
+              
+              <!-- 已选择协助人员及时间设置 -->
+              <div *ngIf="selectedAssistantUserIds?.length" style="margin-top: 16px;">
+                <ion-label style="font-weight: bold; margin-bottom: 12px; display: block;">
+                  已选择协助人员（请为每位协助人员设置时间）：
+                </ion-label>
+                
+                <!-- 统一设置时间 -->
+                <div style="margin-bottom: 16px; padding: 12px; background-color: #f5f5f5; border-radius: 8px;">
+                  <ion-label style="font-weight: 500; margin-bottom: 8px; display: block; color: #666;">
+                    快速设置（为所有协助人员统一设置时间）：
+                  </ion-label>
+                  <ion-item>
+                    <ion-label position="stacked">统一协助开始时间</ion-label>
+                    <ion-input 
+                      type="datetime-local" 
+                      [(ngModel)]="unifiedAssistStart"
+                      placeholder="输入开始时间">
+                    </ion-input>
+                  </ion-item>
+                  <ion-item>
+                    <ion-label position="stacked">统一协助结束时间</ion-label>
+                    <ion-input 
+                      type="datetime-local" 
+                      [(ngModel)]="unifiedAssistEnd"
+                      placeholder="输入结束时间">
+                    </ion-input>
+                  </ion-item>
+                  <ion-button 
+                    expand="block" 
+                    fill="outline" 
+                    size="small"
+                    (click)="applyUnifiedTime()"
+                    [disabled]="!unifiedAssistStart || !unifiedAssistEnd"
+                    style="margin-top: 8px;">
+                    <ion-icon name="time-outline" slot="start"></ion-icon>
+                    应用到所有协助人员
+            </ion-button>
+                </div>
+                <div *ngFor="let userId of selectedAssistantUserIds" style="margin-bottom: 16px; padding: 12px; border: 1px solid #e0e0e0; border-radius: 8px;">
+                  <div style="margin-bottom: 8px; font-weight: 500;">
+                    <ion-chip color="warning" style="margin-right: 8px;">
+                      {{ getAssistantName(userId) }}
+                    </ion-chip>
+                  </div>
+                  <ion-item>
+                    <ion-label position="stacked">协助开始时间</ion-label>
+                    <ion-input 
+                      type="datetime-local" 
+                      [ngModel]="getAssistantTime(userId, 'start')"
+                      (ngModelChange)="setAssistantTime(userId, 'start', $event)"
+                      placeholder="输入开始时间">
+                    </ion-input>
+                  </ion-item>
+                  <ion-item>
+                    <ion-label position="stacked">协助结束时间</ion-label>
+                    <ion-input 
+                      type="datetime-local" 
+                      [ngModel]="getAssistantTime(userId, 'end')"
+                      (ngModelChange)="setAssistantTime(userId, 'end', $event)"
+                      placeholder="输入结束时间">
+                    </ion-input>
+                  </ion-item>
+                </div>
+              </div>
+
+              <!-- 审批经理选择 -->
+              <div *ngIf="selectedAssistantUserIds?.length" style="margin-top: 16px;">
+                <ion-item>
+                  <ion-label>审批经理</ion-label>
+                  <ion-select 
+                    [(ngModel)]="assignAssistantManagerId"
+                    placeholder="选择经理">
+                    <ion-select-option *ngFor="let manager of managerUsers" [value]="manager.id">
+                      {{ manager.name }}
+                    </ion-select-option>
+                  </ion-select>
+                </ion-item>
+              </div>
+
+              <ion-button 
+                *ngIf="selectedAssistantUserIds?.length"
+                expand="block" 
+                (click)="confirmAssignAssistant()" 
+                style="margin-top: 16px;" 
+                [disabled]="!selectedAssistantUserIds?.length">
+                指定协助人员
+              </ion-button>
+              
+              <p style="font-size: 12px; color: #999; margin-top: 16px;">
+                注意：协助人员仅帮助负责人工作，不参与报工和完成阶段操作，工时计算也不包含协助人员工时。
+              </p>
+          </ion-card-content>
+        </ion-card>
+
+          <!-- 提示信息：未选择阶段 -->
+          <ion-card *ngIf="!selectedPhaseForAssist">
+            <ion-card-content>
+              <div style="text-align: center; padding: 20px; color: #999;">
+                <ion-icon name="information-circle-outline" style="font-size: 48px; margin-bottom: 12px;"></ion-icon>
+                <p>请先选择阶段，然后才能选择协助人员</p>
+              </div>
+            </ion-card-content>
+          </ion-card>
+
+          <!-- 确认协助时间 -->
+          <ion-card *ngIf="selectedPhaseForAssist && assistants.length > 0">
+            <ion-card-header>
+              <ion-card-title>确认协助时间</ion-card-title>
+            </ion-card-header>
+            <ion-card-content>
+              <ion-item>
+                <ion-label>协助人员</ion-label>
+                <ion-select [(ngModel)]="confirmAssistUserId" (ionChange)="onConfirmAssistUserChange()">
+                  <ion-select-option *ngFor="let assistant of assistants"
+                                     [value]="assistant.user_id || assistant.id">
+                    {{ assistant.user_name || assistant.name || ('用户#' + (assistant.user_id || assistant.id)) }}
+                  </ion-select-option>
+                  <ion-select-option value="ALL">全部人员</ion-select-option>
+                </ion-select>
+              </ion-item>
+              <ion-item>
+                <ion-label position="stacked">协助开始时间</ion-label>
+                <ion-input type="datetime-local" [(ngModel)]="confirmAssistStart" placeholder="输入开始时间"></ion-input>
+              </ion-item>
+              <ion-item>
+                <ion-label position="stacked">协助结束时间</ion-label>
+                <ion-input type="datetime-local" [(ngModel)]="confirmAssistEnd" placeholder="输入结束时间"></ion-input>
+              </ion-item>
+              <ion-item>
+                <ion-label>审批经理</ion-label>
+                <ion-select placeholder="选择经理" [(ngModel)]="confirmAssistManagerId">
+                  <ion-select-option *ngFor="let manager of managerUsers" [value]="manager.id">
+                    {{ manager.name }}
+                  </ion-select-option>
+                </ion-select>
+              </ion-item>
+              <ion-button expand="block"
+                          color="danger"
+                          (click)="submitConfirmAssistTime()"
+                          [disabled]="!confirmAssistUserId || !confirmAssistStart || !confirmAssistEnd || !confirmAssistManagerId"
+                          style="margin-top: 16px;">
+                确认协助时间
+              </ion-button>
+            </ion-card-content>
+          </ion-card>
+        </div>
+      </ion-content>
+    </ng-template>
+  </ion-modal>
+
+
+  <!-- 导入任务模态框 -->
+  <ion-modal [isOpen]="isImportModalOpen" (didDismiss)="closeImportModal()">
+    <ng-template>
+      <ion-header>
+        <ion-toolbar>
+          <ion-title>导入任务</ion-title>
+          <ion-buttons slot="end">
+            <ion-button (click)="closeImportModal()">
+              <ion-icon name="close"></ion-icon>
+            </ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-header>
+      
+      <ion-content class="ion-padding">
+        <ion-card>
+          <ion-card-header>
+            <ion-card-title>Excel文件格式说明</ion-card-title>
+          </ion-card-header>
+          <ion-card-content>
+            <p>请确保Excel文件包含以下列：</p>
+            <ul>
+              <li><strong>C列：</strong>设备号（必填）</li>
+              <li><strong>E列：</strong>是否非标（是/否）</li>
+              <li><strong>F列：</strong>产品型号（必填）</li>
+              <li><strong>Q列：</strong>投产时间</li>
+              <li><strong>O列：</strong>承诺完成时间（新增）</li>
+              <li><strong>V列：</strong>订单状态</li>
+              <li><strong>AL列：</strong>紧急程度（新增，直接作为优先级：紧急/非紧急）</li>
+            </ul>
+            <p><strong>优先级规则：</strong></p>
+            <ul>
+              <li>优先级由 AL 列提供（紧急/非紧急）。未提供则默认“非紧急”。</li>
+            </ul>
+            <p><strong>过滤规则：</strong></p>
+            <ul>
+              <li>V列状态包含"已完成"、"已交货"、"完成"、"交货"的任务将被自动跳过</li>
+              <li>只有未完成的任务才会被导入到系统中</li>
+            </ul>
+          </ion-card-content>
+        </ion-card>
+
+        <ion-card>
+          <ion-card-content>
+            <ion-item>
+              <ion-label position="stacked">选择Excel文件</ion-label>
+              <input type="file" #fileInput (change)="onFileSelected($event)" 
+                     accept=".xlsx,.xls" style="margin-top: 8px;">
+            </ion-item>
+            
+            <div *ngIf="selectedFile" style="margin-top: 16px;">
+              <ion-chip color="primary">
+                <ion-icon name="document-outline"></ion-icon>
+                <ion-label>{{ selectedFile.name }}</ion-label>
+              </ion-chip>
+            </div>
+
+            <ion-button expand="block" (click)="importTasks()" 
+                        [disabled]="!selectedFile || isImporting" 
+                        style="margin-top: 16px;">
+              <ion-spinner *ngIf="isImporting" name="crescent"></ion-spinner>
+              <ion-icon *ngIf="!isImporting" name="cloud-upload-outline"></ion-icon>
+              {{ isImporting ? '导入中...' : '开始导入' }}
+            </ion-button>
+          </ion-card-content>
+        </ion-card>
+
+        <!-- 导入结果 -->
+        <ion-card *ngIf="importResult">
+          <ion-card-header>
+            <ion-card-title [color]="importResult.success ? 'success' : 'danger'">
+              {{ importResult.success ? '导入成功' : '导入失败' }}
+            </ion-card-title>
+          </ion-card-header>
+          <ion-card-content>
+            <p>{{ importResult.message }}</p>
+            <div *ngIf="importResult.importedCount" style="margin-top: 8px;">
+              <ion-chip color="success">
+                <ion-icon name="checkmark-circle"></ion-icon>
+                <ion-label>成功导入 {{ importResult.importedCount }} 个任务</ion-label>
+              </ion-chip>
+            </div>
+            <div *ngIf="importResult.errors && importResult.errors.length > 0" style="margin-top: 8px;">
+              <ion-chip color="warning">
+                <ion-icon name="warning"></ion-icon>
+                <ion-label>{{ importResult.errors.length }} 个错误</ion-label>
+              </ion-chip>
+              <div style="margin-top: 8px; font-size: 12px; color: #666;">
+                <div *ngFor="let error of importResult.errors">{{ error }}</div>
+              </div>
+            </div>
+          </ion-card-content>
+        </ion-card>
+      </ion-content>
+    </ng-template>
+  </ion-modal>
+
+  <!-- 导入标准工时模态框 -->
+  <ion-modal [isOpen]="isStdHoursModalOpen" (didDismiss)="closeStdHoursModal()">
+    <ng-template>
+      <ion-header>
+        <ion-toolbar>
+          <ion-title>导入标准工时</ion-title>
+          <ion-buttons slot="end">
+            <ion-button (click)="closeStdHoursModal()"><ion-icon name="close"></ion-icon></ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-header>
+      <ion-content class="ion-padding">
+        <ion-card>
+        <ion-card-header>
+            <ion-card-title>Excel文件格式说明</ion-card-title>
+        </ion-card-header>
+          <ion-card-content>
+            <p>请确保Excel包含以下列：</p>
+            <ul>
+              <li><strong>B列：</strong>产品型号（必填）</li>
+              <li><strong>C列：</strong>机加标准工时（小时）</li>
+              <li><strong>D列：</strong>电控标准工时（小时）</li>
+              <li><strong>E列：</strong>组装前段标准工时（小时）</li>
+              <li><strong>F列：</strong>组装后段标准工时（小时）</li>
+              <li><strong>G列：</strong>调试标准工时（小时）</li>
+            </ul>
+          </ion-card-content>
+        </ion-card>
+        <ion-card>
+          <ion-card-content>
+            <ion-item>
+              <ion-label position="stacked">选择Excel文件</ion-label>
+              <input type="file" (change)="onStdFileSelected($event)" accept=".xlsx,.xls" style="margin-top: 8px;" />
+            </ion-item>
+            <div *ngIf="selectedStdFile" style="margin-top: 12px;">
+              <ion-chip color="primary">
+                <ion-icon name="document-outline"></ion-icon>
+                <ion-label>{{ selectedStdFile.name }}</ion-label>
+              </ion-chip>
+          </div>
+            <ion-button expand="block" (click)="importStandardHours()" [disabled]="!selectedStdFile || isImportingStd" style="margin-top: 12px;">
+              <ion-spinner *ngIf="isImportingStd" name="crescent"></ion-spinner>
+              <ion-icon *ngIf="!isImportingStd" name="cloud-upload-outline"></ion-icon>
+              {{ isImportingStd ? '导入中...' : '开始导入' }}
+            </ion-button>
+        </ion-card-content>
+      </ion-card>
+        <ion-card *ngIf="importStdResult">
+          <ion-card-header>
+            <ion-card-title [color]="importStdResult.success ? 'success' : 'danger'">
+              {{ importStdResult.success ? '导入成功' : '导入失败' }}
+            </ion-card-title>
+          </ion-card-header>
+          <ion-card-content>
+            <p>更新任务数：{{ importStdResult.updatedCount || 0 }}</p>
+            <div *ngIf="importStdResult.errors?.length">
+              <div style="margin-top:8px; font-size:12px; color:#666;">
+                <div *ngFor="let e of importStdResult.errors">{{ e }}</div>
+    </div>
+  </div>
+          </ion-card-content>
+        </ion-card>
+      </ion-content>
+    </ng-template>
+  </ion-modal>
+
+  <!-- 新增任务模态框（单任务导入） -->
+  <ion-modal [isOpen]="isCreateTaskModalOpen" (didDismiss)="closeCreateTaskModal()">
+    <ng-template>
+      <ion-header>
+        <ion-toolbar>
+          <ion-title>新增任务</ion-title>
+          <ion-buttons slot="end">
+            <ion-button (click)="closeCreateTaskModal()"><ion-icon name="close"></ion-icon></ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-header>
+      <ion-content class="ion-padding">
+        <ion-card>
+          <ion-card-header>
+            <ion-card-title>Excel文件格式说明</ion-card-title>
+          </ion-card-header>
+          <ion-card-content>
+            <p>请上传包含任务信息的Excel文件：</p>
+            <ul>
+              <li><strong>C列：</strong>设备号（必填）</li>
+              <li><strong>F列：</strong>产品型号（必填）</li>
+              <li><strong>Q列：</strong>开工时间</li>
+              <li><strong>O列：</strong>承诺交货时间</li>
+              <li><strong>V列：</strong>订单状态</li>
+              <li><strong>AL列：</strong>优先级（紧急/非紧急）</li>
+            </ul>
+          </ion-card-content>
+        </ion-card>
+        <ion-card>
+          <ion-card-content>
+            <ion-item>
+              <ion-label position="stacked">选择Excel文件</ion-label>
+              <input type="file" #createTaskFileInput (change)="onCreateTaskFileSelected($event)" 
+                     accept=".xlsx,.xls" style="margin-top: 8px;">
+            </ion-item>
+            
+            <div *ngIf="selectedCreateTaskFile" style="margin-top: 16px;">
+              <ion-chip color="primary">
+                <ion-icon name="document-outline"></ion-icon>
+                <ion-label>{{ selectedCreateTaskFile.name }}</ion-label>
+              </ion-chip>
+            </div>
+
+            <ion-button expand="block" (click)="importSingleTask()" 
+                        [disabled]="!selectedCreateTaskFile || isCreatingTask" 
+                        style="margin-top: 16px;">
+              <ion-spinner *ngIf="isCreatingTask" name="crescent"></ion-spinner>
+              <ion-icon *ngIf="!isCreatingTask" name="cloud-upload-outline"></ion-icon>
+              {{ isCreatingTask ? '导入中...' : '导入任务' }}
+            </ion-button>
+          </ion-card-content>
+        </ion-card>
+
+        <!-- 导入结果 -->
+        <ion-card *ngIf="createTaskResult">
+          <ion-card-header>
+            <ion-card-title [color]="createTaskResult.success ? 'success' : 'danger'">
+              {{ createTaskResult.success ? '导入成功' : '导入失败' }}
+            </ion-card-title>
+          </ion-card-header>
+          <ion-card-content>
+            <p>{{ createTaskResult.message }}</p>
+            <div *ngIf="createTaskResult.importedCount" style="margin-top: 8px;">
+              <ion-chip color="success">
+                <ion-icon name="checkmark-circle"></ion-icon>
+                <ion-label>成功导入 {{ createTaskResult.importedCount }} 个任务</ion-label>
+              </ion-chip>
+            </div>
+          </ion-card-content>
+        </ion-card>
+      </ion-content>
+    </ng-template>
+  </ion-modal>
+
+  <!-- 修改任务模态框 -->
+  <ion-modal [isOpen]="isEditTaskModalOpen" (didDismiss)="closeEditTaskModal()">
+    <ng-template>
+      <ion-header>
+        <ion-toolbar>
+          <ion-title>修改任务</ion-title>
+          <ion-buttons slot="end">
+            <ion-button (click)="closeEditTaskModal()"><ion-icon name="close"></ion-icon></ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-header>
+      <ion-content class="ion-padding">
+        <ion-card>
+          <ion-card-content>
+            <ion-item>
+              <ion-label position="stacked">设备号或产品型号</ion-label>
+              <ion-input [(ngModel)]="searchDeviceOrModel" placeholder="输入设备号或产品型号"></ion-input>
+              <ion-button (click)="loadTaskForEditByDeviceOrModel()" [disabled]="!searchDeviceOrModel">搜索</ion-button>
+            </ion-item>
+            <p style="color: #999; font-size: 12px; margin-top: 8px;">请输入设备的完整设备号或产品型号进行搜索</p>
+          </ion-card-content>
+        </ion-card>
+
+        <ion-card *ngIf="editTask">
+          <ion-card-content>
+            <ion-item>
+              <ion-label position="stacked">任务名称 *</ion-label>
+              <ion-input [(ngModel)]="editTask.name"></ion-input>
+            </ion-item>
+            <ion-item>
+              <ion-label position="stacked">设备号</ion-label>
+              <ion-input [(ngModel)]="editTask.device_number"></ion-input>
+            </ion-item>
+            <ion-item>
+              <ion-label position="stacked">产品型号</ion-label>
+              <ion-input [(ngModel)]="editTask.product_model"></ion-input>
+            </ion-item>
+            <ion-item>
+              <ion-label position="stacked">优先级</ion-label>
+              <ion-select [(ngModel)]="editTask.priority">
+                <ion-select-option value="normal">非紧急</ion-select-option>
+                <ion-select-option value="urgent">紧急</ion-select-option>
+              </ion-select>
+            </ion-item>
+            <ion-item>
+              <ion-label position="stacked">开工时间</ion-label>
+              <ion-input [(ngModel)]="editTask.production_time" type="date"></ion-input>
+            </ion-item>
+            <ion-item>
+              <ion-label position="stacked">承诺交货时间</ion-label>
+              <ion-input [(ngModel)]="editTask.promised_completion_time" type="date"></ion-input>
+            </ion-item>
+            <ion-item>
+              <ion-label position="stacked">订单状态</ion-label>
+              <ion-input [(ngModel)]="editTask.order_status"></ion-input>
+            </ion-item>
+            <ion-button expand="block" (click)="updateTask()" color="primary" style="margin-top: 16px;">
+              保存修改
+            </ion-button>
+          </ion-card-content>
+        </ion-card>
+      </ion-content>
+    </ng-template>
+  </ion-modal>
+
+  <!-- 删除任务模态框 -->
+  <ion-modal [isOpen]="isDeleteTaskModalOpen" (didDismiss)="closeDeleteTaskModal()">
+    <ng-template>
+      <ion-header>
+        <ion-toolbar>
+          <ion-title>删除任务</ion-title>
+          <ion-buttons slot="end">
+            <ion-button (click)="closeDeleteTaskModal()"><ion-icon name="close"></ion-icon></ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-header>
+      <ion-content class="ion-padding">
+        <ion-card>
+          <ion-card-content>
+            <ion-item>
+              <ion-label position="stacked">设备号或产品型号</ion-label>
+              <ion-input [(ngModel)]="deleteSearchDeviceOrModel" placeholder="输入设备号或产品型号"></ion-input>
+              <ion-button (click)="searchTaskToDelete()" [disabled]="!deleteSearchDeviceOrModel">搜索</ion-button>
+            </ion-item>
+            <p style="color: #999; font-size: 12px; margin-top: 8px;">请输入设备的完整设备号或产品型号进行搜索</p>
+          </ion-card-content>
+        </ion-card>
+
+        <ion-card *ngIf="taskToDelete">
+          <ion-card-content>
+            <p><strong>任务名称：</strong>{{ taskToDelete.name }}</p>
+            <p><strong>设备号：</strong>{{ taskToDelete.device_number || '-' }}</p>
+            <p><strong>产品型号：</strong>{{ taskToDelete.product_model || '-' }}</p>
+            <p><strong>当前阶段：</strong>{{ taskToDelete.current_phase || '未开始' }}</p>
+            <p><strong>状态：</strong>{{ taskToDelete.status || '-' }}</p>
+            <p style="color: red; margin-top: 16px; font-weight: bold;">确定要删除这个任务吗？此操作不可恢复！</p>
+            <ion-button expand="block" (click)="deleteTask()" color="danger" style="margin-top: 16px;">
+              确认删除
+            </ion-button>
+          </ion-card-content>
+        </ion-card>
+      </ion-content>
+    </ng-template>
+  </ion-modal>
+
+  <!-- 派工任务可视化模态框 -->
+  <ion-modal [isOpen]="isVizModalOpen" (didDismiss)="closeVizModal()" [style.--width]="'95%'" [style.--max-width]="'1800px'" [style.--height]="'95%'">
+    <ng-template>
+      <ion-header>
+        <ion-toolbar>
+          <ion-title>派工任务可视化</ion-title>
+          <ion-buttons slot="end">
+            <ion-button (click)="closeVizModal()"><ion-icon name="close"></ion-icon></ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-header>
+      <ion-content class="ion-padding">
+        <div class="viz-content-wrapper">
+          <!-- 图例和筛选 -->
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
+          <div class="viz-legend-compact">
+            <div class="legend-item">
+              <div class="legend-color" style="background-color: #e74c3c;"></div>
+              <span>紧急</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-color" style="background-color: #e0e0e0;"></div>
+              <span>非紧急</span>
+            </div>
+          </div>
+          
+          <!-- 工位筛选和组筛选放在同一行 -->
+          <div style="display: flex; gap: 12px; flex-wrap: nowrap;">
+            <ion-select 
+              [(ngModel)]="vizDepartmentFilter" 
+              (ionChange)="loadVizData()"
+              placeholder="选择工位"
+              interface="popover"
+              style="min-width: 150px;">
+              <ion-select-option value="">全部工位</ion-select-option>
+              <ion-select-option *ngFor="let dept of departments" [value]="dept">{{ dept }}</ion-select-option>
+            </ion-select>
+            
+            <ion-select 
+              [(ngModel)]="vizGroupFilter" 
+              (ionChange)="loadVizData()"
+              placeholder="选择组"
+              interface="popover"
+              style="min-width: 150px;">
+              <ion-select-option value="">全部组</ion-select-option>
+              <ion-select-option *ngFor="let group of availableGroups" [value]="group">{{ group }}</ion-select-option>
+            </ion-select>
+          </div>
+        </div>
+
+        <!-- 排序说明 -->
+        <ion-card style="margin-top: 16px; margin-bottom: 16px; background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%); border-left: 4px solid #2196f3;">
+          <ion-card-content style="padding: 12px;">
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #1565c0;">
+              <ion-icon name="information-circle-outline" style="font-size: 20px; color: #2196f3;"></ion-icon>
+              <span>提示：点击任务块可调整任务紧急程度，越靠上的任务越紧急（会反馈给员工）</span>
+            </div>
+          </ion-card-content>
+        </ion-card>
+
+        <div class="viz-container" *ngIf="vizData && vizData.length > 0">
+          <div class="viz-chart" 
+               #vizChart>
+            <div class="viz-column" 
+                 *ngFor="let employee of vizData; let i = index"
+                 [attr.data-employee-id]="employee.id"
+                 [class.drag-target]="dragOverEmployee === employee.id && draggedTaskEmployee !== employee.id">
+              <div class="viz-drop-area"
+                   *ngIf="isDragging && (draggedTaskEmployee !== employee.id || draggedTaskEmployee === null)"
+                   (dragover)="onDragOver($event, employee.id)"
+                   (drop)="onDrop($event, employee.id)"
+                   (dragleave)="onDragLeave($event)"
+                   [class.drag-active]="dragOverEmployee === employee.id">
+                <div class="drop-hint" *ngIf="dragOverEmployee === employee.id">
+                  {{ draggedTaskEmployee === null ? '释放以分配任务' : '释放以重新分配' }}
+                </div>
+              </div>
+              <div class="viz-tasks-wrapper">
+                <!-- 员工姓名固定在顶部 -->
+                <div class="viz-column-header">
+                  <div class="viz-name">{{ employee.name }}</div>
+                  <div class="viz-count-badge">{{ employee.tasks.length }}</div>
+                </div>
+                <div class="viz-tasks">
+                  <div class="viz-task-block" 
+                       *ngFor="let task of employee.tasks; let taskIndex = index"
+                       [ngClass]="['priority-' + getPriorityClass(task.priority), isDragging && draggedTask?.id === task.id ? 'dragging' : '']"
+                       [title]="getTaskTooltip(task)"
+                       [draggable]="true"
+                       (dragstart)="onDragStart($event, task, employee.id)"
+                       (dragend)="onDragEnd($event)"
+                       (click)="showTaskMenu(task, employee.id, taskIndex)"
+                       (contextmenu)="showTaskMenu(task, employee.id, taskIndex); $event.preventDefault()">
+                   <div class="task-block-content">
+                      <ion-badge class="task-started-badge" color="tertiary" *ngIf="isTaskStarted(task)" title="已开工（当前阶段已开始）">S</ion-badge>
+                      <span class="task-name">{{ task.device_number || getTaskDisplayName(task.name) }}</span>
+                      <span class="task-model" *ngIf="task.product_model">{{ task.product_model }}</span>
+                      <ion-icon name="ellipsis-vertical" class="task-menu-icon"></ion-icon>
+                    </div>
+                    <div class="task-progress" *ngIf="getTaskProgress(task) > 0">
+                      <div class="progress-bar" [style.width.%]="getTaskProgress(task)"></div>
+                    </div>
+                  </div>
+                  <div class="no-tasks-placeholder" *ngIf="!employee.tasks.length && !isDragging">
+                    暂无任务
+                  </div>
+                  <div class="drop-zone-placeholder" 
+                       *ngIf="isDragging && draggedTaskEmployee !== employee.id && !employee.tasks.length">
+                    释放以分配任务
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- 待分配任务区域 - 放在员工任务栏下方 -->
+        <div class="unassigned-tasks-section" style="margin-top: 8px;">
+          <div style="display: flex; gap: 12px;">
+            <!-- 左侧筛选栏（垂直分布） -->
+            <ion-card style="flex: 0 0 200px;">
+              <ion-card-header>
+                <ion-card-title style="font-size: 16px;">筛选条件</ion-card-title>
+              </ion-card-header>
+              <ion-card-content>
+                <div class="unassigned-filters-vertical" style="display: flex; flex-direction: column; gap: 12px;">
+                  <ion-item *ngIf="currentUser?.role === 'admin'">
+                    <ion-label position="stacked">显示员工个数</ion-label>
+                    <ion-input type="number" min="1" max="50" [(ngModel)]="vizEmployeeLimit" (ionChange)="onVizEmployeeLimitChange()" placeholder="10"></ion-input>
+                  </ion-item>
+                  
+                  <ion-item>
+                    <ion-label position="stacked">阶段</ion-label>
+                    <ion-select [(ngModel)]="unassignedTaskFilters.phase" placeholder="全部阶段">
+                      <ion-select-option value="">全部阶段</ion-select-option>
+                      <ion-select-option value="machining">机加阶段</ion-select-option>
+                      <ion-select-option value="electrical">电控阶段</ion-select-option>
+                      <ion-select-option value="pre_assembly">组装前段</ion-select-option>
+                      <ion-select-option value="post_assembly">组装后段</ion-select-option>
+                      <ion-select-option value="debugging">调试阶段</ion-select-option>
+                    </ion-select>
+                  </ion-item>
+                  <ion-item>
+                    <ion-label position="stacked">设备号筛选</ion-label>
+                    <ion-input 
+                      [(ngModel)]="unassignedTaskFilters.deviceNumber" 
+                      placeholder="输入设备号"
+                      clearInput="true">
+                    </ion-input>
+                  </ion-item>
+                  
+                  <ion-item>
+                    <ion-label position="stacked">型号筛选</ion-label>
+                    <ion-input 
+                      [(ngModel)]="unassignedTaskFilters.productModel" 
+                      placeholder="输入型号"
+                      clearInput="true">
+                    </ion-input>
+                  </ion-item>
+                  
+                  <ion-item>
+                    <ion-label position="stacked">开工日期止</ion-label>
+                    <ion-input 
+                      [(ngModel)]="unassignedTaskFilters.productionDateEnd" 
+                      type="date"
+                      clearInput="true">
+                    </ion-input>
+                  </ion-item>
+                  
+                </div>
+              </ion-card-content>
+            </ion-card>
+            
+            <!-- 右侧待分配任务列表 -->
+            <ion-card style="flex: 1;">
+              <ion-card-header>
+                <ion-card-title style="font-size: 18px; display: flex; align-items: center; gap: 8px;">
+                  <ion-icon name="folder-open-outline"></ion-icon>
+                  待分配任务
+                  <ion-badge color="primary" style="margin-left: 6px;">{{ getFilteredUnassignedTasks().length }}</ion-badge>
+                </ion-card-title>
+              </ion-card-header>
+              <ion-card-content>
+                <!-- 待分配任务列表 -->
+                <div class="unassigned-tasks-list" style="display: flex; flex-wrap: wrap; gap: 12px; min-height: 120px;">
+                  <div 
+                    class="viz-task-block unassigned-task"
+                    *ngFor="let task of getFilteredUnassignedTasks()"
+                    [ngClass]="['priority-' + getPriorityClass(task.priority)]"
+                    [title]="getTaskTooltip(task)"
+                    [draggable]="true"
+                    (dragstart)="onDragStartFromUnassigned($event, task)"
+                    (dragend)="onDragEnd($event)">
+                    <div class="task-block-content" style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                      <div class="task-name" style="display: flex; flex-direction: column; line-height: 1.4; flex: 1; min-width: 0;">
+                        <span>{{ task.device_number || getTaskDisplayName(task.name) }}</span>
+                        <span *ngIf="task.product_model" class="task-model" style="font-size: 0.9em;">{{ task.product_model }}</span>
+                        <span *ngIf="task.production_time" class="task-start-time">开工：{{ task.production_time | date:'yyyy-MM-dd' }}</span>
+                      </div>
+                      <div class="task-badges" style="display: flex; flex-direction: column; gap: 4px; flex-shrink: 0;">
+                        <ion-badge class="task-started-badge" color="success" *ngIf="unassignedTaskFilters.phase === 'pre_assembly' && task.machining_phase === 1" title="机加阶段已完成" style="--font-size: 9px; --padding-start: 4px; --padding-end: 4px; --padding-top: 1px; --padding-bottom: 1px;">机加✓</ion-badge>
+                        <ion-badge class="task-started-badge" color="success" *ngIf="unassignedTaskFilters.phase === 'post_assembly' && task.pre_assembly_phase === 1" title="组装前段已完成" style="--font-size: 9px; --padding-start: 4px; --padding-end: 4px; --padding-top: 1px; --padding-bottom: 1px;">前段✓</ion-badge>
+                        <ion-badge class="task-started-badge" color="success" *ngIf="unassignedTaskFilters.phase === 'post_assembly' && task.electrical_phase === 1" title="电控阶段已完成" style="--font-size: 9px; --padding-start: 4px; --padding-end: 4px; --padding-top: 1px; --padding-bottom: 1px;">电控✓</ion-badge>
+                        <ion-badge class="task-started-badge" color="success" *ngIf="unassignedTaskFilters.phase === 'debugging' && task.post_assembly_phase === 1" title="组装后段已完成" style="--font-size: 9px; --padding-start: 4px; --padding-end: 4px; --padding-top: 1px; --padding-bottom: 1px;">后段✓</ion-badge>
+                      </div>
+                    </div>
+                    <div class="task-progress" *ngIf="getTaskProgress(task) > 0">
+                      <div class="progress-bar" [style.width.%]="getTaskProgress(task)"></div>
+                    </div>
+                  </div>
+                  <div *ngIf="getFilteredUnassignedTasks().length === 0" style="width: 100%; text-align: center; padding: 40px; color: #999;">
+                    暂无待分配任务
+                  </div>
+                </div>
+              </ion-card-content>
+            </ion-card>
+          </div>
+        </div>
+        </div>
+
+        <ion-card *ngIf="!vizData || vizData.length === 0">
+          <ion-card-content>
+            <p style="text-align: center; color: #999;">暂无分配任务</p>
+          </ion-card-content>
+        </ion-card>
+      </ion-content>
+    </ng-template>
+  </ion-modal>
+</ion-content>
+
+

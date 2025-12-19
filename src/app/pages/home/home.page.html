@@ -1,0 +1,767 @@
+<ion-header>
+  <ion-toolbar>
+    <ion-title>车间任务列表</ion-title>
+    <ion-buttons slot="end">
+      <ion-button *ngIf="currentUser?.role==='admin' || currentUser?.role==='supervisor' || currentUser?.role==='manager'" (click)="goDispatch()" title="主管派工">
+        <ion-icon name="people-outline"></ion-icon>
+        <ion-label class="ion-padding-start">派工</ion-label>
+      </ion-button>
+      <ion-button *ngIf="currentUser?.role==='admin' || currentUser?.role==='supervisor' || currentUser?.role==='manager' || currentUser?.role==='staff'" [routerLink]="['/exception-approval']" title="异常审批">
+        <ion-icon name="warning-outline"></ion-icon>
+        <ion-label class="ion-padding-start">{{ currentUser?.role === 'staff' ? '责任部门确认' : '异常审批' }}</ion-label>
+      </ion-button>
+      <ion-button *ngIf="currentUser?.role==='worker'" [routerLink]="['/exception-reports']" title="我的异常报告">
+        <ion-icon name="document-text-outline"></ion-icon>
+        <ion-label class="ion-padding-start">我的异常</ion-label>
+      </ion-button>
+      <ion-button *ngIf="currentUser?.role==='worker'" [routerLink]="['/efficiency-calc']" title="我的效率">
+        <ion-icon name="analytics-outline"></ion-icon>
+        <ion-label class="ion-padding-start">我的效率</ion-label>
+      </ion-button>
+      <ion-button *ngIf="currentUser?.role==='manager'" (click)="goManagerAssist()" title="协助审批">
+        <ion-icon name="clipboard-outline"></ion-icon>
+        <ion-label class="ion-padding-start">协助审批</ion-label>
+      </ion-button>
+      <ion-button *ngIf="currentUser?.role==='admin' || currentUser?.role==='supervisor' || currentUser?.role==='manager'" [routerLink]="['/attendance-admin']" title="考勤列表">
+        <ion-icon name="time-outline"></ion-icon>
+        <ion-label class="ion-padding-start">考勤</ion-label>
+      </ion-button>
+      <ion-button *ngIf="currentUser?.role==='admin' || currentUser?.role==='supervisor' || currentUser?.role==='manager' || (currentUser?.role==='staff' && currentUser?.department==='工程部')" [routerLink]="['/efficiency-calc']" title="效率统计">
+        <ion-icon name="analytics-outline"></ion-icon>
+        <ion-label class="ion-padding-start">效率统计</ion-label>
+      </ion-button>
+      <ion-button *ngIf="currentUser?.role==='staff' && currentUser?.department==='工程部'" (click)="openStdHoursModal()" title="导入标准工时">
+        <ion-icon name="time-outline"></ion-icon>
+        <ion-label class="ion-padding-start">导入工时</ion-label>
+      </ion-button>
+      <ion-button *ngIf="currentUser?.role==='admin'" (click)="openImportUserModal()" title="导入员工">
+        <ion-icon name="person-add-outline"></ion-icon>
+        <ion-label class="ion-padding-start">导入员工</ion-label>
+      </ion-button>
+      <ion-button (click)="logout()">
+        <ion-icon name="log-out-outline"></ion-icon>
+      </ion-button>
+    </ion-buttons>
+  </ion-toolbar>
+  
+  <!-- 任务类型切换 -->
+  <ion-toolbar>
+    <!-- Staff角色：显示责任部门确认 -->
+    <ion-segment *ngIf="currentUser?.role === 'staff'" [(ngModel)]="taskViewMode" (ionChange)="onTaskViewModeChange()">
+      <ion-segment-button value="active">
+        <ion-label>待确认</ion-label>
+      </ion-segment-button>
+      <ion-segment-button value="completed">
+        <ion-label>已确认</ion-label>
+      </ion-segment-button>
+    </ion-segment>
+    <!-- 其他角色：显示任务视图 -->
+    <ion-segment *ngIf="currentUser?.role !== 'staff'" [(ngModel)]="taskViewMode" (ionChange)="onTaskViewModeChange()">
+      <ion-segment-button value="active">
+        <ion-label>进行中</ion-label>
+      </ion-segment-button>
+      <ion-segment-button value="completed">
+        <ion-label>已完成</ion-label>
+      </ion-segment-button>
+    </ion-segment>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content class="ion-padding">
+  <!-- 筛选与搜索 -->
+  <!-- Staff角色：只显示搜索 -->
+  <ion-item *ngIf="currentUser?.role === 'staff'">
+    <ion-label>搜索</ion-label>
+    <input [(ngModel)]="keyword" placeholder="任务名/异常描述" />
+    <ion-button size="small" (click)="applyFilters()">应用</ion-button>
+    <ion-button size="small" fill="clear" (click)="resetFilters()">清空</ion-button>
+  </ion-item>
+  
+  <!-- 其他角色：显示筛选和搜索 -->
+  <ng-container *ngIf="currentUser?.role !== 'staff'">
+    <ion-item>
+      <ion-label>筛选</ion-label>
+      <select [(ngModel)]="filterPriority" (change)="applyFilters()">
+        <option value="">全部优先级</option>
+        <option value="urgent">紧急</option>
+        <option value="normal">非紧急</option>
+      </select>
+      <select *ngIf="currentUser?.role==='admin' || currentUser?.role==='supervisor' || currentUser?.role==='manager'" [(ngModel)]="filterDepartment" (change)="applyFilters()" style="margin-left:8px;">
+        <option value="">全部部门</option>
+        <option *ngFor="let dept of departments" [value]="dept">{{ dept }}</option>
+      </select>
+    </ion-item>
+    <ion-item>
+      <ion-label>搜索</ion-label>
+      <input [(ngModel)]="keyword" placeholder="任务名/描述" />
+      <ion-button size="small" (click)="applyFilters()">应用</ion-button>
+      <ion-button size="small" fill="clear" (click)="resetFilters()">清空</ion-button>
+    </ion-item>
+  </ng-container>
+
+  <!-- 通用考勤卡片已移除，按任务计时在任务行展示 -->
+
+  <!-- 我的/全部 切换 -->
+  <ion-item *ngIf="currentUser?.role==='admin'">
+    <ion-label>范围</ion-label>
+    <select [(ngModel)]="viewScope" (change)="loadTasks()">
+      <option value="mine">我的任务</option>
+      <option value="all">全部任务</option>
+    </select>
+  </ion-item>
+  <!-- 用户信息 -->
+  <ion-card *ngIf="currentUser">
+    <ion-card-content>
+      <h2>欢迎，{{ currentUser.name }}</h2>
+      <p *ngIf="currentUser.role !== 'staff'">角色：{{ currentUser.role === 'admin' ? '管理员' : currentUser.role === 'supervisor' ? '主管' : currentUser.role === 'manager' ? '经理' : '工人' }}</p>
+      <p>部门：{{ currentUser.department }}</p>
+      
+      <!-- 按钮功能说明（仅工人显示） -->
+      <div *ngIf="currentUser.role === 'worker'" class="button-instructions">
+        <h4>操作说明：</h4>
+        <div class="instruction-grid">
+          <div class="instruction-item">
+            <span class="instruction-button">开始阶段</span>
+            <span class="instruction-text">→ 点击开始当前阶段的工作。开始后系统会记录开始时间。注意：如果有其他任务正在进行（未暂停），将无法开始新任务，需要先暂停或完成当前任务。</span>
+          </div>
+          <div class="instruction-item">
+            <span class="instruction-button">暂停阶段</span>
+            <span class="instruction-text">→ 需要暂停当前阶段工作时点击。暂停时会提示选择下一个任务，并可以填写暂停备注。如果没有下一个任务，将无法暂停。</span>
+          </div>
+          <div class="instruction-item">
+            <span class="instruction-button">继续阶段</span>
+            <span class="instruction-text">→ 暂停后恢复工作时点击。如果当前有其他任务正在进行，会先暂停该任务再继续当前任务。</span>
+          </div>
+          <div class="instruction-item">
+            <span class="instruction-button">完成阶段</span>
+            <span class="instruction-text">→ 当前阶段工作完成后点击完成。完成时会提示选择下一个要开始的任务（未开始或已暂停的任务），必须选择一个任务才能完成当前阶段。</span>
+          </div>
+          <div class="instruction-item">
+            <span class="instruction-button">异常上报</span>
+            <span class="instruction-text">→ 遇到问题时点击异常上报。可以上报异常时间段、异常类型和异常描述，需要经过主管和经理两级审批。</span>
+          </div>
+        </div>
+      </div>
+    </ion-card-content>
+  </ion-card>
+
+  <!-- 待审批（主管/管理员可见） -->
+  <ion-card *ngIf="(currentUser?.role==='admin' || currentUser?.role==='supervisor' || currentUser?.role==='manager') && (pendingApprovals?.length||0)>0">
+    <ion-card-content>
+      <h3>待审批列表（最近）</h3>
+      <ion-list>
+        <ion-item *ngFor="let ap of pendingApprovals">
+          <ion-label>
+            <div>{{ ap.task_name }} - {{ ap.user_name }} 数量: {{ ap.quantity_completed||0 }}</div>
+            <div>备注: {{ ap.quality_notes || '-' }}</div>
+          </ion-label>
+          <ion-button color="success" size="small" (click)="approveWithNote(ap)">通过</ion-button>
+          <ion-button color="danger" size="small" (click)="rejectWithNote(ap)" class="ion-margin-start">驳回</ion-button>
+        </ion-item>
+      </ion-list>
+    </ion-card-content>
+  </ion-card>
+
+  <!-- 加载状态 -->
+  <ion-spinner *ngIf="isLoading" name="crescent"></ion-spinner>
+
+  <!-- 如果有错误，显示错误信息 -->
+  <ion-alert *ngIf="errorMsg" color="danger" header="错误" [message]="errorMsg" is-open="true"></ion-alert>
+
+  <!-- 如果没有任务，显示提示 -->
+  <ion-card *ngIf="currentUser?.role !== 'staff' && tasks.length === 0 && !errorMsg && !isLoading">
+    <ion-card-content>暂无生产任务</ion-card-content>
+  </ion-card>
+  
+  <!-- Staff角色：如果没有异常报告，显示提示 -->
+  <ion-card *ngIf="currentUser?.role === 'staff' && filteredStaffReports.length === 0 && !errorMsg && !isLoading">
+    <ion-card-content>{{ taskViewMode === 'active' ? '暂无待确认的异常报告' : '暂无已确认的异常报告' }}</ion-card-content>
+  </ion-card>
+
+  <!-- 显示从数据库获取的任务列表（下拉刷新） -->
+  <ion-refresher slot="fixed" (ionRefresh)="doRefresh($event)">
+    <ion-refresher-content pullingText="下拉刷新"></ion-refresher-content>
+  </ion-refresher>
+
+  <!-- 任务紧急程度说明 -->
+  <ion-card *ngIf="currentUser?.role === 'worker' && filteredTasks.length > 0" style="margin: 16px 0; background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%); border-left: 4px solid #ff9800;">
+    <ion-card-content style="padding: 12px;">
+      <div style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #e65100;">
+        <ion-icon name="alert-circle-outline" style="font-size: 20px; color: #ff9800;"></ion-icon>
+        <span>任务已按紧急程度排序，越靠上的任务越紧急，请优先处理</span>
+      </div>
+    </ion-card-content>
+  </ion-card>
+
+  <!-- Staff角色：显示责任部门确认的异常报告列表 -->
+  <ion-list *ngIf="currentUser?.role === 'staff' && filteredStaffReports.length > 0">
+    <ion-item *ngFor="let report of filteredStaffReports">
+      <ion-label>
+        <h2>{{ report.task_name || '未知任务' }}</h2>
+        <p><strong>上报人：</strong>{{ report.user_name || '未知用户' }}</p>
+        <p><strong>异常类型：</strong>{{ report.modified_exception_type || report.exception_type }}</p>
+        <p *ngIf="report.assigned_staff_department"><strong>责任部门：</strong>{{ report.assigned_staff_department }}</p>
+        <p><strong>异常时间：</strong>
+          {{ formatExceptionDateTime(report.modified_start_datetime || report.exception_start_datetime) }} - 
+          {{ formatExceptionDateTime(report.modified_end_datetime || report.exception_end_datetime) }}
+        </p>
+        <p><strong>异常描述：</strong>{{ report.modified_description || report.description }}</p>
+        <p><strong>提交时间：</strong>{{ formatExceptionDateTime(report.submitted_at) }}</p>
+        
+        <!-- 已确认显示确认信息 -->
+        <div *ngIf="taskViewMode === 'completed' && report.staff_confirmed_at">
+          <p><strong>责任部门确定时间：</strong>{{ formatExceptionDateTime(report.staff_confirmed_at) }}</p>
+          <p *ngIf="report.staff_confirmation_note"><strong>确认备注：</strong>{{ report.staff_confirmation_note }}</p>
+        </div>
+      </ion-label>
+      
+      <!-- 操作按钮：仅待确认时显示，工程部不显示 -->
+      <div *ngIf="taskViewMode === 'active' && report.status === 'pending_staff_confirmation' && currentUser?.department !== '工程部'" slot="end" class="task-actions">
+        <div class="button-group">
+          <ion-button 
+            color="success" 
+            expand="block"
+            fill="outline"
+            (click)="openStaffConfirmModal(report, 'approve')"
+            [disabled]="isSubmitting">
+            <ion-icon name="checkmark-circle"></ion-icon>
+            确认
+          </ion-button>
+          <ion-button 
+            color="warning" 
+            expand="block"
+            fill="outline"
+            (click)="openStaffConfirmModal(report, 'reject')"
+            [disabled]="isSubmitting">
+            <ion-icon name="close-circle"></ion-icon>
+            拒绝
+          </ion-button>
+        </div>
+      </div>
+    </ion-item>
+  </ion-list>
+
+  <!-- 其他角色：显示任务列表 -->
+  <ion-list *ngIf="currentUser?.role !== 'staff' && filteredTasks.length > 0">
+    <ion-item *ngFor="let task of filteredTasks">
+      <ion-label>
+        <h2>{{ task.name }}</h2>
+        <p>优先级：{{ getPriorityText(task.priority) }}</p>
+        <p *ngIf="task.assigned_user_name">分配给：{{ task.assigned_user_name }}</p>
+        <p *ngIf="task.estimated_hours">预计工时：{{ task.estimated_hours }}小时</p>
+        <p *ngIf="task.start_time">开始时间：{{ task.start_time | date:'yyyy-MM-dd HH:mm:ss' }}</p>
+        <p *ngIf="task.end_time">结束时间：{{ task.end_time | date:'yyyy-MM-dd HH:mm:ss' }}</p>
+        
+        <!-- 阶段进度显示 -->
+        <p *ngIf="task.current_phase || taskViewMode === 'completed'">
+          <strong>生产阶段：</strong>
+          <span class="phase-step" 
+                [class.completed]="task.machining_phase === 1"
+                [class.current]="isCurrentPhase(task, 'machining')"
+                [class.assigned]="isCurrentPhase(task, 'machining') && task.machining_assignee">机加</span>
+          <span class="phase-separator">|</span>
+          <span class="phase-step" 
+                [class.completed]="task.electrical_phase === 1"
+                [class.current]="isCurrentPhase(task, 'electrical')"
+                [class.assigned]="isCurrentPhase(task, 'electrical') && task.electrical_assignee">电控</span>
+          <span class="phase-step" 
+                [class.completed]="task.pre_assembly_phase === 1"
+                [class.current]="task.current_phase === 'pre_assembly'"
+                [class.assigned]="task.current_phase === 'pre_assembly' && task.pre_assembly_assignee">组装前段</span>
+          <span class="phase-step" 
+                [class.completed]="task.post_assembly_phase === 1"
+                [class.current]="task.current_phase === 'post_assembly'"
+                [class.assigned]="task.current_phase === 'post_assembly' && task.post_assembly_assignee">组装后段</span>
+          <span class="phase-step" 
+                [class.completed]="task.debugging_phase === 1"
+                [class.current]="task.current_phase === 'debugging'"
+                [class.assigned]="task.current_phase === 'debugging' && task.debugging_assignee">调试</span>
+        </p>
+        
+        <!-- 已完成任务显示阶段完成状态 -->
+        <div *ngIf="taskViewMode === 'completed'" class="completion-status">
+          <p *ngIf="task.status === 'completed'"><strong>任务状态：</strong>全部完成</p>
+          <p *ngIf="task.status !== 'completed' && getCompletedPhasesCount(task) > 0">
+            <strong>完成阶段（{{ getCompletedPhasesCount(task) }}/5）：</strong>{{ getCompletedPhases(task).join('、') }}
+          </p>
+        </div>
+      </ion-label>
+      
+      <!-- 按任务计时按钮：仅工人且当前用户被分配的任务可操作；只显示一个按钮 -->
+      <ng-container *ngIf="currentUser?.role==='worker' && isTaskAssignedToUser(task)">
+        <div slot="end" class="task-actions">
+          <!-- 按钮组 -->
+          <div class="button-group">
+            <!-- 开始阶段按钮（仅在活跃任务视图中显示，已完成任务不显示） -->
+            <ion-button 
+              *ngIf="taskViewMode !== 'completed' && getTaskOperatePhase(task) && !isPhaseStarted(task) && !isPhasePaused(task) && !isPhaseCompleted(task) && task.status !== 'completed' && canOperateTask(task)" 
+              color="success" 
+              expand="block"
+              fill="outline"
+              (click)="startCurrentPhase(task)"
+              [disabled]="isSubmitting">
+              <ion-icon name="play-circle"></ion-icon>
+              开始{{ getCurrentPhaseName(task) }}阶段
+            </ion-button>
+            
+            <!-- 暂停阶段按钮 -->
+            <ion-button 
+              *ngIf="taskViewMode !== 'completed' && getTaskOperatePhase(task) && isPhaseStarted(task) && !isPhasePaused(task) && !isPhaseCompleted(task) && task.status !== 'completed' && canOperateTask(task)" 
+              color="warning" 
+              expand="block"
+              fill="outline"
+              (click)="pauseCurrentPhase(task)"
+              [disabled]="isSubmitting">
+              <ion-icon name="pause-circle"></ion-icon>
+              暂停{{ getCurrentPhaseName(task) }}阶段
+            </ion-button>
+            
+            <!-- 继续阶段按钮 -->
+            <ion-button 
+              *ngIf="taskViewMode !== 'completed' && getTaskOperatePhase(task) && isPhasePaused(task) && !isPhaseCompleted(task) && task.status !== 'completed' && canOperateTask(task)" 
+              color="success" 
+              expand="block"
+              fill="outline"
+              (click)="resumeCurrentPhase(task)"
+              [disabled]="isSubmitting">
+              <ion-icon name="play-circle"></ion-icon>
+              继续{{ getCurrentPhaseName(task) }}阶段
+            </ion-button>
+            
+            <!-- 完成任务按钮（仅在活跃任务视图中显示，已完成任务不显示） -->
+            <ion-button 
+              *ngIf="taskViewMode !== 'completed' && getTaskOperatePhase(task) && isPhaseStarted(task) && !isPhaseCompleted(task) && task.status !== 'completed' && canOperateTask(task)" 
+              color="primary" 
+              expand="block"
+              fill="outline"
+              (click)="completeCurrentPhase(task)"
+              [disabled]="isSubmitting">
+              <ion-icon name="checkmark-circle"></ion-icon>
+              完成{{ getCurrentPhaseName(task) }}阶段
+            </ion-button>
+            
+            <!-- 异常上报按钮 -->
+            <ion-button 
+              *ngIf="canOperateTask(task)" 
+              color="warning" 
+              expand="block"
+              fill="outline"
+              (click)="openExceptionReportModal(task)">
+              <ion-icon name="warning"></ion-icon>
+              {{ taskViewMode === 'completed' ? '补充异常时间' : '异常上报' }}
+            </ion-button>
+          </div>
+          
+          <!-- 状态和计时信息 -->
+          <div class="status-group">
+            <!-- 任务池状态 -->
+            <ion-badge 
+              *ngIf="task.task_pool_status === 'in_pool'" 
+              color="warning" 
+              class="status-badge">
+              <ion-icon name="time"></ion-icon>
+              任务池中
+            </ion-badge>
+            
+            <!-- 任务完成状态 -->
+            <ion-badge 
+              *ngIf="task.status === 'completed'" 
+              color="success" 
+              class="status-badge">
+              <ion-icon name="checkmark-circle"></ion-icon>
+              任务已完成
+            </ion-badge>
+            
+            <!-- 计时信息 -->
+            <div class="timer-info">
+              <ion-badge color="medium" *ngIf="task._totalMinutes != null">累计：{{ task._totalMinutes }} 分钟</ion-badge>
+            </div>
+          </div>
+        </div>
+      </ng-container>
+    </ion-item>
+  </ion-list>
+</ion-content>
+
+<!-- 完成任务确认对话框 -->
+<ion-modal [isOpen]="isCompleteModalOpen" (didDismiss)="closeCompleteModal()">
+  <ng-template>
+    <ion-header>
+      <ion-toolbar>
+        <ion-title>完成{{ selectedTaskPhaseName }}阶段</ion-title>
+        <ion-buttons slot="end">
+          <ion-button (click)="closeCompleteModal()">
+            <ion-icon name="close"></ion-icon>
+          </ion-button>
+        </ion-buttons>
+      </ion-toolbar>
+    </ion-header>
+    
+    <ion-content class="ion-padding">
+      <ion-card *ngIf="selectedTaskForComplete">
+        <ion-card-header>
+          <ion-card-title>任务信息</ion-card-title>
+        </ion-card-header>
+        <ion-card-content>
+          <p><strong>任务名称：</strong>{{ selectedTaskForComplete.name }}</p>
+          <p><strong>当前阶段：</strong>{{ selectedTaskPhaseName }}</p>
+          <p><strong>设备号：</strong>{{ selectedTaskForComplete.device_number || '-' }}</p>
+          <p><strong>产品型号：</strong>{{ selectedTaskForComplete.product_model || '-' }}</p>
+        </ion-card-content>
+      </ion-card>
+
+      <ion-card>
+        <ion-card-header>
+          <ion-card-title>确认完成</ion-card-title>
+        </ion-card-header>
+        <ion-card-content>
+          <p>确定要完成 <strong>{{ selectedTaskPhaseName }}阶段</strong> 吗？</p>
+          
+          <div class="ion-margin-top">
+            <ion-button 
+              expand="block" 
+              color="success" 
+              (click)="confirmCompletePhase()" 
+              [disabled]="isSubmitting"
+              class="ion-margin-bottom">
+              <ion-spinner *ngIf="isSubmitting" name="crescent"></ion-spinner>
+              <span *ngIf="!isSubmitting">确认完成</span>
+            </ion-button>
+            
+            <ion-button 
+              expand="block" 
+              color="medium" 
+              fill="outline"
+              (click)="closeCompleteModal()"
+              [disabled]="isSubmitting">
+              取消
+            </ion-button>
+          </div>
+        </ion-card-content>
+      </ion-card>
+    </ion-content>
+  </ng-template>
+</ion-modal>
+
+<!-- 异常上报模态框 / 责任部门确认模态框 -->
+<ion-modal [isOpen]="isExceptionModalOpen" (didDismiss)="closeExceptionModal()">
+  <ng-template>
+    <ion-header>
+      <ion-toolbar>
+        <ion-title>{{ currentUser?.role === 'staff' ? '责任部门确认' : '异常上报' }}</ion-title>
+        <ion-buttons slot="end">
+          <ion-button (click)="closeExceptionModal()">
+            <ion-icon name="close"></ion-icon>
+          </ion-button>
+        </ion-buttons>
+      </ion-toolbar>
+    </ion-header>
+    
+    <ion-content class="ion-padding">
+      <ion-card>
+        <ion-card-header>
+          <ion-card-title>{{ selectedTaskForException?.name }}</ion-card-title>
+        </ion-card-header>
+        <ion-card-content>
+          <!-- Staff角色：显示确认/拒绝界面 -->
+          <ng-container *ngIf="currentUser?.role === 'staff'">
+            <ion-list>
+              <ion-item>
+                <ion-label>
+                  <h3>异常类型</h3>
+                  <p>{{ exceptionType }}</p>
+                </ion-label>
+              </ion-item>
+              <ion-item>
+                <ion-label>
+                  <h3>异常时间</h3>
+                  <p>{{ exceptionStartDateTime }} - {{ exceptionEndDateTime }}</p>
+                </ion-label>
+              </ion-item>
+              <ion-item>
+                <ion-label>
+                  <h3>异常描述</h3>
+                  <p>{{ exceptionDescription }}</p>
+                </ion-label>
+              </ion-item>
+              <ion-item>
+                <ion-label position="stacked">
+                  {{ approvalAction === 'approve' ? '责任部门确认备注' : '拒绝原因' }}
+                </ion-label>
+                <ion-textarea 
+                  [(ngModel)]="approvalNote" 
+                  placeholder="{{ approvalAction === 'approve' ? '请输入确认备注（可选）' : '请输入拒绝原因' }}"
+                  rows="4"
+                  [disabled]="isSubmitting">
+                </ion-textarea>
+              </ion-item>
+            </ion-list>
+            <ion-button 
+              expand="block" 
+              color="success" 
+              (click)="confirmStaffApproval()"
+              [disabled]="isSubmitting || (approvalAction === 'reject' && !approvalNote.trim())">
+              <ion-icon name="checkmark-circle" slot="start"></ion-icon>
+              {{ approvalAction === 'approve' ? '确认' : '拒绝' }}
+            </ion-button>
+            <ion-button 
+              expand="block" 
+              fill="outline" 
+              color="medium" 
+              (click)="closeExceptionModal()"
+              [disabled]="isSubmitting">
+              取消
+            </ion-button>
+          </ng-container>
+          
+          <!-- 其他角色：显示异常上报界面 -->
+          <ng-container *ngIf="currentUser?.role !== 'staff'">
+          <ion-note *ngIf="taskViewMode === 'completed'" color="warning" style="padding: 10px; display: block; margin-bottom: 10px;">
+            <p>提示：您正在为已完成的任务补充异常时间。请准确填写异常发生的开始和结束时间。</p>
+          </ion-note>
+          <ion-list>
+            <ion-item>
+              <ion-label position="stacked">异常类型 *</ion-label>
+              <ion-select [(ngModel)]="exceptionType" placeholder="请选择异常类型">
+                <ion-select-option value="缺料">缺料</ion-select-option>
+                <ion-select-option value="来料不良">来料不良</ion-select-option>
+                <ion-select-option value="改造类（研发售后或生产不良）">改造类（研发售后或生产不良）</ion-select-option>
+                <ion-select-option value="临时安排任务">临时安排任务</ion-select-option>
+              </ion-select>
+            </ion-item>
+            
+            <ion-item>
+              <ion-label position="stacked">审批人 *</ion-label>
+              <ion-select [(ngModel)]="selectedApproverId" placeholder="请选择审批人">
+                <ion-select-option *ngFor="let approver of approvers" [value]="approver.id">
+                  {{ approver.name }} ({{ approver.role === 'admin' ? '管理员' : approver.role === 'supervisor' ? '主管' : '经理' }})
+                </ion-select-option>
+              </ion-select>
+            </ion-item>
+            
+            <ion-item>
+              <ion-label position="stacked">异常描述 *</ion-label>
+              <ion-textarea 
+                [(ngModel)]="exceptionDescription" 
+                placeholder="请详细描述异常情况，包括影响范围、紧急程度等"
+                rows="4"
+                [disabled]="isSubmitting">
+              </ion-textarea>
+            </ion-item>
+            
+            <ion-item>
+              <ion-label position="stacked">异常开始日期时间 *</ion-label>
+              <ion-input 
+                type="datetime-local" 
+                [(ngModel)]="exceptionStartDateTime"
+                placeholder="选择开始日期时间"
+                [disabled]="isSubmitting">
+              </ion-input>
+            </ion-item>
+
+            <ion-item>
+              <ion-label position="stacked">异常结束日期时间 *</ion-label>
+              <ion-input 
+                type="datetime-local" 
+                [(ngModel)]="exceptionEndDateTime"
+                placeholder="选择结束日期时间"
+                [disabled]="isSubmitting">
+              </ion-input>
+            </ion-item>
+            
+            
+            <ion-item>
+              <ion-label position="stacked">上传照片</ion-label>
+              <ion-button 
+                fill="outline" 
+                color="primary" 
+                (click)="selectImage()"
+                [disabled]="isSubmitting">
+                <ion-icon name="camera" slot="start"></ion-icon>
+                选择照片
+              </ion-button>
+              <ion-button 
+                *ngIf="selectedImage" 
+                fill="clear" 
+                color="danger" 
+                size="small"
+                (click)="removeImage()"
+                [disabled]="isSubmitting">
+                <ion-icon name="close-circle"></ion-icon>
+                移除
+              </ion-button>
+            </ion-item>
+            
+            <!-- 显示选中的图片 -->
+            <ion-item *ngIf="selectedImage">
+              <ion-label>已选择图片：</ion-label>
+              <div slot="end">
+                <img [src]="selectedImage" style="max-width: 100px; max-height: 100px; border-radius: 4px;" />
+              </div>
+            </ion-item>
+          </ion-list>
+
+            <ion-button 
+              expand="block" 
+              color="warning" 
+              (click)="submitExceptionReport()" 
+              [disabled]="isSubmitting || !exceptionType || !selectedApproverId || !exceptionDescription || !exceptionStartDateTime || !exceptionEndDateTime"
+              class="ion-margin-top">
+              <ion-spinner *ngIf="isSubmitting" name="crescent"></ion-spinner>
+              <span *ngIf="!isSubmitting">提交异常报告</span>
+            </ion-button>
+          </ng-container>
+        </ion-card-content>
+      </ion-card>
+    </ion-content>
+  </ng-template>
+</ion-modal>
+
+<!-- 导入员工模态框 -->
+<ion-modal [isOpen]="isImportUserModalOpen" (didDismiss)="closeImportUserModal()">
+  <ng-template>
+    <ion-header>
+      <ion-toolbar>
+        <ion-title>导入员工信息</ion-title>
+        <ion-buttons slot="end">
+          <ion-button (click)="closeImportUserModal()">关闭</ion-button>
+        </ion-buttons>
+      </ion-toolbar>
+    </ion-header>
+    <ion-content>
+      <ion-card>
+        <ion-card-content>
+          <h3>说明</h3>
+          <p style="margin-top: 8px; color: #666; font-size: 14px;">
+            1. 请下载Excel模板，按照模板格式填写员工信息<br/>
+            2. 必填字段：username（用户名）、name（姓名）、role（角色）、department（部门）、password（密码）<br/>
+            3. 角色可选：worker（工人）、supervisor（主管）、admin（管理员）<br/>
+            4. user_group（组）：可选字段，填写员工所属组别（如：宋明雄组、组长等）<br/>
+            5. 密码默认为"123456"，员工可自行修改<br/>
+            6. 第一行为字段名，从第二行开始填写数据
+          </p>
+          
+          <ion-button 
+            expand="block" 
+            fill="outline" 
+            (click)="downloadUserTemplate()"
+            class="ion-margin-top">
+            <ion-icon name="download-outline"></ion-icon>
+            下载模板
+          </ion-button>
+          
+          <input 
+            type="file" 
+            accept=".xlsx,.xls" 
+            (change)="onUserFileSelected($event)"
+            #userFileInput
+            style="display: none">
+          
+          <ion-button 
+            expand="block" 
+            fill="outline" 
+            (click)="userFileInput.click()"
+            class="ion-margin-top">
+            <ion-icon name="folder-open-outline"></ion-icon>
+            选择文件
+          </ion-button>
+          
+          <ion-item *ngIf="selectedUserFile">
+            <ion-label>
+              <h3>已选择文件</h3>
+              <p>{{ selectedUserFile.name }}</p>
+            </ion-label>
+            <ion-button slot="end" fill="clear" (click)="selectedUserFile = null">
+              清除
+            </ion-button>
+          </ion-item>
+          
+          <ion-button 
+            expand="block" 
+            color="primary" 
+            (click)="importUsers()"
+            [disabled]="!selectedUserFile || isImportingUsers"
+            class="ion-margin-top">
+            <ion-spinner *ngIf="isImportingUsers" name="crescent"></ion-spinner>
+            <span *ngIf="!isImportingUsers">导入员工</span>
+          </ion-button>
+          
+          <div *ngIf="importUserResult" class="ion-margin-top" [style.color]="importUserResult.success ? 'green' : 'red'">
+            <p>{{ importUserResult.message }}</p>
+            <div *ngIf="importUserResult.errors && importUserResult.errors.length > 0" style="margin-top: 8px; max-height: 200px; overflow-y: auto;">
+              <p style="font-weight: bold;">错误详情：</p>
+              <p *ngFor="let error of importUserResult.errors" style="font-size: 12px; color: #d32f2f;">{{ error }}</p>
+            </div>
+          </div>
+        </ion-card-content>
+      </ion-card>
+    </ion-content>
+  </ng-template>
+</ion-modal>
+
+<!-- 导入标准工时模态框 -->
+<ion-modal [isOpen]="isStdHoursModalOpen" (didDismiss)="closeStdHoursModal()">
+  <ng-template>
+    <ion-header>
+      <ion-toolbar>
+        <ion-title>导入标准工时</ion-title>
+        <ion-buttons slot="end">
+          <ion-button (click)="closeStdHoursModal()"><ion-icon name="close"></ion-icon></ion-button>
+        </ion-buttons>
+      </ion-toolbar>
+    </ion-header>
+    <ion-content class="ion-padding">
+      <ion-card>
+        <ion-card-header>
+          <ion-card-title>Excel文件格式说明</ion-card-title>
+        </ion-card-header>
+        <ion-card-content>
+          <p>请确保Excel包含以下列：</p>
+          <ul>
+            <li><strong>B列：</strong>产品型号（必填）</li>
+            <li><strong>C列：</strong>机加标准工时（小时）</li>
+            <li><strong>D列：</strong>电控标准工时（小时）</li>
+            <li><strong>E列：</strong>组装前段标准工时（小时）</li>
+            <li><strong>F列：</strong>组装后段标准工时（小时）</li>
+            <li><strong>G列：</strong>调试标准工时（小时）</li>
+          </ul>
+        </ion-card-content>
+      </ion-card>
+      <ion-card>
+        <ion-card-content>
+          <ion-item>
+            <ion-label position="stacked">选择Excel文件</ion-label>
+            <input type="file" (change)="onStdFileSelected($event)" accept=".xlsx,.xls" style="margin-top: 8px;" />
+          </ion-item>
+          <div *ngIf="selectedStdFile" style="margin-top: 12px;">
+            <ion-chip color="primary">
+              <ion-icon name="document-outline"></ion-icon>
+              <ion-label>{{ selectedStdFile.name }}</ion-label>
+            </ion-chip>
+          </div>
+          <ion-button expand="block" (click)="importStandardHours()" [disabled]="!selectedStdFile || isImportingStd" style="margin-top: 12px;">
+            <ion-spinner *ngIf="isImportingStd" name="crescent"></ion-spinner>
+            <ion-icon *ngIf="!isImportingStd" name="cloud-upload-outline"></ion-icon>
+            {{ isImportingStd ? '导入中...' : '开始导入' }}
+          </ion-button>
+        </ion-card-content>
+      </ion-card>
+      <ion-card *ngIf="importStdResult">
+        <ion-card-header>
+          <ion-card-title [color]="importStdResult.success ? 'success' : 'danger'">
+            {{ importStdResult.success ? '导入成功' : '导入失败' }}
+          </ion-card-title>
+        </ion-card-header>
+        <ion-card-content>
+          <p *ngIf="importStdResult.message">{{ importStdResult.message }}</p>
+          <p *ngIf="importStdResult.updatedCount !== undefined">更新任务数：{{ importStdResult.updatedCount || 0 }}</p>
+          <div *ngIf="importStdResult.errors?.length">
+            <div style="margin-top:8px; font-size:12px; color:#666;">
+              <div *ngFor="let e of importStdResult.errors">{{ e }}</div>
+            </div>
+          </div>
+        </ion-card-content>
+      </ion-card>
+    </ion-content>
+  </ng-template>
+</ion-modal>

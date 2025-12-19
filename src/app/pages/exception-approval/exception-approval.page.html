@@ -1,0 +1,444 @@
+<ion-header>
+  <ion-toolbar>
+    <ion-title>{{ currentUser?.role === 'staff' ? '责任部门确认' : '异常审批' }}</ion-title>
+    <ion-buttons slot="start">
+      <ion-back-button defaultHref="/home"></ion-back-button>
+    </ion-buttons>
+    <ion-buttons slot="end">
+      <ion-button (click)="loadExceptionReports()">
+        <ion-icon name="refresh"></ion-icon>
+      </ion-button>
+    </ion-buttons>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content class="ion-padding">
+  <!-- 筛选条件 -->
+  <ion-card>
+    <ion-card-content>
+      <!-- Staff角色：使用按钮切换 -->
+      <div *ngIf="currentUser?.role === 'staff'" style="margin-bottom: 16px;">
+        <ion-label style="display: block; margin-bottom: 8px; font-weight: 500;">状态筛选</ion-label>
+        <div style="display: flex; gap: 8px;">
+          <ion-button 
+            [fill]="filterStatus === '' ? 'solid' : 'outline'"
+            [color]="filterStatus === '' ? 'primary' : 'medium'"
+            size="small"
+            (click)="setStaffFilter('')">
+            全部
+          </ion-button>
+          <ion-button 
+            [fill]="filterStatus === 'pending_staff_confirmation' ? 'solid' : 'outline'"
+            [color]="filterStatus === 'pending_staff_confirmation' ? 'primary' : 'medium'"
+            size="small"
+            (click)="setStaffFilter('pending_staff_confirmation')">
+            待责任部门确认
+          </ion-button>
+          <ion-button 
+            [fill]="filterStatus === 'staff_confirmed' ? 'solid' : 'outline'"
+            [color]="filterStatus === 'staff_confirmed' ? 'primary' : 'medium'"
+            size="small"
+            (click)="setStaffFilter('staff_confirmed')">
+            责任部门已确认
+          </ion-button>
+        </div>
+      </div>
+      
+      <!-- 其他角色：使用下拉选择 -->
+      <ion-item *ngIf="currentUser?.role !== 'staff'">
+        <ion-label>状态筛选</ion-label>
+        <ion-select [(ngModel)]="filterStatus" (ionChange)="onFilterStatusChange()" placeholder="选择状态">
+          <ion-select-option value="pending">待一级审批</ion-select-option>
+          <ion-select-option value="pending_second_approval">待二级审批</ion-select-option>
+          <ion-select-option value="pending_staff_confirmation">待责任部门确认</ion-select-option>
+          <ion-select-option value="staff_confirmed">责任部门已确认</ion-select-option>
+          <ion-select-option value="approved">已审批</ion-select-option>
+          <ion-select-option value="rejected">已驳回</ion-select-option>
+        </ion-select>
+        <ion-note *ngIf="currentUser?.role === 'manager'" color="primary" style="padding: 5px; display: block;">
+          当前显示：待二级审批的报告
+        </ion-note>
+      </ion-item>
+      
+      <ion-item>
+        <ion-label>类型筛选</ion-label>
+        <ion-select [(ngModel)]="filterType" (ionChange)="applyFilters()" placeholder="选择类型">
+          <ion-select-option value="">全部类型</ion-select-option>
+          <ion-select-option value="缺料">缺料</ion-select-option>
+          <ion-select-option value="来料不良">来料不良</ion-select-option>
+          <ion-select-option value="改造类（研发售后或生产不良）">改造类（研发售后或生产不良）</ion-select-option>
+          <ion-select-option value="临时安排任务">临时安排任务</ion-select-option>
+        </ion-select>
+      </ion-item>
+      
+      <ion-button expand="block" fill="clear" (click)="resetFilters()" size="small">
+        重置筛选
+      </ion-button>
+    </ion-card-content>
+  </ion-card>
+
+  <!-- 下拉刷新 -->
+  <ion-refresher slot="fixed" (ionRefresh)="doRefresh($event)">
+    <ion-refresher-content pullingText="下拉刷新"></ion-refresher-content>
+  </ion-refresher>
+
+  <!-- 加载中 -->
+  <div *ngIf="isLoading" class="ion-text-center ion-padding">
+    <ion-spinner name="crescent"></ion-spinner>
+    <p>加载中...</p>
+  </div>
+
+  <!-- 错误信息 -->
+  <ion-card *ngIf="errorMsg" color="danger">
+    <ion-card-content>
+      <p>{{ errorMsg }}</p>
+    </ion-card-content>
+  </ion-card>
+
+  <!-- 没有异常报告 -->
+  <ion-card *ngIf="exceptionReports.length === 0 && !isLoading">
+    <ion-card-content class="ion-text-center">
+      <ion-icon name="checkmark-circle" size="large" color="success"></ion-icon>
+      <p *ngIf="currentUser?.role === 'manager'">暂无待二级审批的异常报告</p>
+      <p *ngIf="currentUser?.role === 'staff'">暂无待责任部门确认或责任部门已确认的异常报告</p>
+      <p *ngIf="currentUser?.role === 'supervisor' || currentUser?.role === 'admin'">暂无待一级审批的异常报告</p>
+      <p *ngIf="currentUser?.role !== 'manager' && currentUser?.role !== 'staff' && currentUser?.role !== 'supervisor' && currentUser?.role !== 'admin'">暂无异常报告</p>
+      <ion-note color="medium" style="padding: 10px; display: block; text-align: center;">
+        <p style="font-size: 12px; margin: 5px 0;">提示：如果主管已批准异常报告，报告将出现在待二级审批列表中</p>
+        <p style="font-size: 12px; margin: 5px 0;">当前筛选状态：{{ filterStatus || (currentUser?.role === 'manager' ? '待二级审批' : '待一级审批') }}</p>
+      </ion-note>
+    </ion-card-content>
+  </ion-card>
+
+  <!-- 异常报告列表 -->
+  <ion-list *ngIf="exceptionReports.length > 0">
+    <ion-item *ngFor="let report of exceptionReports" class="exception-report-item">
+      <ion-label>
+        <h2>{{ report.task_name || '未知任务' }}</h2>
+        <p><strong>上报人：</strong>{{ report.user_name || '未知用户' }}</p>
+        <p><strong>异常类型：</strong>{{ report.modified_exception_type || report.exception_type }}</p>
+        <p><strong>异常时间：</strong>
+          {{ formatDateTime(report.modified_start_datetime || report.exception_start_datetime) }} - 
+          {{ formatDateTime(report.modified_end_datetime || report.exception_end_datetime) }}
+        </p>
+        <p><strong>状态：</strong>
+          <ion-badge [color]="getStatusColor(report.status)">
+            {{ getStatusText(report.status) }}
+          </ion-badge>
+        </p>
+        <p><strong>描述：</strong>{{ report.modified_description || report.description }}</p>
+        <p><strong>提交时间：</strong>{{ formatDateTime(report.submitted_at) }}</p>
+        
+        <!-- 异常图片 -->
+        <div *ngIf="report.image_path" class="image-container">
+          <p><strong>异常图片：</strong></p>
+          <img [src]="getImageUrl(report.image_path)" 
+               alt="异常图片" 
+               class="exception-image"
+               (click)="viewImage(report.image_path)">
+        </div>
+        
+        <!-- 一级审批信息 -->
+        <div *ngIf="report.first_approver_id">
+          <p><strong>一级审批人：</strong>{{ report.first_approver_name || '未知' }}</p>
+          <p><strong>一级审批时间：</strong>{{ formatDateTime(report.first_approved_at) }}</p>
+          <p *ngIf="report.first_approval_note"><strong>一级审批备注：</strong>{{ report.first_approval_note }}</p>
+          <!-- 显示修改后的信息（只有当修改后的值与原始值不同时才显示） -->
+          <div *ngIf="(report.modified_exception_type && report.modified_exception_type !== report.exception_type) || 
+                      (report.modified_description && report.modified_description !== report.description) ||
+                      (report.modified_start_datetime && report.modified_start_datetime !== report.exception_start_datetime) ||
+                      (report.modified_end_datetime && report.modified_end_datetime !== report.exception_end_datetime)">
+            <p style="color: #ff9800; font-weight: bold;">主管已修改以下信息：</p>
+            <p *ngIf="report.modified_exception_type && report.modified_exception_type !== report.exception_type">
+              <strong>修改后的异常类型：</strong>{{ report.modified_exception_type }}
+              <span style="color: #999; font-size: 0.9em;">（原始：{{ report.exception_type }}）</span>
+            </p>
+            <p *ngIf="report.modified_description && report.modified_description !== report.description">
+              <strong>修改后的描述：</strong>{{ report.modified_description }}
+            </p>
+            <p *ngIf="(report.modified_start_datetime && report.modified_start_datetime !== report.exception_start_datetime) ||
+                      (report.modified_end_datetime && report.modified_end_datetime !== report.exception_end_datetime)">
+              <strong>修改后的异常时间：</strong>
+              {{ formatDateTime(report.modified_start_datetime) }} - {{ formatDateTime(report.modified_end_datetime) }}
+              <span style="color: #999; font-size: 0.9em;">
+                （原始：{{ formatDateTime(report.exception_start_datetime) }} - {{ formatDateTime(report.exception_end_datetime) }}）
+              </span>
+            </p>
+          </div>
+        </div>
+        
+        <!-- 二级审批信息 -->
+        <div *ngIf="report.second_approver_id">
+          <p><strong>二级审批人（经理）：</strong>{{ report.second_approver_name || '未知' }}</p>
+          <p><strong>二级审批时间：</strong>{{ formatDateTime(report.second_approved_at) }}</p>
+          <p *ngIf="report.second_approval_note"><strong>二级审批备注：</strong>{{ report.second_approval_note }}</p>
+        </div>
+        
+        <!-- 责任部门确认信息 -->
+        <div *ngIf="report.assigned_to_staff_id">
+          <p><strong>分配责任部门：</strong>{{ report.assigned_staff_name || '未知' }}</p>
+          <p *ngIf="report.staff_confirmed_at"><strong>责任部门确定时间：</strong>{{ formatDateTime(report.staff_confirmed_at) }}</p>
+          <p *ngIf="report.staff_confirmation_note"><strong>责任部门确认备注：</strong>{{ report.staff_confirmation_note }}</p>
+        </div>
+        
+        <!-- 兼容旧数据：显示旧的审批信息 -->
+        <div *ngIf="!report.first_approver_id && report.approver_name">
+          <p><strong>审批人：</strong>{{ report.approver_name || '未知' }}</p>
+          <p><strong>审批时间：</strong>{{ formatDateTime(report.approved_at) }}</p>
+          <p *ngIf="report.approval_note"><strong>审批备注：</strong>{{ report.approval_note }}</p>
+        </div>
+        
+        <!-- 解决信息 -->
+        <div *ngIf="report.status === 'resolved'">
+          <p><strong>解决时间：</strong>{{ formatDateTime(report.resolved_at) }}</p>
+          <p *ngIf="report.resolution_note"><strong>解决备注：</strong>{{ report.resolution_note }}</p>
+        </div>
+      </ion-label>
+      
+      <!-- 操作按钮 -->
+      <div slot="end" class="action-buttons">
+        <!-- 一级审批操作（pending状态，supervisor/admin可见） -->
+        <div *ngIf="report.status === 'pending' && canApproveReport(report)" class="pending-actions">
+          <ion-button 
+            color="success" 
+            size="small" 
+            fill="outline"
+            (click)="openApprovalModal(report, 'approve')">
+            <ion-icon name="checkmark"></ion-icon>
+            批准
+          </ion-button>
+          <ion-button 
+            color="danger" 
+            size="small" 
+            fill="outline"
+            (click)="openApprovalModal(report, 'reject')">
+            <ion-icon name="close"></ion-icon>
+            驳回
+          </ion-button>
+        </div>
+        
+        <!-- 二级审批操作（pending_second_approval状态，manager可见） -->
+        <div *ngIf="report.status === 'pending_second_approval' && canApproveReport(report)" class="pending-actions">
+          <ion-button 
+            color="success" 
+            size="small" 
+            fill="outline"
+            (click)="openApprovalModal(report, 'approve')">
+            <ion-icon name="checkmark"></ion-icon>
+            批准
+          </ion-button>
+          <ion-button 
+            color="danger" 
+            size="small" 
+            fill="outline"
+            (click)="openApprovalModal(report, 'reject')">
+            <ion-icon name="close"></ion-icon>
+            驳回
+          </ion-button>
+        </div>
+        
+        <!-- 责任部门确认操作（pending_staff_confirmation状态，staff可见） -->
+        <div *ngIf="report.status === 'pending_staff_confirmation' && canApproveReport(report)" class="pending-actions">
+          <ion-button 
+            color="success" 
+            size="small" 
+            fill="outline"
+            (click)="openApprovalModal(report, 'approve')">
+            <ion-icon name="checkmark"></ion-icon>
+            确认
+          </ion-button>
+          <ion-button 
+            color="warning" 
+            size="small" 
+            fill="outline"
+            (click)="openApprovalModal(report, 'reject')">
+            <ion-icon name="close"></ion-icon>
+            拒绝
+          </ion-button>
+        </div>
+      </div>
+    </ion-item>
+  </ion-list>
+</ion-content>
+
+<!-- 审批模态框 -->
+<ion-modal [isOpen]="isApprovalModalOpen" (didDismiss)="closeApprovalModal()">
+  <ng-template>
+    <ion-header>
+      <ion-toolbar>
+        <ion-title>
+          {{ selectedReport?.status === 'pending_second_approval' ? 
+             (approvalAction === 'approve' ? '二级审批 - 批准异常报告' : '二级审批 - 驳回异常报告') :
+             (approvalAction === 'approve' ? '一级审批 - 批准异常报告' : '一级审批 - 驳回异常报告') }}
+        </ion-title>
+        <ion-buttons slot="end">
+          <ion-button (click)="closeApprovalModal()">
+            <ion-icon name="close"></ion-icon>
+          </ion-button>
+        </ion-buttons>
+      </ion-toolbar>
+    </ion-header>
+    
+    <ion-content class="ion-padding">
+      <ion-card>
+        <ion-card-header>
+          <ion-card-title>{{ selectedReport?.task_name || '未知任务' }}</ion-card-title>
+        </ion-card-header>
+        <ion-card-content>
+          <p><strong>上报人：</strong>{{ selectedReport?.user_name || '未知用户' }}</p>
+          
+          <!-- 一级审批时可以修改异常信息 -->
+          <div *ngIf="canModify && approvalAction === 'approve'">
+            <ion-item>
+              <ion-label position="stacked">异常类型 *</ion-label>
+              <ion-select [(ngModel)]="modifiedExceptionType" placeholder="选择异常类型">
+                <ion-select-option value="缺料">缺料</ion-select-option>
+                <ion-select-option value="来料不良">来料不良</ion-select-option>
+                <ion-select-option value="改造类（研发售后或生产不良）">改造类（研发售后或生产不良）</ion-select-option>
+                <ion-select-option value="临时安排任务">临时安排任务</ion-select-option>
+              </ion-select>
+            </ion-item>
+            
+            <ion-item>
+              <ion-label position="stacked">异常开始时间 *</ion-label>
+              <ion-input 
+                type="datetime-local" 
+                [(ngModel)]="modifiedStartDateTime"
+                placeholder="选择开始时间">
+              </ion-input>
+            </ion-item>
+            
+            <ion-item>
+              <ion-label position="stacked">异常结束时间 *</ion-label>
+              <ion-input 
+                type="datetime-local" 
+                [(ngModel)]="modifiedEndDateTime"
+                placeholder="选择结束时间">
+              </ion-input>
+            </ion-item>
+            
+            <ion-item>
+              <ion-label position="stacked">异常描述 *</ion-label>
+              <ion-textarea 
+                [(ngModel)]="modifiedDescription" 
+                placeholder="请输入异常描述"
+                rows="4">
+              </ion-textarea>
+            </ion-item>
+            
+            <ion-note color="warning" style="padding: 10px; display: block;">
+              <p>提示：您可以修改异常类型、异常时间和描述。修改后的信息将提交给经理进行二级审批。</p>
+            </ion-note>
+            
+            <!-- 选择二级审批人 -->
+            <ion-item>
+              <ion-label position="stacked">选择二级审批人</ion-label>
+              <ion-select 
+                [(ngModel)]="selectedSecondApproverId" 
+                placeholder="请选择经理作为二级审批人（已自动选择默认经理）"
+                interface="action-sheet">
+                <ion-select-option *ngFor="let approver of approvers" [value]="approver.id">
+                  {{ approver.name }}
+                </ion-select-option>
+              </ion-select>
+            </ion-item>
+          </div>
+          
+          <!-- 二级审批或驳回时只显示信息，不能修改 -->
+          <div *ngIf="!canModify || approvalAction === 'reject'">
+            <p><strong>异常类型：</strong>{{ selectedReport?.modified_exception_type || selectedReport?.exception_type }}</p>
+            <p><strong>异常时间：</strong>
+              {{ formatDateTime(selectedReport?.modified_start_datetime || selectedReport?.exception_start_datetime) }} - 
+              {{ formatDateTime(selectedReport?.modified_end_datetime || selectedReport?.exception_end_datetime) }}
+            </p>
+            <p><strong>描述：</strong>{{ selectedReport?.modified_description || selectedReport?.description }}</p>
+            
+            <!-- 如果是一级审批已修改，显示修改信息（只有当修改后的值与原始值不同时才显示） -->
+            <div *ngIf="(selectedReport?.modified_exception_type && selectedReport.modified_exception_type !== selectedReport.exception_type) ||
+                        (selectedReport?.modified_description && selectedReport.modified_description !== selectedReport.description) ||
+                        (selectedReport?.modified_start_datetime && selectedReport.modified_start_datetime !== selectedReport.exception_start_datetime) ||
+                        (selectedReport?.modified_end_datetime && selectedReport.modified_end_datetime !== selectedReport.exception_end_datetime)" 
+                 style="margin-top: 10px; padding: 10px; background: #fff3e0; border-radius: 5px;">
+              <p style="color: #ff9800; font-weight: bold;">主管已修改的信息：</p>
+              <p *ngIf="selectedReport?.modified_exception_type && selectedReport.modified_exception_type !== selectedReport.exception_type">
+                <strong>原始异常类型：</strong>{{ selectedReport?.exception_type }}
+                <span style="color: #999;"> → </span>
+                <strong>修改后：</strong>{{ selectedReport?.modified_exception_type }}
+              </p>
+              <p *ngIf="selectedReport?.modified_description && selectedReport.modified_description !== selectedReport.description">
+                <strong>原始描述：</strong>{{ selectedReport?.description }}
+                <span style="color: #999;"> → </span>
+                <strong>修改后：</strong>{{ selectedReport?.modified_description }}
+              </p>
+              <p *ngIf="(selectedReport?.modified_start_datetime && selectedReport.modified_start_datetime !== selectedReport.exception_start_datetime) ||
+                        (selectedReport?.modified_end_datetime && selectedReport.modified_end_datetime !== selectedReport.exception_end_datetime)">
+                <strong>原始异常时间：</strong>
+                {{ formatDateTime(selectedReport?.exception_start_datetime) }} - {{ formatDateTime(selectedReport?.exception_end_datetime) }}
+                <span style="color: #999;"> → </span>
+                <strong>修改后：</strong>
+                {{ formatDateTime(selectedReport?.modified_start_datetime) }} - {{ formatDateTime(selectedReport?.modified_end_datetime) }}
+              </p>
+            </div>
+          </div>
+          
+          <!-- 异常图片 -->
+          <div *ngIf="selectedReport?.image_path" class="image-container">
+            <p><strong>异常图片：</strong></p>
+            <img [src]="getImageUrl(selectedReport.image_path)" 
+                 alt="异常图片" 
+                 class="exception-image-modal"
+                 (click)="viewImage(selectedReport.image_path)">
+          </div>
+          
+          <ion-item>
+            <ion-label position="stacked">
+            {{ selectedReport?.status === 'pending_staff_confirmation' ? 
+               (approvalAction === 'approve' ? '责任部门确认备注' : '拒绝原因') :
+                 (approvalAction === 'approve' ? '批准备注' : '驳回原因') }}
+            </ion-label>
+            <ion-textarea 
+              [(ngModel)]="approvalNote" 
+              placeholder="请输入备注信息"
+              rows="3">
+            </ion-textarea>
+          </ion-item>
+          
+          <ion-button 
+            expand="block" 
+            [color]="approvalAction === 'approve' ? 'success' : 'danger'"
+            (click)="confirmApproval()"
+            class="ion-margin-top">
+            {{ selectedReport?.status === 'pending_staff_confirmation' ? 
+               (approvalAction === 'approve' ? '确认' : '拒绝') :
+               (approvalAction === 'approve' ? 
+                 (selectedReport?.status === 'pending' ? '确认批准（提交二级审批）' : 
+                  selectedReport?.status === 'pending_second_approval' ? '确认批准' : '确认批准') : 
+                 '确认驳回') }}
+          </ion-button>
+        </ion-card-content>
+      </ion-card>
+    </ion-content>
+  </ng-template>
+</ion-modal>
+
+<!-- 图片查看模态框 -->
+<ion-modal [isOpen]="isImageViewModalOpen" (didDismiss)="closeImageViewModal()">
+  <ng-template>
+    <ion-header>
+      <ion-toolbar>
+        <ion-title>异常图片</ion-title>
+        <ion-buttons slot="end">
+          <ion-button (click)="closeImageViewModal()">
+            <ion-icon name="close"></ion-icon>
+          </ion-button>
+        </ion-buttons>
+      </ion-toolbar>
+    </ion-header>
+    
+    <ion-content class="ion-padding">
+      <div class="image-view-container">
+        <img [src]="selectedImageUrl" alt="异常图片" class="full-size-image">
+      </div>
+    </ion-content>
+  </ng-template>
+</ion-modal>

@@ -1,0 +1,100 @@
+<ion-header>
+  <ion-toolbar>
+    <ion-title>车间报工系统</ion-title>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content class="login-container">
+  <!-- 科技感背景 -->
+  <div class="tech-background">
+    <!-- 网格背景 -->
+    <div class="grid-pattern"></div>
+    <!-- 点状图案 -->
+    <div class="dot-pattern"></div>
+  </div>
+
+  <!-- 登录表单 -->
+  <div class="login-form-container">
+    <div class="login-form">
+      <!-- L形边框装饰 -->
+      <div class="border-decoration top-left"></div>
+      <div class="border-decoration bottom-right"></div>
+      
+      <!-- 表单标题 -->
+      <h1 class="form-title">用户登录</h1>
+      
+      <!-- 登录表单 -->
+      <div class="form-content">
+        <!-- 用户名输入 -->
+        <div class="input-group">
+          <div class="input-icon">
+            <ion-icon name="person-outline"></ion-icon>
+          </div>
+          <ion-input 
+            type="text" 
+            [(ngModel)]="username" 
+            [disabled]="isLoading"
+            placeholder="用户名"
+            name="username"
+            class="custom-input">
+          </ion-input>
+        </div>
+        
+        <!-- 密码输入 -->
+        <div class="input-group">
+          <div class="input-icon">
+            <ion-icon name="lock-closed-outline"></ion-icon>
+          </div>
+          <ion-input 
+            type="password" 
+            [(ngModel)]="password" 
+            [disabled]="isLoading"
+            placeholder="密码"
+            name="password"
+            class="custom-input">
+          </ion-input>
+        </div>
+        
+        <!-- 记住密码 -->
+        <div class="remember-me">
+          <ion-checkbox [(ngModel)]="rememberMe" name="rememberMe"></ion-checkbox>
+          <label>记住密码</label>
+        </div>
+        
+        <!-- 错误信息 -->
+        <div class="error-message" *ngIf="errorMessage">
+          <ion-icon name="warning-outline"></ion-icon>
+          <span>{{ errorMessage }}</span>
+        </div>
+        
+        <!-- 登录按钮 -->
+        <ion-button 
+          expand="block" 
+          [disabled]="isLoading"
+          (click)="login()"
+          class="login-button">
+          <ion-spinner *ngIf="isLoading" name="crescent"></ion-spinner>
+          <span *ngIf="!isLoading">登录</span>
+        </ion-button>
+      </div>
+      
+      <!-- 测试账号提示 -->
+      <div class="test-accounts">
+        <h4>测试账号：</h4>
+        <div class="account-item">
+          <span class="role">管理员：</span>
+          <span class="credentials">admin / admin123</span>
+        </div>
+        <div class="account-item">
+          <span class="role">工人：</span>
+          <span class="credentials">worker1 / worker123</span>
+        </div>
+        <div class="account-item">
+          <span class="role">主管：</span>
+          <span class="credentials">supervisor1 / super123</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</ion-content>

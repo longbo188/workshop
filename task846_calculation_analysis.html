@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>任务846阶段总时间13.42h计算过程分析</title>
+    <style>
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            line-height: 1.6;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .section {
+            margin: 20px 0;
+            padding: 15px;
+            border-left: 4px solid #667eea;
+            background: #f8f9fa;
+        }
+        .highlight {
+            background: #fff3cd;
+            padding: 10px;
+            border-radius: 4px;
+            border-left: 4px solid #ffc107;
+        }
+        .error {
+            background: #f8d7da;
+            padding: 10px;
+            border-radius: 4px;
+            border-left: 4px solid #dc3545;
+        }
+        .success {
+            background: #d4edda;
+            padding: 10px;
+            border-radius: 4px;
+            border-left: 4px solid #28a745;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 10px 0;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        .time-range {
+            font-family: monospace;
+            background: #e9ecef;
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+        .calculation {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 任务846阶段总时间13.42h计算过程分析</h1>
+            <p>任务：M1Q110190 - V5000H | 机加阶段 | 负责人：张三</p>
+        </div>
+
+        <div class="section">
+            <h2>📊 基础数据</h2>
+            <table>
+                <tr>
+                    <th>项目</th>
+                    <th>UTC时间</th>
+                    <th>本地时间</th>
+                    <th>说明</th>
+                </tr>
+                <tr>
+                    <td>阶段开始时间</td>
+                    <td class="time-range">2025-10-20T00:30:42.000Z</td>
+                    <td class="time-range">2025-10-20 08:30:42</td>
+                    <td>机加阶段开始</td>
+                </tr>
+                <tr>
+                    <td>阶段结束时间</td>
+                    <td class="time-range">2025-10-21T05:50:42.000Z</td>
+                    <td class="time-range">2025-10-21 13:50:42</td>
+                    <td>机加阶段完成</td>
+                </tr>
+                <tr>
+                    <td>阶段总时长</td>
+                    <td colspan="2" class="time-range">29小时20分钟 = 29.33小时</td>
+                    <td>跨越2天</td>
+                </tr>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2>📅 考勤记录</h2>
+            <table>
+                <tr>
+                    <th>日期</th>
+                    <th>标准工时</th>
+                    <th>加班工时</th>
+                    <th>实际工时</th>
+                    <th>确认状态</th>
+                </tr>
+                <tr>
+                    <td>2025-10-20</td>
+                    <td>7.58h</td>
+                    <td>2.42h</td>
+                    <td>10.00h</td>
+                    <td>✅ 已确认</td>
+                </tr>
+                <tr>
+                    <td>2025-10-21</td>
+                    <td>7.58h</td>
+                    <td>0.00h</td>
+                    <td>7.58h</td>
+                    <td>✅ 已确认</td>
+                </tr>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2>⚙️ 工作时间设置</h2>
+            <table>
+                <tr>
+                    <th>时段</th>
+                    <th>时间范围</th>
+                    <th>时长</th>
+                </tr>
+                <tr>
+                    <td>上午工作</td>
+                    <td class="time-range">08:30-11:50</td>
+                    <td>3.33小时</td>
+                </tr>
+                <tr>
+                    <td>午休</td>
+                    <td class="time-range">11:50-13:20</td>
+                    <td>1.5小时</td>
+                </tr>
+                <tr>
+                    <td>下午工作</td>
+                    <td class="time-range">13:20-17:50</td>
+                    <td>4.5小时</td>
+                </tr>
+                <tr>
+                    <td>其他休息</td>
+                    <td class="time-range">16:00-16:15</td>
+                    <td>0.25小时</td>
+                </tr>
+                <tr>
+                    <td><strong>标准工时</strong></td>
+                    <td><strong>08:30-17:50 (扣除休息)</strong></td>
+                    <td><strong>7.58小时</strong></td>
+                </tr>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2>🧮 详细计算过程</h2>
+            
+            <h3>📅 2025-10-20 计算</h3>
+            <div class="calculation">
+                <p><strong>阶段时间范围：</strong>08:30:42 - 13:50:42 (次日)</p>
+                <p><strong>当日阶段时间：</strong>08:30:42 - 23:59:59</p>
+                
+                <h4>1. 作息时间重叠计算：</h4>
+                <ul>
+                    <li><strong>上午窗口 (08:30-11:50)：</strong>
+                        <br>阶段时间：08:30:42 - 11:50:00
+                        <br>重叠时间：08:30:42 - 11:50:00 = 3.32小时
+                    </li>
+                    <li><strong>下午窗口 (13:20-17:50)：</strong>
+                        <br>阶段时间：13:20:00 - 17:50:00
+                        <br>重叠时间：13:20:00 - 17:50:00 = 4.5小时
+                    </li>
+                    <li><strong>作息时间总重叠：</strong>3.32 + 4.5 = 7.82小时</li>
+                </ul>
+
+                <h4>2. 加班时间重叠：</h4>
+                <p>考勤记录显示加班2.42小时，但无具体时间段</p>
+                <p>假设加班时间：18:00-20:25 (2.42小时)</p>
+                <p>与阶段时间重叠：18:00-20:25 = 2.42小时</p>
+
+                <h4>3. 请假时间扣除：</h4>
+                <p>无请假记录，扣除：0小时</p>
+
+                <h4>4. 异常时间扣除：</h4>
+                <p>无异常记录，扣除：0小时</p>
+
+                <h4>5. 当日有效工时：</h4>
+                <p>7.82 + 2.42 - 0 - 0 = 10.24小时</p>
+
+                <h4>6. 实际出勤限制：</h4>
+                <p>实际出勤：10.00小时</p>
+                <p>最终计入：min(10.24, 10.00) = 10.00小时</p>
+            </div>
+
+            <h3>📅 2025-10-21 计算</h3>
+            <div class="calculation">
+                <p><strong>阶段时间范围：</strong>00:00:00 - 13:50:42</p>
+                
+                <h4>1. 作息时间重叠计算：</h4>
+                <ul>
+                    <li><strong>上午窗口 (08:30-11:50)：</strong>
+                        <br>阶段时间：08:30:00 - 11:50:00
+                        <br>重叠时间：08:30:00 - 11:50:00 = 3.33小时
+                    </li>
+                    <li><strong>下午窗口 (13:20-17:50)：</strong>
+                        <br>阶段时间：13:20:00 - 13:50:42
+                        <br>重叠时间：13:20:00 - 13:50:42 = 0.51小时
+                    </li>
+                    <li><strong>作息时间总重叠：</strong>3.33 + 0.51 = 3.84小时</li>
+                </ul>
+
+                <h4>2. 加班时间重叠：</h4>
+                <p>无加班记录，重叠：0小时</p>
+
+                <h4>3. 请假时间扣除：</h4>
+                <p>无请假记录，扣除：0小时</p>
+
+                <h4>4. 异常时间扣除：</h4>
+                <p>无异常记录，扣除：0小时</p>
+
+                <h4>5. 当日有效工时：</h4>
+                <p>3.84 + 0 - 0 - 0 = 3.84小时</p>
+
+                <h4>6. 实际出勤限制：</h4>
+                <p>实际出勤：7.58小时</p>
+                <p>最终计入：min(3.84, 7.58) = 3.84小时</p>
+            </div>
+
+            <div class="highlight">
+                <h3>🎯 最终计算结果</h3>
+                <p><strong>总有效工时：</strong>10.00 + 3.84 = 13.84小时</p>
+                <p><strong>显示结果：</strong>13.42小时</p>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>❓ 问题分析</h2>
+            <div class="error">
+                <h3>🔍 13.42h vs 13.84h 的差异</h3>
+                <p>计算结果显示13.84小时，但界面显示13.42小时，存在0.42小时的差异。</p>
+                <p><strong>可能原因：</strong></p>
+                <ul>
+                    <li>时间精度问题（秒级计算差异）</li>
+                    <li>加班时间段假设不准确</li>
+                    <li>其他休息时间扣除计算有误</li>
+                    <li>代码中的计算逻辑与手动计算不一致</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>✅ 建议解决方案</h2>
+            <div class="success">
+                <h3>🔧 修复建议</h3>
+                <ol>
+                    <li><strong>检查加班时间段：</strong>确认加班2.42小时的具体时间段</li>
+                    <li><strong>验证时间精度：</strong>确保秒级时间计算准确</li>
+                    <li><strong>检查其他休息扣除：</strong>确认16:00-16:15的扣除逻辑</li>
+                    <li><strong>添加详细日志：</strong>在代码中添加更详细的计算过程日志</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

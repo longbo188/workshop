@@ -1,0 +1,308 @@
+// 深蓝色科技感登录页面样式
+.login-container {
+  position: relative;
+  min-height: 100vh;
+  background: linear-gradient(135deg, #0B1426 0%, #1A2B4A 50%, #0F1B2E 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  pointer-events: auto;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(11, 20, 38, 0.2);
+    z-index: 1;
+    pointer-events: none;
+  }
+}
+
+// 科技感背景
+.tech-background {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+// 网格背景
+.grid-pattern {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image: 
+    linear-gradient(rgba(74, 144, 226, 0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(74, 144, 226, 0.1) 1px, transparent 1px);
+  background-size: 50px 50px;
+  animation: gridMove 20s linear infinite;
+}
+
+@keyframes gridMove {
+  0% { transform: translate(0, 0); }
+  100% { transform: translate(50px, 50px); }
+}
+
+// 点状图案
+.dot-pattern {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image: radial-gradient(circle, rgba(74, 144, 226, 0.3) 1px, transparent 1px);
+  background-size: 30px 30px;
+  animation: dotMove 15s linear infinite;
+}
+
+@keyframes dotMove {
+  0% { transform: translate(0, 0); }
+  100% { transform: translate(30px, 30px); }
+}
+
+// 登录表单容器
+.login-form-container {
+  position: relative;
+  z-index: 1000;
+  width: 100%;
+  max-width: 400px;
+  margin: 0 auto;
+  pointer-events: auto;
+}
+
+// 登录表单
+.login-form {
+  position: relative;
+  background: rgba(15, 27, 46, 0.95);
+  border: 1px solid rgba(74, 144, 226, 0.5);
+  border-radius: 16px;
+  padding: 40px 30px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  pointer-events: auto;
+  z-index: 1001;
+}
+
+// L形边框装饰
+.border-decoration {
+  position: absolute;
+  border: 2px solid #4A90E2;
+  border-radius: 4px;
+  
+  &.top-left {
+    top: 20px;
+    left: 20px;
+    width: 40px;
+    height: 40px;
+    border-right: none;
+    border-bottom: none;
+  }
+  
+  &.bottom-right {
+    bottom: 20px;
+    right: 20px;
+    width: 40px;
+    height: 40px;
+    border-left: none;
+    border-top: none;
+  }
+}
+
+// 表单标题
+.form-title {
+  color: #FFFFFF;
+  text-align: center;
+  margin-bottom: 30px;
+  font-size: 28px;
+  font-weight: 600;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+// 表单内容
+.form-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+// 输入组
+.input-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+  background: rgba(26, 43, 74, 0.9);
+  border: 1px solid rgba(74, 144, 226, 0.5);
+  border-radius: 12px;
+  padding: 0 16px;
+  transition: all 0.3s ease;
+  cursor: pointer;
+  pointer-events: auto;
+  z-index: 1002;
+}
+
+.input-group:focus-within {
+  border-color: #4A90E2;
+  box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.3);
+  background: rgba(26, 43, 74, 0.95);
+}
+
+// 输入图标
+.input-icon {
+  color: #4A90E2;
+  font-size: 20px;
+  margin-right: 12px;
+  display: flex;
+  align-items: center;
+}
+
+// 自定义输入框
+.custom-input {
+  --color: #FFFFFF;
+  --placeholder-color: rgba(255, 255, 255, 0.6);
+  --background: transparent;
+  --padding-start: 0;
+  --padding-end: 0;
+  flex: 1;
+  font-size: 16px;
+  
+  &::part(native) {
+    padding: 16px 0;
+  }
+}
+
+// 记住密码
+.remember-me {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 14px;
+  cursor: pointer;
+  
+  ion-checkbox {
+    --background: transparent;
+    --border-color: rgba(74, 144, 226, 0.5);
+    --border-width: 2px;
+    --border-radius: 4px;
+    --checkmark-color: #4A90E2;
+    --size: 18px;
+  }
+  
+  label {
+    cursor: pointer;
+    user-select: none;
+  }
+}
+
+// 错误信息
+.error-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #FF6B6B;
+  font-size: 14px;
+  background: rgba(255, 107, 107, 0.1);
+  border: 1px solid rgba(255, 107, 107, 0.3);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+// 登录按钮
+.login-button {
+  --background: linear-gradient(135deg, #4A90E2 0%, #357ABD 100%);
+  --color: #FFFFFF;
+  --border-radius: 12px;
+  --box-shadow: 0 4px 15px rgba(74, 144, 226, 0.3);
+  height: 50px;
+  font-size: 16px;
+  font-weight: 600;
+  text-transform: none;
+  margin-top: 10px;
+  transition: all 0.3s ease;
+  cursor: pointer !important;
+  pointer-events: auto !important;
+  position: relative;
+  z-index: 1003;
+}
+
+.login-button:hover {
+  --box-shadow: 0 6px 20px rgba(74, 144, 226, 0.4);
+  transform: translateY(-2px);
+}
+
+.login-button:active {
+  transform: translateY(0px);
+  --box-shadow: 0 2px 10px rgba(74, 144, 226, 0.3);
+}
+
+// 测试账号
+.test-accounts {
+  margin-top: 30px;
+  padding: 20px;
+  background: rgba(26, 43, 74, 0.8);
+  border: 1px solid rgba(74, 144, 226, 0.4);
+  border-radius: 12px;
+  text-align: center;
+  
+  h4 {
+    color: #4A90E2;
+    margin: 0 0 15px 0;
+    font-size: 16px;
+  }
+}
+
+.account-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  background: rgba(74, 144, 226, 0.1);
+  border-radius: 6px;
+  transition: all 0.3s ease;
+  
+  &:last-child {
+    margin-bottom: 0;
+  }
+  
+  .role {
+    color: rgba(255, 255, 255, 0.8);
+    font-weight: 500;
+  }
+  
+  .credentials {
+    color: #4A90E2;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    background: rgba(74, 144, 226, 0.1);
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: all 0.3s ease;
+  }
+}
+
+// 悬停效果
+.account-item:hover .credentials {
+  background: rgba(74, 144, 226, 0.2);
+  transform: scale(1.05);
+}
+
+// 响应式设计
+@media (max-width: 768px) {
+  .login-form {
+    padding: 30px 20px;
+  }
+  
+  .form-title {
+    font-size: 24px;
+  }
+}

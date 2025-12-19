@@ -1,0 +1,91 @@
+<ion-header>
+  <ion-toolbar>
+    <ion-title>管理员/主管 - 报工记录</ion-title>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content class="ion-padding">
+  <ion-card>
+    <ion-card-content>
+      <ion-item>
+        <ion-label>开始日期</ion-label>
+        <input type="date" [(ngModel)]="start" />
+      </ion-item>
+      <ion-item class="ion-margin-top">
+        <ion-label>结束日期</ion-label>
+        <input type="date" [(ngModel)]="end" />
+      </ion-item>
+      <ion-item class="ion-margin-top">
+        <ion-label>用户ID</ion-label>
+        <input type="number" [(ngModel)]="userId" placeholder="可选" />
+      </ion-item>
+      <ion-item class="ion-margin-top">
+        <ion-label>任务ID</ion-label>
+        <input type="number" [(ngModel)]="taskId" placeholder="可选" />
+      </ion-item>
+      <div class="ion-margin-top">
+        <ion-button size="small" (click)="load()">查询</ion-button>
+      </div>
+    </ion-card-content>
+  </ion-card>
+
+  <ion-spinner *ngIf="isLoading" name="crescent"></ion-spinner>
+  <ion-card *ngIf="errorMsg">
+    <ion-card-content style="color:#c0392b;">{{ errorMsg }}</ion-card-content>
+  </ion-card>
+
+  <ion-list *ngIf="!isLoading && !errorMsg">
+    <ion-item *ngFor="let r of list">
+      <ion-label>
+        <div>用户：{{ r.user_name || r.user_id }}（ID: {{ r.user_id }}）</div>
+        <div>任务：{{ r.task_name || r.task_id }}（ID: {{ r.task_id }}）</div>
+        <div>类型：{{ r.work_type }}</div>
+        <div *ngIf="r.start_time">开始：{{ r.start_time | date:'yyyy-MM-dd HH:mm:ss' }}</div>
+        <div *ngIf="r.end_time">结束：{{ r.end_time | date:'yyyy-MM-dd HH:mm:ss' }}</div>
+        <div *ngIf="r.total_minutes != null">工时：{{ r.total_minutes }} 分钟</div>
+        <div *ngIf="r.quantity_completed != null">完成数量：{{ r.quantity_completed }}</div>
+        <div *ngIf="r.approval_status">审批：{{ r.approval_status }}</div>
+      </ion-label>
+    </ion-item>
+  </ion-list>
+</ion-content>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,59 @@
+<ion-header>
+  <ion-toolbar>
+    <ion-title>协助时间审批</ion-title>
+    <ion-buttons slot="end">
+      <ion-button (click)="loadPendingAssistApprovals()">
+        <ion-icon slot="start" name="refresh"></ion-icon>
+        刷新
+      </ion-button>
+    </ion-buttons>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content class="ion-padding">
+  <div class="error-box" *ngIf="errorMsg">{{ errorMsg }}</div>
+  <div class="empty-hint" *ngIf="!isLoading && !errorMsg && pendingAssistApprovals.length === 0">
+    暂无待审批的协助时间
+  </div>
+
+  <div class="spinner-wrapper" *ngIf="isLoading">
+    <ion-spinner name="crescent"></ion-spinner>
+  </div>
+
+  <ion-card *ngFor="let approval of pendingAssistApprovals">
+    <ion-card-header>
+      <ion-card-title>
+        {{ approval.task_name || approval.device_number || ('任务 #' + approval.task_id) }}
+      </ion-card-title>
+      <div class="card-subtitle">
+        <span>阶段：{{ approval.phase_key }}</span>
+        <span>协助人：{{ approval.assistant_name }}</span>
+      </div>
+    </ion-card-header>
+    <ion-card-content>
+      <div class="detail-row">
+        <span>产品型号</span>
+        <strong>{{ approval.product_model || '—' }}</strong>
+      </div>
+      <div class="detail-row">
+        <span>协助时间</span>
+        <strong>{{ approval.assist_start | date: 'yyyy-MM-dd HH:mm' }} ~ {{ approval.assist_end | date: 'yyyy-MM-dd HH:mm' }}</strong>
+      </div>
+      <div class="detail-row">
+        <span>提交人</span>
+        <strong>{{ approval.requester_name }}</strong>
+      </div>
+      <div class="action-row">
+        <ion-button color="success" (click)="approveAssist(approval.id, 'approved')">
+          <ion-icon slot="start" name="checkmark-circle"></ion-icon>
+          通过
+        </ion-button>
+        <ion-button color="medium" (click)="approveAssist(approval.id, 'rejected')">
+          <ion-icon slot="start" name="close-circle"></ion-icon>
+          拒绝
+        </ion-button>
+      </div>
+    </ion-card-content>
+  </ion-card>
+</ion-content>
+

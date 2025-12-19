@@ -1,0 +1,483 @@
+ion-card {
+  margin: 8px 0;
+}
+
+ion-item {
+  --padding-start: 16px;
+  --padding-end: 16px;
+}
+
+// 筛选条件水平布局
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: end;
+  padding: 8px 0;
+}
+
+.filter-item {
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+  flex: 1;
+  
+  ion-label {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 4px;
+    font-weight: 500;
+  }
+}
+
+.filter-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+  background: #fff;
+  
+  &:focus {
+    outline: none;
+    border-color: #4a90e2;
+    box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.2);
+  }
+}
+
+.filter-select {
+  width: 100%;
+  --padding-start: 8px;
+  --padding-end: 8px;
+  --padding-top: 8px;
+  --padding-bottom: 8px;
+  font-size: 14px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.filter-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+// 响应式设计
+@media (max-width: 768px) {
+  .filter-row {
+    flex-direction: column;
+    gap: 12px;
+  }
+  
+  .filter-item {
+    min-width: 100%;
+  }
+  
+  .filter-actions {
+    justify-content: center;
+    margin-top: 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .filter-actions {
+    flex-direction: column;
+    width: 100%;
+    
+    ion-button {
+      width: 100%;
+    }
+  }
+}
+
+.stats-section {
+  margin-bottom: 20px;
+  
+  h3 {
+    color: #2c3e50;
+    font-size: 1.1em;
+    font-weight: 600;
+    margin-bottom: 10px;
+    border-bottom: 2px solid #3498db;
+    padding-bottom: 5px;
+  }
+}
+
+.attendance-info {
+  margin-top: 8px;
+  padding: 8px;
+  background-color: #f8f9fa;
+  border-radius: 6px;
+  border-left: 3px solid #3498db;
+  
+  div {
+    margin: 2px 0;
+    font-size: 0.9em;
+    color: #666;
+  }
+}
+
+.adjustment-info {
+  margin-top: 8px;
+  padding: 8px;
+  background-color: #fff3cd;
+  border-radius: 6px;
+  border-left: 3px solid #ffc107;
+  
+  div {
+    margin: 2px 0;
+    font-size: 0.85em;
+    color: #856404;
+  }
+}
+
+ion-badge {
+  font-size: 0.8em;
+  --padding-start: 6px;
+  --padding-end: 6px;
+  height: 20px;
+}
+
+ion-modal {
+  --width: 90%;
+  --max-width: 500px;
+  --height: 80%;
+  --max-height: 600px;
+}
+
+ion-button {
+  --padding-start: 8px;
+  --padding-end: 8px;
+}
+
+.ion-margin-top {
+  margin-top: 16px;
+}
+
+.ion-margin-start {
+  margin-left: 8px;
+}
+
+.ion-padding-start {
+  padding-left: 8px;
+}
+
+.holiday-info {
+  margin: 4px 0;
+  
+  ion-badge {
+    font-size: 0.75em;
+    --padding-start: 8px;
+    --padding-end: 8px;
+    height: 22px;
+    border-radius: 11px;
+  }
+}
+
+.confirmation-info {
+  margin: 8px 0;
+  padding: 8px;
+  border-radius: 6px;
+  
+  ion-badge {
+    font-size: 0.8em;
+    --padding-start: 8px;
+    --padding-end: 8px;
+    height: 24px;
+    border-radius: 12px;
+    margin-right: 8px;
+  }
+  
+  div {
+    margin: 2px 0;
+    font-size: 0.85em;
+    color: #666;
+    margin-top: 4px;
+  }
+  
+  // 已确认状态样式
+  &:has(ion-badge[color="success"]) {
+    background-color: #d4edda;
+    border-left: 3px solid #28a745;
+  }
+  
+  // 待确认状态样式
+  &:has(ion-badge[color="warning"]) {
+    background-color: #fff3cd;
+    border-left: 3px solid #ffc107;
+  }
+}
+
+// 批量操作按钮组样式
+.batch-actions-row {
+  display: flex;
+  gap: 12px;
+  margin: 16px;
+  padding: 0 8px;
+  
+  .batch-action-button {
+    flex: 1;
+    margin: 0;
+    --padding-start: 8px;
+    --padding-end: 8px;
+    height: 48px;
+    font-size: 0.9em;
+    
+    ion-icon {
+      margin-right: 6px;
+    }
+  }
+}
+
+// 响应式设计 - 小屏幕时垂直排列
+@media (max-width: 768px) {
+  .batch-actions-row {
+    flex-direction: column;
+    gap: 8px;
+    margin: 12px;
+    
+    .batch-action-button {
+      height: 44px;
+      font-size: 0.85em;
+    }
+  }
+}
+
+@media (max-width: 480px) {
+  .batch-actions-row {
+    margin: 8px;
+    
+    .batch-action-button {
+      height: 40px;
+      font-size: 0.8em;
+    }
+  }
+}
+
+// 紧凑考勤列表样式
+.compact-attendance-item {
+  --padding-start: 12px;
+  --padding-end: 12px;
+  --padding-top: 8px;
+  --padding-bottom: 8px;
+  min-height: 60px;
+  
+  ion-label {
+    margin: 0;
+  }
+  
+  .attendance-row-1 {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+    
+    .user-info {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+      
+      strong {
+        font-size: 0.95em;
+        color: #2c3e50;
+      }
+      
+      .user-id {
+        font-size: 0.8em;
+        color: #7f8c8d;
+      }
+      
+      .date-info {
+        font-size: 0.85em;
+        color: #34495e;
+        background: #ecf0f1;
+        padding: 2px 6px;
+        border-radius: 4px;
+      }
+      
+      .holiday-badge {
+        font-size: 0.7em;
+        --padding-start: 6px;
+        --padding-end: 6px;
+        height: 18px;
+      }
+    }
+    
+    .time-info {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-wrap: wrap;
+      
+      .time-label {
+        font-size: 0.75em;
+        color: #7f8c8d;
+        font-weight: 500;
+      }
+      
+      .time-value {
+        font-size: 0.8em;
+        font-weight: 600;
+        padding: 1px 4px;
+        border-radius: 3px;
+        
+        &.overtime {
+          color: #e74c3c;
+          background: #fdf2f2;
+        }
+        
+        &.leave {
+          color: #f39c12;
+          background: #fef9e7;
+        }
+        
+        &.actual {
+          color: #27ae60;
+          background: #eafaf1;
+        }
+      }
+    }
+  }
+  
+  .attendance-row-2 {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    
+    .status-info {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      
+      .status-badge {
+        font-size: 0.7em;
+        --padding-start: 6px;
+        --padding-end: 6px;
+        height: 20px;
+        
+        ion-icon {
+          font-size: 0.8em;
+        }
+      }
+      
+      .adjustment-indicator {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        font-size: 0.7em;
+        color: #8e44ad;
+        background: #f4ecf7;
+        padding: 2px 6px;
+        border-radius: 10px;
+        
+        ion-icon {
+          font-size: 0.8em;
+        }
+      }
+    }
+    
+    .additional-info {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      
+      .confirmer-info,
+      .adjuster-info {
+        font-size: 0.7em;
+        color: #7f8c8d;
+        background: #f8f9fa;
+        padding: 2px 6px;
+        border-radius: 3px;
+      }
+    }
+  }
+}
+
+// 响应式设计 - 小屏幕优化
+@media (max-width: 768px) {
+  .compact-attendance-item {
+    .attendance-row-1 {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 4px;
+      
+      .time-info {
+        width: 100%;
+        justify-content: flex-start;
+      }
+    }
+    
+    .attendance-row-2 {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 4px;
+      
+      .additional-info {
+        width: 100%;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+      }
+    }
+  }
+}
+
+@media (max-width: 480px) {
+  .compact-attendance-item {
+    --padding-start: 8px;
+    --padding-end: 8px;
+    min-height: 50px;
+    
+    .attendance-row-1 {
+      .user-info {
+        gap: 4px;
+        
+        strong {
+          font-size: 0.9em;
+        }
+        
+        .user-id {
+          font-size: 0.75em;
+        }
+        
+        .date-info {
+          font-size: 0.8em;
+          padding: 1px 4px;
+        }
+      }
+      
+      .time-info {
+        .time-label {
+          font-size: 0.7em;
+        }
+        
+        .time-value {
+          font-size: 0.75em;
+        }
+      }
+    }
+    
+    .attendance-row-2 {
+      .status-info {
+        .status-badge {
+          font-size: 0.65em;
+          height: 18px;
+        }
+        
+        .adjustment-indicator {
+          font-size: 0.65em;
+        }
+      }
+      
+      .additional-info {
+        .confirmer-info,
+        .adjuster-info {
+          font-size: 0.65em;
+        }
+      }
+    }
+  }
+}

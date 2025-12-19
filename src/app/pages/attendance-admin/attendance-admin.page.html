@@ -1,0 +1,870 @@
+<ion-header>
+  <ion-toolbar>
+    <ion-title>考勤管理</ion-title>
+    <ion-buttons slot="end">
+      <ion-button (click)="toggleStats()">
+        <ion-icon name="bar-chart-outline"></ion-icon>
+        <ion-label class="ion-padding-start">{{ showStats ? '隐藏统计' : '查看统计' }}</ion-label>
+      </ion-button>
+    </ion-buttons>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content class="ion-padding">
+  <!-- 筛选条件 -->
+  <ion-card>
+    <ion-card-content>
+      <div class="filter-row">
+        <div class="filter-item">
+          <ion-label>开始日期</ion-label>
+          <input type="date" [(ngModel)]="start" class="filter-input" />
+        </div>
+        <div class="filter-item">
+          <ion-label>结束日期</ion-label>
+          <input type="date" [(ngModel)]="end" class="filter-input" />
+        </div>
+        <div class="filter-item">
+          <ion-label>员工姓名</ion-label>
+          <input type="text" [(ngModel)]="userNameFilter" placeholder="可选" class="filter-input" />
+        </div>
+        <div class="filter-item">
+          <ion-label>筛选车间</ion-label>
+          <ion-select 
+            [(ngModel)]="selectedDepartmentFilter" 
+            placeholder="选择车间"
+            (ionChange)="onDepartmentFilterChange()"
+            class="filter-select">
+            <ion-select-option value="">全部车间</ion-select-option>
+            <ion-select-option *ngFor="let dept of availableDepartmentsFilter" [value]="dept">
+              {{ dept }}
+            </ion-select-option>
+          </ion-select>
+        </div>
+        <div class="filter-item">
+          <ion-label>筛选组</ion-label>
+          <ion-select 
+            [(ngModel)]="selectedGroupFilter" 
+            placeholder="选择组"
+            (ionChange)="onGroupFilterChange()"
+            class="filter-select">
+            <ion-select-option value="">全部组</ion-select-option>
+            <ion-select-option *ngFor="let group of availableGroupsFilter" [value]="group">
+              {{ group }}
+            </ion-select-option>
+          </ion-select>
+        </div>
+        <div class="filter-actions">
+          <ion-button size="small" (click)="load(true)">查询</ion-button>
+          <ion-button size="small" fill="clear" (click)="loadStats()">刷新统计</ion-button>
+          <ion-button size="small" fill="outline" (click)="clearFilters()">清空筛选</ion-button>
+        </div>
+      </div>
+    </ion-card-content>
+  </ion-card>
+
+  <!-- 考勤调整说明 -->
+  <ion-card style="background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%); border-left: 4px solid #2196f3; margin-bottom: 16px;">
+    <ion-card-content style="padding: 16px;">
+      <div style="display: flex; align-items: start; gap: 12px;">
+        <ion-icon name="information-circle-outline" style="font-size: 24px; color: #2196f3; flex-shrink: 0; margin-top: 2px;"></ion-icon>
+        <div style="flex: 1;">
+          <h3 style="margin: 0 0 8px 0; font-size: 15px; font-weight: 600; color: #1565c0;">考勤调整说明</h3>
+          <div style="font-size: 13px; color: #424242; line-height: 1.6;">
+            <p style="margin: 4px 0;">
+              <strong>• 节假日上班：</strong>默认考勤为0，点击"批量考勤管理"按钮，将考勤时长调整至正常工作时长（例如7.58小时）
+            </p>
+            <p style="margin: 4px 0;">
+              <strong>• 晚上加班：</strong>点击员工旁边的"调整"按钮，输入具体的时间段（如：19:00-22:00）
+            </p>
+            <p style="margin: 4px 0;">
+              <strong>• 白天请假：</strong>点击员工旁边的"调整"按钮，输入具体的请假时间段（如：09:00-11:00）
+            </p>
+          </div>
+        </div>
+      </div>
+    </ion-card-content>
+  </ion-card>
+
+  <!-- 统计信息 -->
+  <ion-card *ngIf="showStats">
+    <ion-card-header>
+      <ion-card-title>考勤统计</ion-card-title>
+    </ion-card-header>
+    <ion-card-content>
+      <ion-spinner *ngIf="statsLoading" name="crescent"></ion-spinner>
+      
+      <div *ngIf="statsData && !statsLoading">
+        <!-- 总体统计 -->
+        <div class="stats-section">
+          <h3>总体统计</h3>
+          <ion-item>
+            <ion-label>总记录数</ion-label>
+            <ion-badge color="primary">{{ statsData.overall.total_days || 0 }}</ion-badge>
+          </ion-item>
+          <ion-item>
+            <ion-label>总标准考勤时长</ion-label>
+            <ion-badge color="success">{{ formatHours(statsData.overall.total_standard_hours || 0) }}</ion-badge>
+          </ion-item>
+          <ion-item>
+            <ion-label>总加班时长</ion-label>
+            <ion-badge color="warning">{{ formatHours(statsData.overall.total_overtime_hours || 0) }}</ion-badge>
+          </ion-item>
+          <ion-item>
+            <ion-label>总请假时长</ion-label>
+            <ion-badge color="danger">{{ formatHours(statsData.overall.total_leave_hours || 0) }}</ion-badge>
+          </ion-item>
+          <ion-item>
+            <ion-label>总实际时长</ion-label>
+            <ion-badge color="primary">{{ formatHours(statsData.overall.total_actual_hours || 0) }}</ion-badge>
+          </ion-item>
+        </div>
+        
+        <!-- 按用户统计 -->
+        <div class="stats-section" *ngIf="statsData.byUser && statsData.byUser.length > 0">
+          <h3>按用户统计</h3>
+          <ion-list>
+            <ion-item *ngFor="let user of statsData.byUser">
+              <ion-label>
+                <h3>{{ user.user_name }}</h3>
+                <p>记录数: {{ user.record_count }}</p>
+                <p>标准考勤时长: {{ formatHours(user.total_standard_hours) }}</p>
+                <p>加班时长: {{ formatHours(user.total_overtime_hours) }}</p>
+                <p>请假时长: {{ formatHours(user.total_leave_hours) }}</p>
+                <p>实际时长: {{ formatHours(user.total_actual_hours) }}</p>
+              </ion-label>
+            </ion-item>
+          </ion-list>
+        </div>
+      </div>
+    </ion-card-content>
+  </ion-card>
+
+  <!-- 加载状态 -->
+  <ion-spinner *ngIf="isLoading" name="crescent"></ion-spinner>
+  
+  <!-- 错误信息 -->
+  <ion-card *ngIf="errorMsg">
+    <ion-card-content style="color:#c0392b;">{{ errorMsg }}</ion-card-content>
+  </ion-card>
+
+  <!-- 考勤记录列表（日考勤） -->
+  <ion-list *ngIf="!isLoading && !errorMsg">
+    <ion-item *ngFor="let r of list" class="compact-attendance-item">
+      <ion-label>
+        <!-- 第一行：基本信息 -->
+        <div class="attendance-row-1">
+          <div class="user-info">
+            <strong>{{ r.user_name }}</strong>
+            <span class="user-id">（ID: {{ r.user_id }}）</span>
+            <span class="date-info">{{ r.date | date:'MM-dd' }}</span>
+            <ion-badge *ngIf="isHoliday(r.date) || isWeekend(r.date)" color="warning" class="holiday-badge">
+              {{ getHolidayName(r.date) || getWeekendName(r.date) }}
+            </ion-badge>
+          </div>
+          <div class="time-info">
+            <span class="time-label">标准:</span>
+            <span class="time-value">{{ formatHours(r.standard_attendance_hours) }}</span>
+            <span *ngIf="r.overtime_hours > 0" class="time-label">加班:</span>
+            <span *ngIf="r.overtime_hours > 0" class="time-value overtime">{{ formatHours(r.overtime_hours) }}</span>
+            <span *ngIf="calculateLeaveHours(r) > 0" class="time-label">请假:</span>
+            <span *ngIf="calculateLeaveHours(r) > 0" class="time-value leave">{{ formatHours(calculateLeaveHours(r)) }}</span>
+            <span class="time-label">实际:</span>
+            <span class="time-value actual">{{ formatHours(calculateActualHours(r)) }}</span>
+          </div>
+        </div>
+        
+        <!-- 第二行：状态和操作信息 -->
+        <div class="attendance-row-2">
+          <div class="status-info">
+            <!-- 确认状态 -->
+            <ion-badge *ngIf="r.is_confirmed" color="success" class="status-badge">
+              <ion-icon name="checkmark-circle"></ion-icon>
+              已确认
+            </ion-badge>
+            <ion-badge *ngIf="!r.is_confirmed" color="warning" class="status-badge">
+              <ion-icon name="time"></ion-icon>
+              待确认
+            </ion-badge>
+            
+            <!-- 调整信息 -->
+            <span *ngIf="r.adjustment_note" class="adjustment-indicator">
+              <ion-icon name="create-outline"></ion-icon>
+              已调整
+            </span>
+          </div>
+          
+          <div class="additional-info">
+            <span *ngIf="r.confirmer_name" class="confirmer-info">确认人: {{ r.confirmer_name }}</span>
+            <span *ngIf="r.adjuster_name" class="adjuster-info">调整人: {{ r.adjuster_name }}</span>
+          </div>
+        </div>
+      </ion-label>
+      
+      <!-- 操作按钮 -->
+      <div slot="end">
+        <ion-button size="small" fill="outline" color="primary" (click)="openAdjustModal(r)">
+          <ion-icon name="create-outline"></ion-icon>
+          调整
+        </ion-button>
+        
+        <!-- 确认/取消确认按钮 -->
+        <ion-button 
+          *ngIf="!r.is_confirmed" 
+          size="small" 
+          fill="outline" 
+          color="success" 
+          (click)="confirmAttendance(r)"
+          class="ion-margin-start">
+          <ion-icon name="checkmark-circle-outline"></ion-icon>
+          确认
+        </ion-button>
+        
+        <ion-button 
+          *ngIf="r.is_confirmed" 
+          size="small" 
+          fill="outline" 
+          color="warning" 
+          (click)="unconfirmAttendance(r)"
+          class="ion-margin-start">
+          <ion-icon name="close-circle-outline"></ion-icon>
+          取消确认
+        </ion-button>
+      </div>
+    </ion-item>
+  </ion-list>
+
+  <!-- 分页 -->
+  <div class="ion-margin-top" *ngIf="total > pageSize">
+    <ion-button size="small" (click)="prevPage()" [disabled]="page<=1">上一页</ion-button>
+    <ion-button size="small" (click)="nextPage()" [disabled]="page*pageSize>=total" class="ion-margin-start">下一页</ion-button>
+    <span class="ion-padding-start">第 {{ page }} 页 / 共 {{ totalPages }} 页</span>
+  </div>
+</ion-content>
+
+<!-- 批量操作按钮组 -->
+<div class="batch-actions-row">
+  <ion-button 
+    expand="block" 
+    fill="outline" 
+    color="primary"
+    (click)="openBatchAdjustModal()"
+    class="batch-action-button">
+    <ion-icon name="people" slot="start"></ion-icon>
+    批量调整加班时间
+  </ion-button>
+  
+  <ion-button 
+    expand="block" 
+    fill="outline" 
+    color="secondary"
+    (click)="openBatchAttendanceModal()"
+    class="batch-action-button">
+    <ion-icon name="settings" slot="start"></ion-icon>
+    批量考勤管理
+  </ion-button>
+  
+  <ion-button 
+    expand="block" 
+    fill="outline" 
+    color="tertiary"
+    (click)="openWorkTimeModal()"
+    class="batch-action-button"
+    *ngIf="currentUser?.role === 'admin'">
+    <ion-icon name="time" slot="start"></ion-icon>
+    调整工作时间
+  </ion-button>
+</div>
+
+<!-- 考勤调整模态框 -->
+<ion-modal [isOpen]="isAdjustModalOpen" (didDismiss)="closeAdjustModal()">
+  <ng-template>
+    <ion-header>
+      <ion-toolbar>
+        <ion-title>调整考勤时长</ion-title>
+        <ion-buttons slot="end">
+          <ion-button (click)="closeAdjustModal()">
+            <ion-icon name="close"></ion-icon>
+          </ion-button>
+        </ion-buttons>
+      </ion-toolbar>
+    </ion-header>
+    
+    <ion-content class="ion-padding">
+      <ion-card>
+        <ion-card-header>
+          <ion-card-title>{{ selectedRecord?.user_name }}</ion-card-title>
+        </ion-card-header>
+        <ion-card-content>
+          <p><strong>日期：</strong>{{ selectedRecord?.date | date:'yyyy-MM-dd' }} 
+            <span *ngIf="workTimeSettings">{{ workTimeSettings.startTime }}-{{ workTimeSettings.endTime }}</span>
+            <span *ngIf="!workTimeSettings" class="text-danger">工作时间未配置</span>
+          </p>
+          <p *ngIf="isHoliday(selectedRecord?.date) || isWeekend(selectedRecord?.date)" class="holiday-info">
+            <ion-badge color="warning">{{ getHolidayName(selectedRecord?.date) || getWeekendName(selectedRecord?.date) }}</ion-badge>
+          </p>
+          <p><strong>标准考勤时长：</strong>{{ formatHours(selectedRecord?.standard_attendance_hours || 0) }}</p>
+          
+          <ion-item>
+            <ion-label position="stacked">加班开始时间</ion-label>
+            <ion-input 
+              type="time" 
+              [(ngModel)]="overtimeStartTime"
+              placeholder="18:00"
+              (ionInput)="onOvertimeStartTimeChange()">
+            </ion-input>
+          </ion-item>
+          
+          <ion-item>
+            <ion-label position="stacked">加班结束时间</ion-label>
+            <ion-input 
+              type="time" 
+              [(ngModel)]="overtimeEndTime"
+              placeholder="20:00"
+              (ionInput)="onOvertimeEndTimeChange()">
+            </ion-input>
+          </ion-item>
+          
+          <ion-item>
+            <ion-label position="stacked">请假开始时间</ion-label>
+            <ion-input 
+              type="time" 
+              [(ngModel)]="leaveStartTime"
+              placeholder="09:00"
+              (ionInput)="onLeaveStartTimeChange()">
+            </ion-input>
+          </ion-item>
+          
+          <ion-item>
+            <ion-label position="stacked">请假结束时间</ion-label>
+            <ion-input 
+              type="time" 
+              [(ngModel)]="leaveEndTime"
+              placeholder="11:00"
+              (ionInput)="onLeaveEndTimeChange()">
+            </ion-input>
+          </ion-item>
+          
+          <ion-item>
+            <ion-label position="stacked">调整备注</ion-label>
+            <ion-textarea 
+              [(ngModel)]="adjustmentNote" 
+              placeholder="请输入调整原因"
+              rows="3">
+            </ion-textarea>
+          </ion-item>
+          
+          <!-- 预览实际时长 -->
+          <ion-item>
+            <ion-label>
+              <strong>实际时长：</strong>
+              {{ formatHours(calculateCurrentActualHours()) }}
+            </ion-label>
+          </ion-item>
+          
+          <!-- 测试按钮 -->
+          <ion-button 
+            expand="block" 
+            fill="outline"
+            color="secondary"
+            (click)="testCalculation()"
+            class="ion-margin-top">
+            测试计算逻辑
+          </ion-button>
+          
+          <ion-button 
+            expand="block" 
+            color="primary"
+            (click)="confirmAdjust()"
+            class="ion-margin-top">
+            确认调整
+          </ion-button>
+        </ion-card-content>
+      </ion-card>
+    </ion-content>
+  </ng-template>
+</ion-modal>
+
+<!-- 批量调整模态框 -->
+<ion-modal [isOpen]="isBatchAdjustModalOpen" (didDismiss)="closeBatchAdjustModal()">
+  <ng-template>
+    <ion-header>
+      <ion-toolbar>
+        <ion-title>批量调整加班时间</ion-title>
+        <ion-buttons slot="end">
+          <ion-button (click)="closeBatchAdjustModal()">
+            <ion-icon name="close"></ion-icon>
+          </ion-button>
+        </ion-buttons>
+      </ion-toolbar>
+    </ion-header>
+    
+    <ion-content class="ion-padding">
+      <ion-card>
+        <ion-card-header>
+          <ion-card-title>选择员工</ion-card-title>
+        </ion-card-header>
+        <ion-card-content>
+          <!-- 搜索和筛选区域 -->
+          <ion-item>
+            <ion-input 
+              [(ngModel)]="searchKeyword" 
+              placeholder="搜索员工姓名"
+              (ionInput)="filterUsers()"
+              clearInput="true">
+              <ion-icon name="search" slot="start"></ion-icon>
+            </ion-input>
+          </ion-item>
+
+          <ion-item>
+            <ion-label>筛选组</ion-label>
+            <ion-select 
+              [(ngModel)]="selectedGroup" 
+              placeholder="选择组"
+              (ionChange)="filterUsers()">
+              <ion-select-option value="">全部组</ion-select-option>
+              <ion-select-option *ngFor="let group of availableGroups" [value]="group">
+                {{ group }}
+              </ion-select-option>
+            </ion-select>
+          </ion-item>
+
+          <!-- 全选/取消全选按钮 -->
+          <div class="ion-margin-top">
+            <ion-button 
+              size="small" 
+              fill="outline" 
+              (click)="selectAllUsers()"
+              [disabled]="filteredUsers.length === 0">
+              全选
+            </ion-button>
+            <ion-button 
+              size="small" 
+              fill="outline" 
+              (click)="clearAllUsers()"
+              [disabled]="selectedUsers.length === 0"
+              class="ion-margin-start">
+              取消全选
+            </ion-button>
+          </div>
+
+          <!-- 员工列表 -->
+          <ion-list>
+            <ion-item *ngFor="let user of filteredUsers" button (click)="toggleUserSelection(user)">
+              <ion-checkbox 
+                slot="start" 
+                [checked]="isUserSelected(user.id)">
+              </ion-checkbox>
+              <ion-label>
+                <h3>{{ user.name }}</h3>
+                <p>{{ user.department }}</p>
+              </ion-label>
+            </ion-item>
+          </ion-list>
+
+          <!-- 无结果提示 -->
+          <div *ngIf="filteredUsers.length === 0" class="ion-text-center ion-margin-top">
+            <ion-text color="medium">
+              <p>没有找到符合条件的员工</p>
+            </ion-text>
+          </div>
+          
+          <div class="ion-margin-top" *ngIf="selectedUsers.length > 0">
+            <ion-text color="primary">
+              <p>已选择 {{ selectedUsers.length }} 名员工</p>
+            </ion-text>
+          </div>
+        </ion-card-content>
+      </ion-card>
+
+      <ion-card *ngIf="selectedUsers.length > 0">
+        <ion-card-header>
+          <ion-card-title>设置加班时间</ion-card-title>
+        </ion-card-header>
+        <ion-card-content>
+          <ion-item>
+            <ion-label position="stacked">加班开始时间</ion-label>
+            <ion-input 
+              type="time" 
+              [(ngModel)]="batchOvertimeStartTime"
+              placeholder="18:00"
+              (ionInput)="onBatchOvertimeStartTimeChange()">
+            </ion-input>
+          </ion-item>
+          
+          <ion-item>
+            <ion-label position="stacked">加班结束时间</ion-label>
+            <ion-input 
+              type="time" 
+              [(ngModel)]="batchOvertimeEndTime"
+              placeholder="20:00"
+              (ionInput)="onBatchOvertimeEndTimeChange()">
+            </ion-input>
+          </ion-item>
+
+          <ion-item>
+            <ion-label position="stacked">调整日期</ion-label>
+            <ion-datetime 
+              [(ngModel)]="batchAdjustDate" 
+              presentation="date"
+              [max]="today">
+            </ion-datetime>
+          </ion-item>
+
+          <ion-item>
+            <ion-label position="stacked">调整备注</ion-label>
+            <ion-textarea 
+              [(ngModel)]="batchAdjustmentNote" 
+              placeholder="请输入调整备注"
+              rows="3">
+            </ion-textarea>
+          </ion-item>
+
+          <!-- 预览加班时长 -->
+          <ion-item>
+            <ion-label>
+              <strong>加班时长：</strong>
+              {{ formatHours(calculateBatchOvertimeHours()) }}
+            </ion-label>
+          </ion-item>
+
+          <ion-button 
+            expand="block" 
+            color="primary"
+            (click)="confirmBatchAdjust()"
+            class="ion-margin-top">
+            确认批量调整
+          </ion-button>
+        </ion-card-content>
+      </ion-card>
+    </ion-content>
+  </ng-template>
+</ion-modal>
+
+<!-- 批量考勤管理模态框 -->
+<ion-modal [isOpen]="isBatchAttendanceModalOpen" (didDismiss)="closeBatchAttendanceModal()">
+  <ng-template>
+    <ion-header>
+      <ion-toolbar>
+        <ion-title>批量考勤管理</ion-title>
+        <ion-buttons slot="end">
+          <ion-button (click)="closeBatchAttendanceModal()">
+            ✕
+          </ion-button>
+        </ion-buttons>
+      </ion-toolbar>
+    </ion-header>
+    <ion-content>
+      <ion-card>
+        <ion-card-header>
+          <ion-card-title>批量设置考勤</ion-card-title>
+        </ion-card-header>
+        <ion-card-content>
+          <!-- 日期选择 -->
+          <ion-item>
+            <ion-label position="stacked">选择日期</ion-label>
+            <ion-input 
+              type="date" 
+              [value]="getDateForHTML5Input()"
+              [max]="today"
+              (ionInput)="onDateInputChange($event)"
+              placeholder="选择日期">
+            </ion-input>
+          </ion-item>
+          
+          <!-- 快速日期选择按钮 -->
+          <ion-item>
+            <ion-label>快速选择：</ion-label>
+            <ion-button 
+              fill="outline" 
+              size="small"
+              (click)="setToday()">
+              今天
+            </ion-button>
+            <ion-button 
+              fill="outline" 
+              size="small"
+              (click)="setYesterday()">
+              昨天
+            </ion-button>
+            <ion-button 
+              fill="outline" 
+              size="small"
+              (click)="setTomorrow()">
+              明天
+            </ion-button>
+          </ion-item>
+          
+          <!-- 显示当前选择的日期 -->
+          <ion-item *ngIf="batchAttendanceDate">
+            <ion-label>
+              <strong>当前选择日期：</strong>{{ batchAttendanceDate }}
+            </ion-label>
+          </ion-item>
+          
+
+          <!-- 考勤时长设置 -->
+          <ion-item>
+            <ion-label position="stacked">考勤时长（小时）</ion-label>
+            <ion-input 
+              type="number" 
+              [(ngModel)]="batchAttendanceHours" 
+              placeholder="请输入考勤时长"
+              step="0.01"
+              min="0"
+              max="24">
+            </ion-input>
+          </ion-item>
+          
+          <!-- 考勤时长说明 -->
+          <ion-item>
+            <ion-label>
+              <ion-text color="medium">
+                <small *ngIf="workTimeSettings?.standardHours">
+                  💡 备注：放假考勤为0，上班考勤为 <strong>{{ workTimeSettings.standardHours }}小时</strong>（根据工作时间设置自动计算）
+                </small>
+                <small *ngIf="!workTimeSettings?.standardHours">
+                  💡 备注：放假考勤为0，上班考勤根据工作时间设置自动计算（请先配置工作时间）
+                </small>
+              </ion-text>
+            </ion-label>
+          </ion-item>
+
+          <!-- 备注 -->
+          <ion-item>
+            <ion-label position="stacked">备注</ion-label>
+            <ion-textarea 
+              [(ngModel)]="batchAttendanceNote" 
+              placeholder="请输入备注信息">
+            </ion-textarea>
+          </ion-item>
+
+          <!-- 工人选择 -->
+          <ion-item>
+            <ion-label>选择工人</ion-label>
+            <ion-button fill="outline" (click)="selectAllWorkers()">全选</ion-button>
+            <ion-button fill="outline" (click)="clearAllWorkers()" class="ion-margin-start">清空</ion-button>
+          </ion-item>
+
+          <!-- 搜索和筛选 -->
+          <ion-item>
+            <ion-input 
+              [(ngModel)]="searchKeyword" 
+              placeholder="搜索工人姓名"
+              (ionInput)="filterWorkers()">
+            </ion-input>
+          </ion-item>
+
+          <ion-item>
+            <ion-label>筛选组</ion-label>
+            <ion-select [(ngModel)]="selectedGroup" (ionChange)="filterWorkers()">
+              <ion-select-option value="">全部组</ion-select-option>
+              <ion-select-option *ngFor="let group of availableGroups" [value]="group">
+                {{ group }}
+              </ion-select-option>
+            </ion-select>
+          </ion-item>
+
+          <!-- 工人列表 -->
+          <ion-list>
+            <ion-item *ngFor="let user of filteredWorkers">
+              <ion-checkbox 
+                [(ngModel)]="user.selected" 
+                (ionChange)="onWorkerSelectionChange()">
+              </ion-checkbox>
+              <ion-label class="ion-margin-start">
+                <h3>{{ user.name }}</h3>
+                <p>{{ user.department }}</p>
+              </ion-label>
+            </ion-item>
+          </ion-list>
+
+          <!-- 统计信息 -->
+          <ion-item>
+            <ion-label>
+              <strong>已选择：</strong>{{ selectedWorkersCount }} 名工人
+            </ion-label>
+          </ion-item>
+
+          <ion-item>
+            <ion-label>
+              <strong>考勤时长：</strong>{{ batchAttendanceHours || 0 }} 小时
+            </ion-label>
+          </ion-item>
+
+          <ion-button 
+            expand="block" 
+            color="primary"
+            (click)="confirmBatchAttendance()"
+            [disabled]="selectedWorkersCount === 0 || batchAttendanceHours === null || batchAttendanceHours === undefined"
+            class="ion-margin-top">
+            确认批量设置
+          </ion-button>
+        </ion-card-content>
+      </ion-card>
+    </ion-content>
+  </ng-template>
+</ion-modal>
+
+<!-- 工作时间设置模态框 -->
+<ion-modal [isOpen]="isWorkTimeModalOpen" (didDismiss)="closeWorkTimeModal()">
+  <ng-template>
+    <ion-header>
+      <ion-toolbar>
+        <ion-title>调整工作时间</ion-title>
+        <ion-buttons slot="end">
+          <ion-button (click)="closeWorkTimeModal()">
+            <ion-icon name="close"></ion-icon>
+          </ion-button>
+        </ion-buttons>
+      </ion-toolbar>
+    </ion-header>
+    
+    <ion-content class="ion-padding">
+      <ion-card>
+        <ion-card-header>
+          <ion-card-title>默认工作时间设置</ion-card-title>
+        </ion-card-header>
+        <ion-card-content>
+          <ion-item>
+            <ion-label position="stacked">上班时间</ion-label>
+            <ion-input 
+              type="time" 
+              [(ngModel)]="workTimeSettings.startTime"
+              (ionInput)="calculateStandardHours()">
+            </ion-input>
+          </ion-item>
+          
+          <ion-item>
+            <ion-label position="stacked">下班时间</ion-label>
+            <ion-input 
+              type="time" 
+              [(ngModel)]="workTimeSettings.endTime"
+              (ionInput)="calculateStandardHours()">
+            </ion-input>
+          </ion-item>
+          
+          <ion-item>
+            <ion-label position="stacked">午休开始时间</ion-label>
+            <ion-input 
+              type="time" 
+              [(ngModel)]="workTimeSettings.lunchStartTime"
+              (ionInput)="calculateStandardHours()">
+            </ion-input>
+          </ion-item>
+          
+          <ion-item>
+            <ion-label position="stacked">午休结束时间</ion-label>
+            <ion-input 
+              type="time" 
+              [(ngModel)]="workTimeSettings.lunchEndTime"
+              (ionInput)="calculateStandardHours()">
+            </ion-input>
+          </ion-item>
+          
+          <ion-item>
+            <ion-label position="stacked">其余休息时间</ion-label>
+            <div style="display: flex; gap: 10px; width: 100%;">
+              <ion-input 
+                type="time" 
+                [(ngModel)]="workTimeSettings.otherBreakStartTime"
+                (ionInput)="calculateStandardHours()"
+                style="flex: 1;">
+              </ion-input>
+              <span style="align-self: center; color: #666;">至</span>
+              <ion-input 
+                type="time" 
+                [(ngModel)]="workTimeSettings.otherBreakEndTime"
+                (ionInput)="calculateStandardHours()"
+                style="flex: 1;">
+              </ion-input>
+            </div>
+            <ion-note slot="helper">如：上午茶歇、下午茶歇等时间段</ion-note>
+          </ion-item>
+          
+          <ion-item>
+            <ion-label position="stacked">标准工作时长（小时）</ion-label>
+            <ion-input 
+              type="number" 
+              [(ngModel)]="workTimeSettings.standardHours"
+              placeholder="0.00"
+              step="0.01"
+              readonly>
+            </ion-input>
+            <ion-note slot="helper">自动计算：总时间 - 午休时间 - 其余休息时间</ion-note>
+          </ion-item>
+          
+          <ion-item>
+            <ion-label position="stacked">初始加班时间</ion-label>
+            <ion-input 
+              type="time" 
+              [(ngModel)]="workTimeSettings.defaultOvertimeStartTime"
+              placeholder="18:00">
+            </ion-input>
+            <ion-note slot="helper">设置后，调整考勤时加班开始时间将默认使用此时间</ion-note>
+          </ion-item>
+          
+          <ion-item>
+            <ion-label position="stacked">结束加班时间</ion-label>
+            <ion-input 
+              type="time" 
+              [(ngModel)]="workTimeSettings.defaultOvertimeEndTime"
+              placeholder="20:00">
+            </ion-input>
+            <ion-note slot="helper">设置后，调整考勤时加班结束时间将默认使用此时间</ion-note>
+          </ion-item>
+          
+          <ion-item>
+            <ion-label position="stacked">备注</ion-label>
+            <ion-textarea 
+              [(ngModel)]="workTimeSettings.note" 
+              placeholder="工作时间设置说明"
+              rows="3">
+            </ion-textarea>
+          </ion-item>
+          
+          <div class="ion-margin-top">
+            <ion-button 
+              expand="block" 
+              color="primary"
+              (click)="saveWorkTimeSettings()"
+              [disabled]="isSubmitting"
+              class="ion-margin-bottom">
+              <ion-spinner *ngIf="isSubmitting" name="crescent"></ion-spinner>
+              <span *ngIf="!isSubmitting">保存设置</span>
+            </ion-button>
+            
+            <ion-button 
+              expand="block" 
+              color="medium" 
+              fill="outline"
+              (click)="resetWorkTimeSettings()"
+              [disabled]="isSubmitting">
+              重置为默认
+            </ion-button>
+          </div>
+        </ion-card-content>
+      </ion-card>
+      
+      <ion-card>
+        <ion-card-header>
+          <ion-card-title>当前设置预览</ion-card-title>
+        </ion-card-header>
+        <ion-card-content>
+          <p><strong>工作时间：</strong>{{ workTimeSettings?.startTime || '未设置' }} - {{ workTimeSettings?.endTime || '未设置' }}</p>
+          <p><strong>午休时间：</strong>{{ workTimeSettings?.lunchStartTime || '未设置' }} - {{ workTimeSettings?.lunchEndTime || '未设置' }}</p>
+          <p *ngIf="workTimeSettings.otherBreakStartTime && workTimeSettings.otherBreakEndTime">
+            <strong>其余休息时间：</strong>{{ workTimeSettings.otherBreakStartTime }} - {{ workTimeSettings.otherBreakEndTime }}
+          </p>
+          <p><strong>标准工作时长：</strong>{{ workTimeSettings.standardHours || '0.00' }} 小时</p>
+          <p *ngIf="workTimeSettings.defaultOvertimeStartTime">
+            <strong>初始加班时间：</strong>{{ workTimeSettings.defaultOvertimeStartTime }}
+          </p>
+          <p *ngIf="workTimeSettings.defaultOvertimeEndTime">
+            <strong>结束加班时间：</strong>{{ workTimeSettings.defaultOvertimeEndTime }}
+          </p>
+          <p *ngIf="workTimeSettings.note"><strong>备注：</strong>{{ workTimeSettings.note }}</p>
+        </ion-card-content>
+      </ion-card>
+    </ion-content>
+  </ng-template>
+</ion-modal>

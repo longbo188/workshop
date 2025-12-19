@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>实际工作小时计算流程图</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .flow-chart {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+        }
+        .step {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 800px;
+        }
+        .step-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .step-number {
+            background: #1976d2;
+            color: white;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            margin-right: 15px;
+        }
+        .step-title {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #1976d2;
+        }
+        .formula {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #1976d2;
+            margin: 10px 0;
+            font-family: 'Courier New', monospace;
+            font-size: 1.1em;
+        }
+        .example {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 10px 0;
+        }
+        .example h4 {
+            margin: 0 0 10px 0;
+            color: #666;
+        }
+        .arrow {
+            font-size: 2em;
+            color: #1976d2;
+            text-align: center;
+        }
+        .calculation-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 15px 0;
+        }
+        .detail-item {
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .detail-label {
+            font-size: 0.9em;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        .detail-value {
+            font-size: 1.1em;
+            font-weight: bold;
+            color: #1976d2;
+        }
+        .highlight {
+            background: #fff3e0;
+            border: 1px solid #ffcc02;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .warning {
+            background: #ffebee;
+            border: 1px solid #f44336;
+            color: #c62828;
+        }
+        .success {
+            background: #e8f5e8;
+            border: 1px solid #4caf50;
+            color: #2e7d32;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 实际工作小时计算流程图</h1>
+        
+        <div class="flow-chart">
+            <!-- 步骤1：开始 -->
+            <div class="step">
+                <div class="step-header">
+                    <div class="step-number">1</div>
+                    <div class="step-title">开始逐日计算</div>
+                </div>
+                <p>遍历任务阶段的每一天，分别计算每天的有效工作小时</p>
+                <div class="example">
+                    <h4>示例：任务阶段 2025-10-22 08:36:42 - 15:00:42</h4>
+                    <p>需要计算 2025-10-22 这一天的有效工作小时</p>
+                </div>
+            </div>
+
+            <div class="arrow">↓</div>
+
+            <!-- 步骤2：作息时间重叠 -->
+            <div class="step">
+                <div class="step-header">
+                    <div class="step-number">2</div>
+                    <div class="step-title">计算作息时间与阶段的重叠</div>
+                </div>
+                <div class="formula">
+                    作息时间窗口 ∩ 任务阶段时间
+                </div>
+                <div class="calculation-details">
+                    <div class="detail-item">
+                        <div class="detail-label">上午工作窗口</div>
+                        <div class="detail-value">08:30-11:50</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">下午工作窗口</div>
+                        <div class="detail-value">13:20-17:50</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">其他休息</div>
+                        <div class="detail-value">16:00-16:15</div>
+                    </div>
+                </div>
+                <div class="example">
+                    <h4>计算示例：</h4>
+                    <p>任务阶段：08:36-15:00</p>
+                    <p>上午重叠：08:36-11:50 = 3.23小时</p>
+                    <p>下午重叠：13:20-15:00 = 1.67小时</p>
+                    <p>扣除其他休息：16:00-16:15 = 0.25小时（不在此时间段内）</p>
+                    <div class="highlight">小计：4.9小时</div>
+                </div>
+            </div>
+
+            <div class="arrow">↓</div>
+
+            <!-- 步骤3：加班时间重叠 -->
+            <div class="step">
+                <div class="step-header">
+                    <div class="step-number">3</div>
+                    <div class="step-title">计算加班时间与阶段的重叠</div>
+                </div>
+                <div class="formula">
+                    加班时间 ∩ 任务阶段时间
+                </div>
+                <div class="example">
+                    <h4>加班时间来源：</h4>
+                    <p>• 考勤记录中的具体时间段（如 18:00-20:00）</p>
+                    <p>• 或根据加班小时数推算（默认 18:00-20:00）</p>
+                    <div class="example">
+                        <h4>计算示例：</h4>
+                        <p>任务阶段：08:00-19:00</p>
+                        <p>加班时间：18:00-20:00</p>
+                        <p>重叠：18:00-19:00 = 1小时</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="arrow">↓</div>
+
+            <!-- 步骤4：扣除请假时间 -->
+            <div class="step">
+                <div class="step-header">
+                    <div class="step-number">4</div>
+                    <div class="step-title">扣除请假时间</div>
+                </div>
+                <div class="formula">
+                    请假时间 ∩ 作息时间窗口
+                </div>
+                <div class="example">
+                    <h4>计算示例：</h4>
+                    <p>请假时间：10:00-11:00</p>
+                    <p>作息窗口：08:30-12:00</p>
+                    <p>重叠：10:00-11:00 = 1小时（需要扣除）</p>
+                    <div class="warning">扣除：-1小时</div>
+                </div>
+            </div>
+
+            <div class="arrow">↓</div>
+
+            <!-- 步骤5：扣除异常时间 -->
+            <div class="step">
+                <div class="step-header">
+                    <div class="step-number">5</div>
+                    <div class="step-title">扣除异常时间</div>
+                </div>
+                <div class="formula">
+                    异常时间 ∩ (作息时间 + 加班时间)
+                </div>
+                <div class="example">
+                    <h4>计算示例：</h4>
+                    <p>异常时间：14:00-15:00</p>
+                    <p>作息窗口：13:00-17:50</p>
+                    <p>重叠：14:00-15:00 = 1小时（需要扣除）</p>
+                    <div class="warning">扣除：-1小时</div>
+                </div>
+            </div>
+
+            <div class="arrow">↓</div>
+
+            <!-- 步骤6：应用每日限制 -->
+            <div class="step">
+                <div class="step-header">
+                    <div class="step-number">6</div>
+                    <div class="step-title">应用每日限制</div>
+                </div>
+                <div class="formula">
+                    min(计算出的有效工时, 当日实际出勤时间)
+                </div>
+                <div class="example">
+                    <h4>计算示例：</h4>
+                    <p>计算出的有效工时：4.9小时</p>
+                    <p>当日实际出勤时间：8小时</p>
+                    <div class="success">最终计入工时：min(4.9, 8) = 4.9小时</div>
+                </div>
+                <div class="highlight">
+                    <strong>目的：</strong>确保不会超过员工当天的实际出勤时间
+                </div>
+            </div>
+
+            <div class="arrow">↓</div>
+
+            <!-- 步骤7：累加总工时 -->
+            <div class="step">
+                <div class="step-header">
+                    <div class="step-number">7</div>
+                    <div class="step-title">累加总工时</div>
+                </div>
+                <p>将所有天的有效工作小时累加，得到任务阶段的总实际工作小时</p>
+                <div class="example">
+                    <h4>最终结果：</h4>
+                    <p>2025-10-22：4.9小时</p>
+                    <p>2025-10-23：6.20小时</p>
+                    <p>2025-10-24：4.80小时</p>
+                    <div class="success">总实际工作小时：15.9小时</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 核心公式 -->
+        <div class="step" style="margin-top: 40px;">
+            <div class="step-header">
+                <div class="step-number">📊</div>
+                <div class="step-title">核心计算公式</div>
+            </div>
+            <div class="formula" style="font-size: 1.3em; text-align: center;">
+                实际工作小时 = 作息∩阶段 + 加班∩阶段 - 请假∩作息 - 异常∩(作息+加班)
+            </div>
+            <div class="highlight" style="text-align: center; margin-top: 20px;">
+                <strong>效率 = (标准工时 ÷ 实际工作小时) × 100%</strong>
+            </div>
+        </div>
+
+        <!-- 注意事项 -->
+        <div class="step" style="margin-top: 20px;">
+            <div class="step-header">
+                <div class="step-number">⚠️</div>
+                <div class="step-title">重要注意事项</div>
+            </div>
+            <ul>
+                <li><strong>时间格式：</strong>所有时间都使用本地时间，不进行UTC转换</li>
+                <li><strong>数据来源：</strong>工作时间设置从数据库的 work_time_settings 表获取</li>
+                <li><strong>考勤记录：</strong>只使用已确认的考勤记录（confirmed = 1）</li>
+                <li><strong>异常报告：</strong>只使用已批准的异常报告（status = 'approved'）</li>
+                <li><strong>每日限制：</strong>确保不会超过员工当天的实际出勤时间</li>
+                <li><strong>负数处理：</strong>计算结果确保不为负数</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,132 @@
+<ion-header>
+  <ion-toolbar>
+    <ion-title>我的异常报告</ion-title>
+    <ion-buttons slot="start">
+      <ion-button (click)="goBack()">
+        <ion-icon name="arrow-back"></ion-icon>
+      </ion-button>
+    </ion-buttons>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content class="ion-padding">
+  <!-- 筛选条件 -->
+  <ion-card>
+    <ion-card-content>
+      <ion-item>
+        <ion-label>状态筛选</ion-label>
+        <ion-select [(ngModel)]="filterStatus" (ionChange)="applyFilters()" placeholder="全部状态">
+          <ion-select-option value="">全部状态</ion-select-option>
+          <ion-select-option value="pending">待审批</ion-select-option>
+          <ion-select-option value="approved">已审批</ion-select-option>
+          <ion-select-option value="rejected">已驳回</ion-select-option>
+          <ion-select-option value="processing">处理中</ion-select-option>
+          <ion-select-option value="resolved">已解决</ion-select-option>
+        </ion-select>
+      </ion-item>
+      
+      <ion-item>
+        <ion-label>类型筛选</ion-label>
+        <ion-select [(ngModel)]="filterType" (ionChange)="applyFilters()" placeholder="全部类型">
+          <ion-select-option value="">全部类型</ion-select-option>
+          <ion-select-option value="缺料">缺料</ion-select-option>
+          <ion-select-option value="来料不良">来料不良</ion-select-option>
+          <ion-select-option value="改造类（研发售后或生产不良）">改造类（研发售后或生产不良）</ion-select-option>
+          <ion-select-option value="临时安排任务">临时安排任务</ion-select-option>
+        </ion-select>
+      </ion-item>
+      
+      <ion-button expand="block" fill="clear" (click)="resetFilters()" size="small">
+        重置筛选
+      </ion-button>
+    </ion-card-content>
+  </ion-card>
+
+  <!-- 加载状态 -->
+  <ion-spinner *ngIf="isLoading" name="crescent"></ion-spinner>
+
+  <!-- 错误信息 -->
+  <ion-card *ngIf="errorMsg" color="danger">
+    <ion-card-content>
+      <p>{{ errorMsg }}</p>
+    </ion-card-content>
+  </ion-card>
+
+  <!-- 下拉刷新 -->
+  <ion-refresher slot="fixed" (ionRefresh)="doRefresh($event)">
+    <ion-refresher-content pullingText="下拉刷新"></ion-refresher-content>
+  </ion-refresher>
+
+  <!-- 无数据提示 -->
+  <ion-card *ngIf="filteredReports.length === 0 && !errorMsg && !isLoading">
+    <ion-card-content>
+      <p>暂无异常报告</p>
+    </ion-card-content>
+  </ion-card>
+
+  <!-- 异常报告列表 -->
+  <ion-list *ngIf="filteredReports.length > 0">
+    <ion-item *ngFor="let report of filteredReports">
+      <ion-label>
+        <h2>{{ report.task_name || '未知任务' }}</h2>
+        <p><strong>异常类型：</strong>{{ getTypeText(report.exception_type) }}</p>
+        <p><strong>状态：</strong>
+          <ion-badge [color]="getStatusColor(report.status)">
+            {{ getStatusText(report.status) }}
+          </ion-badge>
+        </p>
+        <p><strong>异常时间：</strong>{{ formatDateTime(report.exception_start_datetime) }} - {{ formatDateTime(report.exception_end_datetime) }}</p>
+        <p><strong>描述：</strong>{{ report.description }}</p>
+        <p><strong>提交时间：</strong>{{ formatDateTime(report.submitted_at) }}</p>
+        
+        <!-- 审批信息 -->
+        <div *ngIf="report.status !== 'pending'">
+          <p><strong>审批人：</strong>{{ report.approver_name || '未知' }}</p>
+          <p><strong>审批时间：</strong>{{ formatDateTime(report.approved_at) }}</p>
+          <p *ngIf="report.approval_note"><strong>审批备注：</strong>{{ report.approval_note }}</p>
+        </div>
+        
+        <!-- 解决信息 -->
+        <div *ngIf="report.status === 'resolved'">
+          <p><strong>解决时间：</strong>{{ formatDateTime(report.resolved_at) }}</p>
+          <p *ngIf="report.resolution_note"><strong>解决备注：</strong>{{ report.resolution_note }}</p>
+        </div>
+      </ion-label>
+    </ion-item>
+  </ion-list>
+</ion-content>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

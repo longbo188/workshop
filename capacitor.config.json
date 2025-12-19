@@ -1,0 +1,6 @@
+{
+  "appId": "com.magicray.app",
+  "appName": "work",
+  "webDir": "www",
+  "bundledWebRuntime": false
+}
