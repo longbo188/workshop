@@ -2,7 +2,10 @@
   <ion-toolbar>
     <ion-title>主管派工</ion-title>
     <ion-buttons slot="end">
-      <ion-button id="task-manage-button" *ngIf="canImportTasks">
+      <!-- 非 PMC 用户的任务管理按钮（右侧） -->
+      <ion-button
+        id="task-manage-button"
+        *ngIf="canImportTasks && !(currentUser?.role === 'staff' && currentUser?.department === 'PMC')">
         <ion-icon name="grid-outline"></ion-icon>
         任务管理
       </ion-button>
@@ -34,9 +37,37 @@
         <ion-icon name="time-outline"></ion-icon>
         导入工时
       </ion-button>
-      <ion-button (click)="openVizModal()" fill="clear">
+      <ion-button
+        *ngIf="
+          currentUser?.role === 'admin' ||
+          currentUser?.role === 'supervisor' ||
+          currentUser?.role === 'manager'
+        "
+        (click)="openVizModal()"
+        fill="clear">
         <ion-icon name="stats-chart-outline"></ion-icon>
         派工任务可视化
+      </ion-button>
+    </ion-buttons>
+  </ion-toolbar>
+  <!-- PMC 用户：直接展示任务管理功能按钮（不再二次点击“任务管理”） -->
+  <ion-toolbar *ngIf="currentUser?.role === 'staff' && currentUser?.department === 'PMC'">
+    <ion-buttons slot="primary" class="pmc-task-toolbar">
+      <ion-button class="pmc-task-manage-button" (click)="openImportModal()">
+        <ion-icon name="cloud-upload-outline"></ion-icon>
+        批量导入任务
+      </ion-button>
+      <ion-button class="pmc-task-manage-button" (click)="openCreateTaskModal()">
+        <ion-icon name="add-circle-outline"></ion-icon>
+        新增任务
+      </ion-button>
+      <ion-button class="pmc-task-manage-button" (click)="openEditTaskModal()">
+        <ion-icon name="create-outline"></ion-icon>
+        修改任务
+      </ion-button>
+      <ion-button class="pmc-task-manage-button" (click)="openDeleteTaskModal()">
+        <ion-icon name="trash-outline"></ion-icon>
+        删除任务
       </ion-button>
     </ion-buttons>
   </ion-toolbar>
@@ -98,8 +129,8 @@
                   <ion-select-option value="">全部阶段</ion-select-option>
                   <ion-select-option value="machining">机加阶段</ion-select-option>
                   <ion-select-option value="electrical">电控阶段</ion-select-option>
-                  <ion-select-option value="pre_assembly">组装前段</ion-select-option>
-                  <ion-select-option value="post_assembly">组装后段</ion-select-option>
+                  <ion-select-option value="pre_assembly">总装前段</ion-select-option>
+                  <ion-select-option value="post_assembly">总装后段</ion-select-option>
                   <ion-select-option value="debugging">调试阶段</ion-select-option>
                   <ion-select-option value="not_started">未开始</ion-select-option>
                 </ion-select>
@@ -219,14 +250,14 @@
                       </div>
                     </th>
                     <th *ngIf="columnVisible('pre_assembly')">
-                      组装前段
+                      总装前段
                       <div class="phase-stats">
                         <span class="stat-completed">已完成: {{ getPhaseStats('pre_assembly').completed }}</span>
                         <span class="stat-not-completed">未完成: {{ getPhaseStats('pre_assembly').notCompleted }}</span>
                       </div>
                     </th>
                     <th *ngIf="columnVisible('post_assembly')">
-                      组装后段
+                      总装后段
                       <div class="phase-stats">
                         <span class="stat-completed">已完成: {{ getPhaseStats('post_assembly').completed }}</span>
                         <span class="stat-not-completed">未完成: {{ getPhaseStats('post_assembly').notCompleted }}</span>
@@ -286,8 +317,8 @@
                         <option value="">全部</option>
                         <option value="machining">机加</option>
                         <option value="electrical">电控</option>
-                        <option value="pre_assembly">组装前段</option>
-                        <option value="post_assembly">组装后段</option>
+                        <option value="pre_assembly">总装前段</option>
+                        <option value="post_assembly">总装后段</option>
                         <option value="debugging">调试</option>
                       </select>
                     </th>
@@ -1092,8 +1123,8 @@
               <li><strong>B列：</strong>产品型号（必填）</li>
               <li><strong>C列：</strong>机加标准工时（小时）</li>
               <li><strong>D列：</strong>电控标准工时（小时）</li>
-              <li><strong>E列：</strong>组装前段标准工时（小时）</li>
-              <li><strong>F列：</strong>组装后段标准工时（小时）</li>
+              <li><strong>E列：</strong>总装前段标准工时（小时）</li>
+              <li><strong>F列：</strong>总装后段标准工时（小时）</li>
               <li><strong>G列：</strong>调试标准工时（小时）</li>
             </ul>
           </ion-card-content>
@@ -1153,14 +1184,15 @@
             <ion-card-title>Excel文件格式说明</ion-card-title>
           </ion-card-header>
           <ion-card-content>
-            <p>请上传包含任务信息的Excel文件：</p>
+            <p>请上传包含任务信息的Excel文件（从第2行开始为数据行）：</p>
             <ul>
-              <li><strong>C列：</strong>设备号（必填）</li>
-              <li><strong>F列：</strong>产品型号（必填）</li>
-              <li><strong>Q列：</strong>开工时间</li>
-              <li><strong>O列：</strong>承诺交货时间</li>
-              <li><strong>V列：</strong>订单状态</li>
-              <li><strong>AL列：</strong>优先级（紧急/非紧急）</li>
+              <li><strong>C列：</strong>设备号（必填，例如：M1S432069）</li>
+              <li><strong>F列：</strong>产品型号（必填，例如：A10）</li>
+              <li><strong>E列：</strong>是否非标（选填，填“是”为非标，留空或其他为标准任务）</li>
+              <li><strong>Q列：</strong>开工时间 / 投产时间（选填，日期或Excel日期格式）</li>
+              <li><strong>O列：</strong>承诺完成时间（选填，日期或Excel日期格式）</li>
+              <li><strong>V列：</strong>订单状态（选填，包含“已完成 / 已交货 / 完成 / 交货”的行将被自动跳过）</li>
+              <li><strong>AL列：</strong>优先级（选填，填“紧急”或包含“紧急”为紧急任务，其余为非紧急）</li>
             </ul>
           </ion-card-content>
         </ion-card>
@@ -1452,8 +1484,8 @@
                       <ion-select-option value="">全部阶段</ion-select-option>
                       <ion-select-option value="machining">机加阶段</ion-select-option>
                       <ion-select-option value="electrical">电控阶段</ion-select-option>
-                      <ion-select-option value="pre_assembly">组装前段</ion-select-option>
-                      <ion-select-option value="post_assembly">组装后段</ion-select-option>
+                      <ion-select-option value="pre_assembly">总装前段</ion-select-option>
+                      <ion-select-option value="post_assembly">总装后段</ion-select-option>
                       <ion-select-option value="debugging">调试阶段</ion-select-option>
                     </ion-select>
                   </ion-item>
@@ -1516,9 +1548,9 @@
                       </div>
                       <div class="task-badges" style="display: flex; flex-direction: column; gap: 4px; flex-shrink: 0;">
                         <ion-badge class="task-started-badge" color="success" *ngIf="unassignedTaskFilters.phase === 'pre_assembly' && task.machining_phase === 1" title="机加阶段已完成" style="--font-size: 9px; --padding-start: 4px; --padding-end: 4px; --padding-top: 1px; --padding-bottom: 1px;">机加✓</ion-badge>
-                        <ion-badge class="task-started-badge" color="success" *ngIf="unassignedTaskFilters.phase === 'post_assembly' && task.pre_assembly_phase === 1" title="组装前段已完成" style="--font-size: 9px; --padding-start: 4px; --padding-end: 4px; --padding-top: 1px; --padding-bottom: 1px;">前段✓</ion-badge>
+                        <ion-badge class="task-started-badge" color="success" *ngIf="unassignedTaskFilters.phase === 'post_assembly' && task.pre_assembly_phase === 1" title="总装前段已完成" style="--font-size: 9px; --padding-start: 4px; --padding-end: 4px; --padding-top: 1px; --padding-bottom: 1px;">前段✓</ion-badge>
                         <ion-badge class="task-started-badge" color="success" *ngIf="unassignedTaskFilters.phase === 'post_assembly' && task.electrical_phase === 1" title="电控阶段已完成" style="--font-size: 9px; --padding-start: 4px; --padding-end: 4px; --padding-top: 1px; --padding-bottom: 1px;">电控✓</ion-badge>
-                        <ion-badge class="task-started-badge" color="success" *ngIf="unassignedTaskFilters.phase === 'debugging' && task.post_assembly_phase === 1" title="组装后段已完成" style="--font-size: 9px; --padding-start: 4px; --padding-end: 4px; --padding-top: 1px; --padding-bottom: 1px;">后段✓</ion-badge>
+                        <ion-badge class="task-started-badge" color="success" *ngIf="unassignedTaskFilters.phase === 'debugging' && task.post_assembly_phase === 1" title="总装后段已完成" style="--font-size: 9px; --padding-start: 4px; --padding-end: 4px; --padding-top: 1px; --padding-bottom: 1px;">后段✓</ion-badge>
                       </div>
                     </div>
                     <div class="task-progress" *ngIf="getTaskProgress(task) > 0">

@@ -44,35 +44,89 @@
         </div>
       </div>
       
-      <!-- 其他角色：使用下拉选择 -->
-      <ion-item *ngIf="currentUser?.role !== 'staff'">
-        <ion-label>状态筛选</ion-label>
-        <ion-select [(ngModel)]="filterStatus" (ionChange)="onFilterStatusChange()" placeholder="选择状态">
-          <ion-select-option value="pending">待一级审批</ion-select-option>
-          <ion-select-option value="pending_second_approval">待二级审批</ion-select-option>
-          <ion-select-option value="pending_staff_confirmation">待责任部门确认</ion-select-option>
-          <ion-select-option value="staff_confirmed">责任部门已确认</ion-select-option>
-          <ion-select-option value="approved">已审批</ion-select-option>
-          <ion-select-option value="rejected">已驳回</ion-select-option>
-        </ion-select>
-        <ion-note *ngIf="currentUser?.role === 'manager'" color="primary" style="padding: 5px; display: block;">
-          当前显示：待二级审批的报告
-        </ion-note>
+      <!-- 其他角色：状态筛选 + 类型筛选 + 日期 在同一行 -->
+      <ion-item
+        *ngIf="currentUser?.role !== 'staff'"
+        lines="none"
+        style="margin-top: 4px; --min-height: 44px; --padding-start: 0; --inner-padding-end: 0;">
+        <div style="display: flex; align-items: center; width: 100%; gap: 2px; flex-wrap: wrap; font-size: 20px;">
+          <!-- 状态筛选 -->
+          <div style="display:flex; align-items:center; gap:10px; flex: 0 0 31%; min-width: 140px;">
+            <span style="white-space: nowrap;">状态</span>
+            <ion-select
+              style="flex:1;"
+              [(ngModel)]="filterStatus"
+              (ionChange)="onFilterStatusChange()"
+              placeholder="全部">
+              <ion-select-option value="pending">待一级审批</ion-select-option>
+              <ion-select-option value="pending_second_approval">待二级审批</ion-select-option>
+              <ion-select-option value="pending_staff_confirmation">待责任审批</ion-select-option>
+              <ion-select-option value="staff_confirmed">责任已确认</ion-select-option>
+              <ion-select-option value="approved">已审批</ion-select-option>
+              <ion-select-option value="rejected">已驳回</ion-select-option>
+            </ion-select>
+          </div>
+          <!-- 类型筛选 -->
+          <div style="display:flex; align-items:center; gap:10px; flex: 0 0 31%; min-width: 140px;">
+            <span style="white-space: nowrap;">类型</span>
+            <ion-select
+              style="flex:1;"
+              [(ngModel)]="filterType"
+              (ionChange)="applyFilters()"
+              placeholder="全部">
+              <ion-select-option value="">全部</ion-select-option>
+              <ion-select-option value="缺料">缺料</ion-select-option>
+              <ion-select-option value="来料不良">来料不良</ion-select-option>
+              <ion-select-option value="改造类（研发售后或生产不良）">改造类</ion-select-option>
+              <ion-select-option value="临时安排任务">临时任务</ion-select-option>
+            </ion-select>
+          </div>
+          <!-- 日期范围（仅导出用） -->
+          <div style="display:flex; align-items:center; gap:2px; flex: 0 0 36%; min-width: 180px;">
+            <span style="white-space: nowrap;">日期</span>
+            <ion-input
+              style="flex: 0 0 40%; max-width: 120px; --padding-start: 2px; --padding-end: 2px;"
+              type="date"
+              [(ngModel)]="exportStartDate"
+              placeholder="开始">
+            </ion-input>
+            <span>~</span>
+            <ion-input
+              style="flex: 0 0 40%; max-width: 120px; --padding-start: 2px; --padding-end: 2px;"
+              type="date"
+              [(ngModel)]="exportEndDate"
+              placeholder="结束">
+            </ion-input>
+          </div>
+        </div>
       </ion-item>
       
-      <ion-item>
-        <ion-label>类型筛选</ion-label>
-        <ion-select [(ngModel)]="filterType" (ionChange)="applyFilters()" placeholder="选择类型">
-          <ion-select-option value="">全部类型</ion-select-option>
-          <ion-select-option value="缺料">缺料</ion-select-option>
-          <ion-select-option value="来料不良">来料不良</ion-select-option>
-          <ion-select-option value="改造类（研发售后或生产不良）">改造类（研发售后或生产不良）</ion-select-option>
-          <ion-select-option value="临时安排任务">临时安排任务</ion-select-option>
-        </ion-select>
-      </ion-item>
+      <ion-note *ngIf="currentUser?.role === 'manager'" color="primary" style="padding: 4px 0; display: block;">
+        当前显示：待二级审批的报告
+      </ion-note>
       
       <ion-button expand="block" fill="clear" (click)="resetFilters()" size="small">
         重置筛选
+      </ion-button>
+      <ion-button
+        *ngIf="currentUser?.role === 'staff' || currentUser?.role === 'supervisor' || currentUser?.role === 'admin' || currentUser?.role === 'manager'"
+        expand="block"
+        fill="outline"
+        color="primary"
+        (click)="exportExceptions()"
+        size="small">
+        <ion-icon name="download-outline"></ion-icon>
+        导出当前异常列表
+      </ion-button>
+      <ion-button
+        *ngIf="currentUser?.role === 'staff' || currentUser?.role === 'supervisor' || currentUser?.role === 'admin' || currentUser?.role === 'manager'"
+        expand="block"
+        fill="outline"
+        color="medium"
+        (click)="exportExceptionImages()"
+        size="small">
+        <ion-icon name="images-outline"></ion-icon>
+        下载异常图片ZIP
       </ion-button>
     </ion-card-content>
   </ion-card>
@@ -169,7 +223,7 @@
         
         <!-- 二级审批信息 -->
         <div *ngIf="report.second_approver_id">
-          <p><strong>二级审批人（经理）：</strong>{{ report.second_approver_name || '未知' }}</p>
+          <p><strong>二级审批人：</strong>{{ report.second_approver_name || '未知' }}</p>
           <p><strong>二级审批时间：</strong>{{ formatDateTime(report.second_approved_at) }}</p>
           <p *ngIf="report.second_approval_note"><strong>二级审批备注：</strong>{{ report.second_approval_note }}</p>
         </div>

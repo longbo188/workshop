@@ -32,6 +32,8 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { environment } from '../../../environments/environment';
+import { Capacitor } from '@capacitor/core';
+import * as XLSX from 'xlsx';
 
 @Component({
   selector: 'app-exception-approval',
@@ -79,6 +81,8 @@ export class ExceptionApprovalPage implements OnInit {
   // 筛选条件
   filterStatus: string = ''; // 默认根据用户角色自动设置
   filterType: string = '';
+  exportStartDate: string = ''; // 导出用开始日期
+  exportEndDate: string = '';   // 导出用结束日期
 
   // 审批模态框相关
   isApprovalModalOpen: boolean = false;
@@ -205,8 +209,31 @@ export class ExceptionApprovalPage implements OnInit {
       // 类型筛选：优先使用修改后的类型，如果没有则使用原始类型
       const reportType = report.modified_exception_type || report.exception_type;
       const typeOk = this.filterType ? reportType === this.filterType : true;
+
+      // 日期筛选：按异常开始时间（优先使用修改后的开始时间）
+      let dateOk = true;
+      if (this.exportStartDate || this.exportEndDate) {
+        const dtStr = report.modified_start_datetime || report.exception_start_datetime;
+        if (!dtStr) {
+          dateOk = false;
+        } else {
+          const d = new Date(dtStr);
+          if (isNaN(d.getTime())) {
+            dateOk = false;
+          } else {
+            if (this.exportStartDate) {
+              const start = new Date(this.exportStartDate + 'T00:00:00');
+              if (d < start) dateOk = false;
+            }
+            if (dateOk && this.exportEndDate) {
+              const end = new Date(this.exportEndDate + 'T23:59:59');
+              if (d > end) dateOk = false;
+            }
+          }
+        }
+      }
       
-      return statusOk && typeOk;
+      return statusOk && typeOk && dateOk;
     });
   }
 
@@ -242,6 +269,167 @@ export class ExceptionApprovalPage implements OnInit {
   async doRefresh(event: any) {
     await this.loadExceptionReports();
     event.target.complete();
+  }
+
+  // 导出当前筛选条件下的异常报告（staff / supervisor / admin / manager）
+  exportExceptions() {
+    const role = this.currentUser?.role;
+    const dept = this.currentUser?.department;
+
+    // 工程部 staff、manager、admin：导出当前已加载的所有异常（allExceptionReports）
+    const useAll =
+      (role === 'staff' && dept === '工程部') ||
+      role === 'manager' ||
+      role === 'admin';
+
+    let source = useAll ? this.allExceptionReports : this.exceptionReports;
+
+    // 导出前按日期范围再过滤（按异常开始时间）
+    const hasDateFilter = this.exportStartDate || this.exportEndDate;
+    if (hasDateFilter) {
+      const start = this.exportStartDate
+        ? new Date(this.exportStartDate + 'T00:00:00')
+        : null;
+      const end = this.exportEndDate
+        ? new Date(this.exportEndDate + 'T23:59:59')
+        : null;
+
+      source = source.filter((report: any) => {
+        const dtStr =
+          report.modified_start_datetime || report.exception_start_datetime;
+        if (!dtStr) return false;
+        const d = new Date(dtStr);
+        if (isNaN(d.getTime())) return false;
+        if (start && d < start) return false;
+        if (end && d > end) return false;
+        return true;
+      });
+    }
+
+    if (!source || source.length === 0) {
+      alert(useAll ? '当前暂无可导出的异常记录' : '当前筛选条件下没有异常记录可以导出');
+      return;
+    }
+
+    const data: any[][] = [];
+    const header = [
+      '异常ID',
+      '任务名称',
+      '上报人',
+      '异常类型',
+      '最终异常类型',
+      '异常开始时间',
+      '异常结束时间',
+      '状态',
+      '提交时间',
+      '一级审批人',
+      '一级审批时间',
+      '一级备注',
+      '二级审批人',
+      '二级审批时间',
+      '二级备注',
+      '责任部门',
+      '责任部门确定时间',
+      '责任部门备注',
+      '图片链接',
+      '解决时间',
+      '解决备注'
+    ];
+    data.push(header);
+
+    const toBjTime = (value: any): string => {
+      if (!value) return '';
+      try {
+        const d = new Date(value);
+        if (isNaN(d.getTime())) return String(value);
+        return d.toLocaleString('zh-CN', {
+          timeZone: 'Asia/Shanghai',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+      } catch {
+        return String(value);
+      }
+    };
+
+    source.forEach((report: any) => {
+      const imageUrl = report.image_path
+        ? `${environment.apiBase.replace('localhost', '10.0.2.2')}${report.image_path}`
+        : '';
+
+      data.push([
+        report.id,
+        report.task_name || '',
+        report.user_name || '',
+        report.exception_type || '',
+        report.modified_exception_type || report.exception_type || '',
+        toBjTime(report.modified_start_datetime || report.exception_start_datetime),
+        toBjTime(report.modified_end_datetime || report.exception_end_datetime),
+        report.status || '',
+        toBjTime(report.submitted_at),
+        report.first_approver_name || '',
+        toBjTime(report.first_approved_at),
+        report.first_approval_note || '',
+        report.second_approver_name || '',
+        toBjTime(report.second_approved_at),
+        report.second_approval_note || '',
+        report.assigned_staff_name || '',
+        toBjTime(report.staff_confirmed_at),
+        report.staff_confirmation_note || '',
+        imageUrl ? `=HYPERLINK("${imageUrl}","查看图片")` : '',
+        toBjTime(report.resolved_at),
+        report.resolution_note || ''
+      ]);
+    });
+
+    const ws: XLSX.WorkSheet = XLSX.utils.aoa_to_sheet(data);
+    const wb: XLSX.WorkBook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '异常报告');
+
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(
+      now.getDate()
+    ).padStart(2, '0')}`;
+    XLSX.writeFile(wb, `异常报告_${dateStr}.xlsx`);
+  }
+
+  // 打包下载当前可见范围内的异常图片（方案3）
+  exportExceptionImages() {
+    if (!this.currentUser) return;
+    const role = this.currentUser.role;
+    if (!['staff', 'supervisor', 'admin', 'manager'].includes(role)) {
+      return;
+    }
+
+    const isNative = Capacitor.isNativePlatform();
+    const base = isNative ? environment.apiBase.replace('localhost', '10.0.2.2') : environment.apiBase;
+
+    const params = new URLSearchParams();
+    params.set('role', role);
+    params.set('userId', String(this.currentUser.id));
+    if (this.filterStatus) {
+      params.set('status', this.filterStatus);
+    }
+    if (this.filterType) {
+      params.set('type', this.filterType);
+    }
+    // 日期范围（按异常开始时间）
+    if (this.exportStartDate) {
+      params.set('startDate', `${this.exportStartDate} 00:00:00`);
+    }
+    if (this.exportEndDate) {
+      params.set('endDate', `${this.exportEndDate} 23:59:59`);
+    }
+
+    const url = `${base}/api/exception-reports/export-images?${params.toString()}`;
+    try {
+      window.open(url, '_blank');
+    } catch {
+      window.location.href = url;
+    }
   }
 
   // 格式化日期时间

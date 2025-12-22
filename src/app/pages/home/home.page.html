@@ -2,9 +2,26 @@
   <ion-toolbar>
     <ion-title>车间任务列表</ion-title>
     <ion-buttons slot="end">
-      <ion-button *ngIf="currentUser?.role==='admin' || currentUser?.role==='supervisor' || currentUser?.role==='manager'" (click)="goDispatch()" title="主管派工">
+      <!-- 主管/经理：派工入口 -->
+      <ion-button
+        *ngIf="
+          currentUser?.role === 'admin' ||
+          currentUser?.role === 'supervisor' ||
+          currentUser?.role === 'manager'
+        "
+        (click)="goDispatch()"
+        title="主管派工">
         <ion-icon name="people-outline"></ion-icon>
         <ion-label class="ion-padding-start">派工</ion-label>
+      </ion-button>
+      <!-- PMC 员工：任务管理入口（进入同一派工页面），高亮显示 -->
+      <ion-button
+        *ngIf="currentUser?.role === 'staff' && currentUser?.department === 'PMC'"
+        (click)="goDispatch()"
+        title="任务管理"
+        class="pmc-task-manage-button">
+        <ion-icon name="grid-outline"></ion-icon>
+        <ion-label class="ion-padding-start">任务管理</ion-label>
       </ion-button>
       <ion-button *ngIf="currentUser?.role==='admin' || currentUser?.role==='supervisor' || currentUser?.role==='manager' || currentUser?.role==='staff'" [routerLink]="['/exception-approval']" title="异常审批">
         <ion-icon name="warning-outline"></ion-icon>
@@ -267,11 +284,11 @@
           <span class="phase-step" 
                 [class.completed]="task.pre_assembly_phase === 1"
                 [class.current]="task.current_phase === 'pre_assembly'"
-                [class.assigned]="task.current_phase === 'pre_assembly' && task.pre_assembly_assignee">组装前段</span>
+                [class.assigned]="task.current_phase === 'pre_assembly' && task.pre_assembly_assignee">总装前段</span>
           <span class="phase-step" 
                 [class.completed]="task.post_assembly_phase === 1"
                 [class.current]="task.current_phase === 'post_assembly'"
-                [class.assigned]="task.current_phase === 'post_assembly' && task.post_assembly_assignee">组装后段</span>
+                [class.assigned]="task.current_phase === 'post_assembly' && task.post_assembly_assignee">总装后段</span>
           <span class="phase-step" 
                 [class.completed]="task.debugging_phase === 1"
                 [class.current]="task.current_phase === 'debugging'"
@@ -301,7 +318,7 @@
               (click)="startCurrentPhase(task)"
               [disabled]="isSubmitting">
               <ion-icon name="play-circle"></ion-icon>
-              开始{{ getCurrentPhaseName(task) }}阶段
+              {{ getCurrentPhaseName(task) }}开始
             </ion-button>
             
             <!-- 暂停阶段按钮 -->
@@ -313,7 +330,7 @@
               (click)="pauseCurrentPhase(task)"
               [disabled]="isSubmitting">
               <ion-icon name="pause-circle"></ion-icon>
-              暂停{{ getCurrentPhaseName(task) }}阶段
+              {{ getCurrentPhaseName(task) }}暂停
             </ion-button>
             
             <!-- 继续阶段按钮 -->
@@ -337,7 +354,7 @@
               (click)="completeCurrentPhase(task)"
               [disabled]="isSubmitting">
               <ion-icon name="checkmark-circle"></ion-icon>
-              完成{{ getCurrentPhaseName(task) }}阶段
+              {{ getCurrentPhaseName(task) }}完成
             </ion-button>
             
             <!-- 异常上报按钮 -->
@@ -534,7 +551,7 @@
               <ion-label position="stacked">审批人 *</ion-label>
               <ion-select [(ngModel)]="selectedApproverId" placeholder="请选择审批人">
                 <ion-select-option *ngFor="let approver of approvers" [value]="approver.id">
-                  {{ approver.name }} ({{ approver.role === 'admin' ? '管理员' : approver.role === 'supervisor' ? '主管' : '经理' }})
+                  {{ approver.name }}
                 </ion-select-option>
               </ion-select>
             </ion-item>
@@ -721,8 +738,8 @@
             <li><strong>B列：</strong>产品型号（必填）</li>
             <li><strong>C列：</strong>机加标准工时（小时）</li>
             <li><strong>D列：</strong>电控标准工时（小时）</li>
-            <li><strong>E列：</strong>组装前段标准工时（小时）</li>
-            <li><strong>F列：</strong>组装后段标准工时（小时）</li>
+            <li><strong>E列：</strong>总装前段标准工时（小时）</li>
+            <li><strong>F列：</strong>总装后段标准工时（小时）</li>
             <li><strong>G列：</strong>调试标准工时（小时）</li>
           </ul>
         </ion-card-content>

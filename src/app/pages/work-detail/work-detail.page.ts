@@ -271,8 +271,8 @@ export class WorkDetailPage implements OnInit {
     const phaseNames: { [key: string]: string } = {
       'machining': '机加',
       'electrical': '电控',
-      'pre_assembly': '组装前段',
-      'post_assembly': '组装后段',
+      'pre_assembly': '总装前段',
+      'post_assembly': '总装后段',
       'debugging': '调试'
     };
     return phaseNames[phaseKey] || phaseKey;

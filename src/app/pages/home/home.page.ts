@@ -736,8 +736,8 @@ export class HomePage implements OnInit, OnDestroy {
       const phaseNames: { [key: string]: string } = {
         'machining': '机加',
         'electrical': '电控',
-        'pre_assembly': '组装前段',
-        'post_assembly': '组装后段',
+        'pre_assembly': '总装前段',
+        'post_assembly': '总装后段',
         'debugging': '调试'
       };
       return phaseNames[assignedPhase] || assignedPhase;
@@ -748,8 +748,8 @@ export class HomePage implements OnInit, OnDestroy {
     const phaseNames: { [key: string]: string } = {
       'machining': '机加',
       'electrical': '电控',
-      'pre_assembly': '组装前段',
-      'post_assembly': '组装后段',
+      'pre_assembly': '总装前段',
+      'post_assembly': '总装后段',
       'debugging': '调试'
     };
     return phaseNames[task.current_phase] || task.current_phase;
@@ -782,8 +782,8 @@ export class HomePage implements OnInit, OnDestroy {
     const phases: string[] = [];
     if (task.machining_status === 'completed') phases.push('机加');
     if (task.electrical_status === 'completed') phases.push('电控');
-    if (task.pre_assembly_status === 'completed') phases.push('组装前段');
-    if (task.post_assembly_status === 'completed') phases.push('组装后段');
+    if (task.pre_assembly_status === 'completed') phases.push('总装前段');
+    if (task.post_assembly_status === 'completed') phases.push('总装后段');
     if (task.debugging_status === 'completed') phases.push('调试');
     return phases;
   }
@@ -1445,9 +1445,8 @@ export class HomePage implements OnInit, OnDestroy {
   async loadApprovers() {
     try {
       const response = await this.http.get(`${environment.apiBase}/api/users`).toPromise();
-      this.approvers = (response as any[]).filter(user => 
-        user.role === 'admin' || user.role === 'supervisor' || user.role === 'manager'
-      );
+      // 仅保留主管作为异常审批的审批人
+      this.approvers = (response as any[]).filter(user => user.role === 'supervisor');
       
       // 根据当前用户的user_group自动选择审批人
       if (this.currentUser?.user_group && this.approvers.length > 0) {
@@ -1975,6 +1974,18 @@ export class HomePage implements OnInit, OnDestroy {
       await this.presentToast('导入失败：' + (error.error?.error || error.message));
     } finally {
       this.isImportingStd = false;
+    }
+  }
+
+  // 下载标准工时模板
+  downloadStdTemplate() {
+    const isNative = Capacitor.isNativePlatform();
+    const base = isNative ? environment.apiBase.replace('localhost', '10.0.2.2') : environment.apiBase;
+    const url = `${base}/api/standard-hours/template`;
+    try {
+      window.open(url, '_blank');
+    } catch {
+      window.location.href = url;
     }
   }
 }

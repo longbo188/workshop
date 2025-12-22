@@ -125,8 +125,8 @@ export class DispatchPage implements OnInit {
     { key: 'progress', label: '整体进度' },
     { key: 'machining', label: '机加' },
     { key: 'electrical', label: '电控' },
-    { key: 'pre_assembly', label: '组装前段' },
-    { key: 'post_assembly', label: '组装后段' },
+    { key: 'pre_assembly', label: '总装前段' },
+    { key: 'post_assembly', label: '总装后段' },
     { key: 'debugging', label: '调试' }
   ];
   tableFilters = {
@@ -141,8 +141,8 @@ export class DispatchPage implements OnInit {
     progress: '', // 整体进度筛选
     machining: '', // 机加阶段筛选（completed/not_completed）
     electrical: '', // 电控阶段筛选
-    pre_assembly: '', // 组装前段筛选
-    post_assembly: '', // 组装后段筛选
+    pre_assembly: '', // 总装前段筛选
+    post_assembly: '', // 总装后段筛选
     debugging: '' // 调试阶段筛选
   };
 
@@ -206,7 +206,7 @@ export class DispatchPage implements OnInit {
       this.clearAllCache();
       
       // 获取部门列表（去重并按指定顺序排序）
-      const preferredOrder = ['机加', '电控', '组装前段', '组装后段', '调试'];
+      const preferredOrder = ['机加', '电控', '总装前段', '总装后段', '调试'];
       this.departments = [...new Set(this.users
         .map(user => user.department)
         .filter(dept => dept && dept.trim() !== '')
@@ -232,24 +232,24 @@ export class DispatchPage implements OnInit {
     }
   }
 
-  // 获取当前应判定的阶段（新逻辑：机加未完成→机加和电控并行，机加完成→组装前段，前段完成→组装后段）
+  // 获取当前应判定的阶段（新逻辑：机加未完成→机加和电控并行，机加完成→总装前段，前段完成→总装后段）
   private getEffectivePhase(task: any): string | string[] | null {
     // 机加未完成 → 返回 ['machining', 'electrical']（并行）
     if (task.machining_phase === 0 || task.machining_phase === '0') {
       return ['machining', 'electrical'];
     }
     
-    // 机加完成，组装前段未完成 → 返回 'pre_assembly'
+    // 机加完成，总装前段未完成 → 返回 'pre_assembly'
     if (task.pre_assembly_phase === 0 || task.pre_assembly_phase === '0') {
       return 'pre_assembly';
     }
     
-    // 机加、电控、组装前段都完成，组装后段未完成 → 返回 'post_assembly'
+    // 机加、电控、总装前段都完成，总装后段未完成 → 返回 'post_assembly'
     if (task.post_assembly_phase === 0 || task.post_assembly_phase === '0') {
       return 'post_assembly';
     }
     
-    // 组装后段完成，调试未完成 → 返回 'debugging'
+    // 总装后段完成，调试未完成 → 返回 'debugging'
     if (task.debugging_phase === 0 || task.debugging_phase === '0') {
       return 'debugging';
     }
@@ -677,7 +677,7 @@ export class DispatchPage implements OnInit {
         (this.currentUser.role === 'admin' || 
          this.currentUser.role === 'supervisor' || 
          this.currentUser.role === 'manager' ||
-         (this.currentUser.role === 'staff' && this.currentUser.department === '工程部'));
+         (this.currentUser.role === 'staff' && this.currentUser.department === 'PMC'));
     }
   }
 
@@ -807,6 +807,16 @@ export class DispatchPage implements OnInit {
       };
     } finally {
       this.isImportingStd = false;
+    }
+  }
+
+  // 下载标准工时模板
+  downloadStdTemplate() {
+    const url = `${environment.apiBase}/api/standard-hours/template`;
+    try {
+      window.open(url, '_blank');
+    } catch {
+      window.location.href = url;
     }
   }
 
@@ -978,8 +988,8 @@ export class DispatchPage implements OnInit {
     const phaseNames: { [key: string]: string } = {
       'machining': '机加',
       'electrical': '电控',
-      'pre_assembly': '组装前段',
-      'post_assembly': '组装后段',
+      'pre_assembly': '总装前段',
+      'post_assembly': '总装后段',
       'debugging': '调试'
     };
     return phaseNames[phaseKey] || phaseKey;
@@ -1012,13 +1022,13 @@ export class DispatchPage implements OnInit {
     if (task.pre_assembly_assignee) {
       const user = this.users.find(u => u.id === task.pre_assembly_assignee);
       if (user) {
-        assignees.push(`组装前段: ${user.name}`);
+        assignees.push(`总装前段: ${user.name}`);
       }
     }
     if (task.post_assembly_assignee) {
       const user = this.users.find(u => u.id === task.post_assembly_assignee);
       if (user) {
-        assignees.push(`组装后段: ${user.name}`);
+        assignees.push(`总装后段: ${user.name}`);
       }
     }
     if (task.debugging_assignee) {
@@ -1121,12 +1131,12 @@ export class DispatchPage implements OnInit {
       // 电控阶段可以分配：电控阶段未完成且未分配
       return task.electrical_phase === 0 && !task.electrical_assignee;
     } else if (phaseKey === 'pre_assembly') {
-      // 组装前段可以分配：组装前段未完成且未分配，且机加阶段已派工或已完成
+      // 总装前段可以分配：总装前段未完成且未分配，且机加阶段已派工或已完成
       const machiningAssigned = task.machining_assignee != null && task.machining_assignee !== '' && task.machining_assignee !== 0;
       const machiningCompleted = task.machining_phase === 1 || task.machining_phase === '1';
       return task.pre_assembly_phase === 0 && !task.pre_assembly_assignee && (machiningAssigned || machiningCompleted);
     } else if (phaseKey === 'post_assembly') {
-      // 组装后段可以分配：组装后段未完成且未分配，且组装前段已派工或已完成
+      // 总装后段可以分配：总装后段未完成且未分配，且总装前段已派工或已完成
       const preAssemblyAssigned = task.pre_assembly_assignee != null && task.pre_assembly_assignee !== '' && task.pre_assembly_assignee !== 0;
       const preAssemblyCompleted = task.pre_assembly_phase === 1 || task.pre_assembly_phase === '1';
       return task.post_assembly_phase === 0 && !task.post_assembly_assignee && (preAssemblyAssigned || preAssemblyCompleted);
@@ -1153,9 +1163,9 @@ export class DispatchPage implements OnInit {
       case 'electrical':
         return '分配电控阶段给工人，可以与机加阶段并行进行';
       case 'pre_assembly':
-        return '分配组装前段给工人，需要机加阶段已派工或已完成';
+        return '分配总装前段给工人，需要机加阶段已派工或已完成';
       case 'post_assembly':
-        return '分配组装后段给工人，需要组装前段已派工或已完成';
+        return '分配总装后段给工人，需要总装前段已派工或已完成';
       case 'debugging':
         return '分配调试阶段给工人';
       default:
@@ -1443,7 +1453,7 @@ export class DispatchPage implements OnInit {
       tasksArray.forEach((task: any) => {
         // 检查所有阶段的 assignee，而不仅仅是 current_phase 对应的阶段
         // 收集所有未完成阶段的负责人
-        const phaseMap: any = { machining: '机加', electrical: '电控', pre_assembly: '组装前段', post_assembly: '组装后段', debugging: '调试' };
+        const phaseMap: any = { machining: '机加', electrical: '电控', pre_assembly: '总装前段', post_assembly: '总装后段', debugging: '调试' };
         const assignees: Array<{assigneeId: number, phase: string, phaseCn: string}> = [];
         
         if (task.machining_phase === 0 && task.machining_assignee) {
@@ -1630,8 +1640,8 @@ export class DispatchPage implements OnInit {
     const phases = [
       { key: 'machining_status', name: '机加', completed: false },
       { key: 'electrical_status', name: '电控', completed: false },
-      { key: 'pre_assembly_status', name: '组装前段', completed: false },
-      { key: 'post_assembly_status', name: '组装后段', completed: false },
+      { key: 'pre_assembly_status', name: '总装前段', completed: false },
+      { key: 'post_assembly_status', name: '总装后段', completed: false },
       { key: 'debugging_status', name: '调试', completed: false }
     ];
 
@@ -1658,8 +1668,8 @@ export class DispatchPage implements OnInit {
     const phases = [
       { key: 'machining_phase', name: '机加' },
       { key: 'electrical_phase', name: '电控' },
-      { key: 'pre_assembly_phase', name: '组装前段' },
-      { key: 'post_assembly_phase', name: '组装后段' },
+      { key: 'pre_assembly_phase', name: '总装前段' },
+      { key: 'post_assembly_phase', name: '总装后段' },
       { key: 'debugging_phase', name: '调试' }
     ];
     
@@ -1701,7 +1711,7 @@ export class DispatchPage implements OnInit {
       },
       {
         key: 'pre_assembly',
-        name: '组装前段',
+        name: '总装前段',
         icon: 'construct',
         phaseField: 'pre_assembly_phase',
         assigneeField: 'pre_assembly_assignee',
@@ -1710,7 +1720,7 @@ export class DispatchPage implements OnInit {
       },
       {
         key: 'post_assembly',
-        name: '组装后段',
+        name: '总装后段',
         icon: 'hammer',
         phaseField: 'post_assembly_phase',
         assigneeField: 'post_assembly_assignee',
@@ -1983,9 +1993,9 @@ export class DispatchPage implements OnInit {
         '机加': 'machining',
         '电控': 'electrical',
         '预装': 'pre_assembly',
-        '组装前段': 'pre_assembly',
+        '总装前段': 'pre_assembly',
         '总装': 'post_assembly',
-        '组装后段': 'post_assembly',
+        '总装后段': 'post_assembly',
         '调试': 'debugging'
       };
       
@@ -2074,8 +2084,8 @@ export class DispatchPage implements OnInit {
     const phaseMap: any = {
       'machining': '机加',
       'electrical': '电控',
-      'pre_assembly': '组装前段',
-      'post_assembly': '组装后段',
+      'pre_assembly': '总装前段',
+      'post_assembly': '总装后段',
       'debugging': '调试'
     };
     
@@ -2087,10 +2097,10 @@ export class DispatchPage implements OnInit {
       return phaseMap['electrical'] || '电控';
     }
     if (task.pre_assembly_assignee && (task.pre_assembly_phase === 0 || task.pre_assembly_phase === '0')) {
-      return phaseMap['pre_assembly'] || '组装前段';
+      return phaseMap['pre_assembly'] || '总装前段';
     }
     if (task.post_assembly_assignee && (task.post_assembly_phase === 0 || task.post_assembly_phase === '0')) {
-      return phaseMap['post_assembly'] || '组装后段';
+      return phaseMap['post_assembly'] || '总装后段';
     }
     if (task.debugging_assignee && (task.debugging_phase === 0 || task.debugging_phase === '0')) {
       return phaseMap['debugging'] || '调试';
@@ -2317,9 +2327,9 @@ export class DispatchPage implements OnInit {
       // 排除已完成任务
       if (task.status === 'completed') return false;
 
-      // 特殊处理：如果筛选组装前段，机加已派工但组装前段未分配的任务应该显示
+      // 特殊处理：如果筛选总装前段，机加已派工但总装前段未分配的任务应该显示
       if (this.unassignedTaskFilters.phase === 'pre_assembly') {
-        // 如果组装前段已分配，直接排除
+        // 如果总装前段已分配，直接排除
         if (task.pre_assembly_assignee) return false;
         const machiningAssigned = task.machining_assignee != null && 
                                  task.machining_assignee !== '' && 
@@ -2334,7 +2344,7 @@ export class DispatchPage implements OnInit {
           if (assignee) return false;
         }
       } else if (this.unassignedTaskFilters.phase === 'post_assembly') {
-        // 特殊处理：如果筛选组装后段，组装前段已派工但组装后段未分配的任务应该显示
+        // 特殊处理：如果筛选总装后段，总装前段已派工但总装后段未分配的任务应该显示
         if (task.post_assembly_assignee) return false;
         const preAssemblyAssigned = task.pre_assembly_assignee != null && 
                                    task.pre_assembly_assignee !== '' && 
@@ -2349,10 +2359,10 @@ export class DispatchPage implements OnInit {
           if (assignee) return false;
         }
       } else if (this.unassignedTaskFilters.phase === 'debugging') {
-        // 特殊处理：如果筛选调试阶段，组装后段已派工但调试未分配的任务应该显示
+        // 特殊处理：如果筛选调试阶段，总装后段已派工但调试未分配的任务应该显示
         // 如果调试已分配，直接排除
         if (task.debugging_assignee) return false;
-        // 组装后段已派工：post_assembly_assignee 不为空 或 post_assembly_phase === 1
+        // 总装后段已派工：post_assembly_assignee 不为空 或 post_assembly_phase === 1
         const postAssemblyAssigned = task.post_assembly_assignee != null && 
                                      task.post_assembly_assignee !== '' && 
                                      task.post_assembly_assignee !== 0;
@@ -2394,9 +2404,9 @@ export class DispatchPage implements OnInit {
       
       // 按阶段筛选：
       // - 机加/电控：只要该阶段未完成（*_phase===0）即可显示（允许作为初始阶段并行起步）
-      // - 组装前段：机加阶段已派工（已分配或已完成）且组装前段未分配且未完成
-      // - 组装后段：组装前段已派工（已分配或已完成）且组装后段未分配且未完成
-      // - 调试阶段：组装后段已派工（已分配或已完成）且调试未分配且未完成
+      // - 总装前段：机加阶段已派工（已分配或已完成）且总装前段未分配且未完成
+      // - 总装后段：总装前段已派工（已分配或已完成）且总装后段未分配且未完成
+      // - 调试阶段：总装后段已派工（已分配或已完成）且调试未分配且未完成
       // - 其他阶段：保持仅当 current_phase 等于所选阶段
       if (this.unassignedTaskFilters.phase) {
         const p = this.unassignedTaskFilters.phase;
@@ -2405,16 +2415,16 @@ export class DispatchPage implements OnInit {
         } else if (p === 'electrical') {
           if (task.electrical_phase !== 0) return false;
         } else if (p === 'pre_assembly') {
-          // 组装前段：机加阶段已派工（已分配或已完成）且组装前段未分配且未完成
+          // 总装前段：机加阶段已派工（已分配或已完成）且总装前段未分配且未完成
           // 机加阶段已派工：machining_assignee 不为空 或 machining_phase === 1
           const machiningAssigned = task.machining_assignee || task.machining_phase === 1;
           if (!machiningAssigned) return false;
-          // 如果组装前段已分配，则不在待派工列表中（这是关键检查）
+          // 如果总装前段已分配，则不在待派工列表中（这是关键检查）
           if (task.pre_assembly_assignee) return false;
           if (task.pre_assembly_phase !== 0) return false; // 已完成则不在待派工列表中
         } else if (p === 'post_assembly') {
-          // 组装后段：组装前段已派工（已分配或已完成）且组装后段未分配且未完成
-          // 组装前段已派工：pre_assembly_assignee 不为空 或 pre_assembly_phase === 1
+          // 总装后段：总装前段已派工（已分配或已完成）且总装后段未分配且未完成
+          // 总装前段已派工：pre_assembly_assignee 不为空 或 pre_assembly_phase === 1
           const preAssemblyAssigned = task.pre_assembly_assignee != null && 
                                       task.pre_assembly_assignee !== '' && 
                                       task.pre_assembly_assignee !== 0;
@@ -2423,8 +2433,8 @@ export class DispatchPage implements OnInit {
           if (task.post_assembly_assignee) return false; // 已分配则不在待派工列表中
           if (task.post_assembly_phase !== 0) return false; // 已完成则不在待派工列表中
         } else if (p === 'debugging') {
-          // 调试阶段：组装后段已派工（已分配或已完成）且调试未分配且未完成
-          // 组装后段已派工：post_assembly_assignee 不为空 或 post_assembly_phase === 1
+          // 调试阶段：总装后段已派工（已分配或已完成）且调试未分配且未完成
+          // 总装后段已派工：post_assembly_assignee 不为空 或 post_assembly_phase === 1
           const postAssemblyAssigned = task.post_assembly_assignee != null && 
                                       task.post_assembly_assignee !== '' && 
                                       task.post_assembly_assignee !== 0;
@@ -2573,23 +2583,23 @@ export class DispatchPage implements OnInit {
         return;
       }
 
-      // 如果筛选条件是组装前段，直接分配组装前段
+      // 如果筛选条件是总装前段，直接分配总装前段
       if (this.unassignedTaskFilters.phase === 'pre_assembly') {
         if (task.pre_assembly_phase === 0 && !task.pre_assembly_assignee) {
-          console.log('准备分配组装前段，调用 assignTaskFromUnassigned 并传递 phase="pre_assembly"');
+          console.log('准备分配总装前段，调用 assignTaskFromUnassigned 并传递 phase="pre_assembly"');
           await this.assignTaskFromUnassigned(task, employeeId, 'pre_assembly');
         } else {
-          this.presentToast('组装前段已完成或已分配，无法分配');
+          this.presentToast('总装前段已完成或已分配，无法分配');
         }
         return;
       }
       
-      // 如果筛选条件是组装后段，直接分配组装后段
+      // 如果筛选条件是总装后段，直接分配总装后段
       if (this.unassignedTaskFilters.phase === 'post_assembly') {
         if (task.post_assembly_phase === 0 && !task.post_assembly_assignee) {
           await this.assignTaskFromUnassigned(task, employeeId, 'post_assembly');
         } else {
-          this.presentToast('组装后段已完成或已分配，无法分配');
+          this.presentToast('总装后段已完成或已分配，无法分配');
         }
         return;
       }
@@ -2900,8 +2910,8 @@ export class DispatchPage implements OnInit {
     const phaseDepartmentMap: Record<string, string> = {
       'machining': '机加',
       'electrical': '电控',
-      'pre_assembly': '组装前段',
-      'post_assembly': '组装后段',
+      'pre_assembly': '总装前段',
+      'post_assembly': '总装后段',
       'debugging': '调试'
     };
     

@@ -229,6 +229,17 @@
   }
 }
 
+// PMC 任务管理按钮高亮样式
+.pmc-task-manage-button {
+  --background: #ff9800;
+  --background-focused: #fb8c00;
+  --background-hover: #ffa726;
+  --color: #ffffff;
+  font-weight: 700;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px rgba(255, 152, 0, 0.4);
+}
+
 // 按钮备注样式
 .button-note {
   padding: 2px 4px;

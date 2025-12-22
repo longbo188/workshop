@@ -21,6 +21,23 @@ ion-content.viz-content {
   --padding-end: 16px;
 }
 
+// PMC 派工页面任务管理按钮高亮样式
+.pmc-task-manage-button {
+  --background: #ff9800;
+  --background-focused: #fb8c00;
+  --background-hover: #ffa726;
+  --color: #ffffff;
+  font-weight: 700;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px rgba(255, 152, 0, 0.4);
+}
+
+// PMC 任务管理按钮所在工具栏，按钮居中
+.pmc-task-toolbar {
+  width: 100%;
+  justify-content: center;
+}
+
 .viz-legend-compact {
   display: flex;
   gap: 8px;

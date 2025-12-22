@@ -1,6 +1,6 @@
 <ion-header>
   <ion-toolbar>
-    <ion-title>{{ currentUser?.role === 'worker' ? '我的效率' : '效率统计' }}</ion-title>
+    <ion-title>效率统计</ion-title>
     <ion-buttons slot="end">
       <ion-button [routerLink]="['/home']">
         <ion-icon name="home-outline"></ion-icon>
@@ -11,29 +11,13 @@
 
 <ion-content class="ion-padding">
   <!-- 备注提示 -->
-  <ion-card *ngIf="!isWorker()" color="warning" class="note-card">
+  <ion-card color="warning" class="note-card">
     <ion-card-content style="display: flex; align-items: center; gap: 8px; font-size: 14px;">
       <ion-icon name="information-circle-outline" style="font-size: 18px;"></ion-icon>
       <div>
         <div><strong>备注：</strong>当标准工时芯片显示为黄色（表示非标任务）时，可点击该芯片修改对应阶段的标准工时。</div>
         <div style="font-size: 12px; color: rgba(0,0,0,0.6);">修改后会立即同步到后台数据，请谨慎操作。</div>
       </div>
-    </ion-card-content>
-  </ion-card>
-
-  <!-- 已确认任务提示 -->
-  <ion-card *ngIf="confirmedTasksCount > 0" color="success" class="note-card">
-    <ion-card-content style="display: flex; align-items: center; justify-content: space-between; font-size: 14px;">
-      <div style="display: flex; align-items: center; gap: 8px;">
-        <ion-icon name="checkmark-circle-outline" style="font-size: 18px;"></ion-icon>
-        <div>
-          <div><strong>已确认任务：</strong>系统已自动确认 <strong>{{ confirmedTasksCount }}</strong> 个7个工作日前的任务阶段，这些任务将不再重新计算。</div>
-        </div>
-      </div>
-      <ion-button size="small" fill="outline" (click)="viewConfirmedTasks()">
-        <ion-icon name="eye-outline" slot="start"></ion-icon>
-        查看详情
-      </ion-button>
     </ion-card-content>
   </ion-card>
 
@@ -49,10 +33,7 @@
           <ion-input 
             type="date"
             [(ngModel)]="monthlyStartDate"
-            placeholder="选择开始日期"
-            min="1900-01-01"
-            max="2099-12-31"
-            (input)="validateDateInput($event, 'monthlyStartDate')">
+            placeholder="选择开始日期">
           </ion-input>
         </div>
 
@@ -61,10 +42,7 @@
           <ion-input 
             type="date"
             [(ngModel)]="monthlyEndDate"
-            placeholder="选择结束日期"
-            min="1900-01-01"
-            max="2099-12-31"
-            (input)="validateDateInput($event, 'monthlyEndDate')">
+            placeholder="选择结束日期">
           </ion-input>
         </div>
         
@@ -74,13 +52,9 @@
               <ion-icon name="refresh-outline" slot="start"></ion-icon>
               清空筛选
             </ion-button>
-            <ion-button color="primary" (click)="calculateMonthlyEfficiency()" title="请选择阶段开始时间和结束时间">
+            <ion-button color="primary" (click)="calculateMonthlyEfficiency()">
               <ion-icon name="bar-chart-outline" slot="start"></ion-icon>
-              阶段效率
-            </ion-button>
-            <ion-button *ngIf="isAdmin()" color="danger" fill="outline" (click)="clearConfirmedTasks()">
-              <ion-icon name="refresh-circle-outline" slot="start"></ion-icon>
-              清除已确认任务
+              月度效率
             </ion-button>
             <ion-button color="success" (click)="openExportModal()">
               <ion-icon name="download-outline" slot="start"></ion-icon>
@@ -124,10 +98,7 @@
               <ion-label position="stacked">开始日期（按阶段结束时间）</ion-label>
               <ion-input
                 type="date"
-                [(ngModel)]="exportStartDate"
-                min="1900-01-01"
-                max="2099-12-31"
-                (input)="validateDateInput($event, 'exportStartDate')">
+                [(ngModel)]="exportStartDate">
               </ion-input>
             </ion-item>
 
@@ -135,10 +106,7 @@
               <ion-label position="stacked">结束日期（按阶段结束时间）</ion-label>
               <ion-input
                 type="date"
-                [(ngModel)]="exportEndDate"
-                min="1900-01-01"
-                max="2099-12-31"
-                (input)="validateDateInput($event, 'exportEndDate')">
+                [(ngModel)]="exportEndDate">
               </ion-input>
             </ion-item>
 
@@ -176,20 +144,14 @@
               <th>效率</th>
             </tr>
             <tr class="filter-row">
-              <th>
-                <span style="font-size: 11px; color: #666;">
-                  已扣除异常时间和协助时间
-                </span>
-              </th>
+              <th></th>
               <!-- 员工筛选 -->
               <th>
                 <input
-                  *ngIf="!isWorker()"
                   class="table-filter-input"
                   placeholder="筛选员工"
                   [(ngModel)]="monthlyTableEmployeeFilter"
                   (ngModelChange)="calculateMonthlyEfficiency()">
-                <span *ngIf="isWorker()" style="font-weight: 600; color: #333;">{{ currentUser?.name }}</span>
               </th>
               <!-- 月份筛选 -->
               <th>
@@ -269,7 +231,6 @@
             <col class="col-assignee">
             <col class="col-standard-hours">
             <col class="col-actual-hours">
-            <col class="col-effective-hours"><!-- 新增：有效工时列 -->
             <col class="col-efficiency">
             <col class="col-exception">
             <col class="col-ops">
@@ -282,7 +243,6 @@
               <th>负责人</th>
               <th>标准工时(h)</th>
               <th>实际工时(h)</th>
-              <th>有效工时(h)</th>
               <th>完工日期</th>
               <th>效率</th>
               <th>异常</th>
@@ -305,45 +265,32 @@
                   <option value="">全部阶段</option>
                   <option value="machining">机加阶段</option>
                   <option value="electrical">电气阶段</option>
-                  <option value="pre_assembly">组装前段阶段</option>
-                  <option value="post_assembly">组装后段阶段</option>
+                  <option value="pre_assembly">总装前段阶段</option>
+                  <option value="post_assembly">总装后段阶段</option>
                   <option value="debugging">调试阶段</option>
                 </select>
               </th>
               <th>
                 <input 
-                  *ngIf="!isWorker()"
                   class="table-filter-input" 
                   placeholder="筛选负责人" 
                   [(ngModel)]="tableAssigneeFilter" 
                   (ngModelChange)="applyTableFilters()">
-                <span *ngIf="isWorker()" style="font-weight: 600; color: #333;">{{ currentUser?.name }}</span>
               </th>
               <th></th>
               <th></th>
-              <th>
-                <span style="font-size: 11px; color: #666;">
-                  已扣除异常时间和协助时间
-                </span>
-              </th>
               <th>
                 <input 
                   class="table-filter-input"
                   type="date"
                   placeholder="开始日期"
                   [(ngModel)]="startDate"
-                  min="1900-01-01"
-                  max="2099-12-31"
-                  (input)="validateDateInput($event, 'startDate')"
                   (ngModelChange)="applyTableFilters()">
                 <input 
                   class="table-filter-input"
                   type="date"
                   placeholder="结束日期"
                   [(ngModel)]="endDate"
-                  min="1900-01-01"
-                  max="2099-12-31"
-                  (input)="validateDateInput($event, 'endDate')"
                   (ngModelChange)="applyTableFilters()"
                   style="margin-top: 4px;">
               </th>
@@ -373,44 +320,24 @@
           <tbody>
             <tr *ngFor="let data of filteredEfficiencyData; let i = index">
               <td>{{ i + 1 }}</td>
-              <td>
-                {{ data.task.name }}
-                <ion-chip *ngIf="data.hasAssistTasks" color="warning" size="small" style="margin-left: 8px;">
-                  <ion-icon name="people-outline"></ion-icon>
-                  <ion-label>协助</ion-label>
-                </ion-chip>
-              </td>
+              <td>{{ data.task.name }}</td>
               <td>{{ getPhaseDisplayName(data.phase) }}</td>
               <td>{{ getTaskAssigneeName(data.task, data.phase) || '-' }}</td>
               <td>
                 <ion-chip 
                   [color]="data.task.is_non_standard === 1 ? 'warning' : 'primary'" 
                   class="metric-chip"
-                  [class.clickable-chip]="data.task.is_non_standard === 1 && !isWorker() && !isTaskConfirmed(data.task.id, data.phase)"
-                  (click)="data.task.is_non_standard === 1 && !isWorker() && !isTaskConfirmed(data.task.id, data.phase) && openEditStandardHoursModal(data.task, data.phase)">
+                  [class.clickable-chip]="data.task.is_non_standard === 1"
+                  (click)="data.task.is_non_standard === 1 && openEditStandardHoursModal(data.task, data.phase)">
                   <ion-icon name="time-outline"></ion-icon>
                   <ion-label>{{ data.standardHours }}h</ion-label>
-                  <ion-icon *ngIf="data.task.is_non_standard === 1 && !isWorker() && !isTaskConfirmed(data.task.id, data.phase)" name="create-outline" style="margin-left: 4px;"></ion-icon>
+                  <ion-icon *ngIf="data.task.is_non_standard === 1" name="create-outline" style="margin-left: 4px;"></ion-icon>
                 </ion-chip>
               </td>
               <td>
                 <ion-chip color="tertiary" class="metric-chip">
                   <ion-icon name="calendar-outline"></ion-icon>
                   <ion-label>{{ (data.actualWorkHours || 0).toFixed(1) }}h</ion-label>
-                </ion-chip>
-              </td>
-              <td>
-                <ion-chip color="success" class="metric-chip">
-                  <ion-icon name="checkmark-circle-outline"></ion-icon>
-                  <ion-label>
-                    {{
-                      (
-                        (data.actualWorkHours || 0)
-                        - (data.exceptionHours || 0)
-                        - (data.assistHours || 0)
-                      ).toFixed(1)
-                    }}h
-                  </ion-label>
                 </ion-chip>
               </td>
               <td>
@@ -426,8 +353,7 @@
                 <ion-chip *ngIf="data.exceptionReports.length > 0" 
                           color="danger" 
                           (click)="toggleExceptionDetails(data.task.id, data.phase)"
-                          class="clickable-chip metric-chip"
-                          [title]="formatExceptionTooltip(data.exceptionReports)">
+                          class="clickable-chip metric-chip">
                   <ion-icon name="alert-circle-outline"></ion-icon>
                   <ion-label>{{ data.exceptionReports.length }}条</ion-label>
                 </ion-chip>
@@ -445,7 +371,7 @@
               </td>
             </tr>
             <tr *ngIf="filteredEfficiencyData.length === 0">
-              <td class="table-empty-row" colspan="11">
+              <td class="table-empty-row" colspan="10">
                 暂无符合条件的效率明细
               </td>
             </tr>
@@ -478,11 +404,11 @@
           <ion-chip 
             [color]="data.task.is_non_standard === 1 ? 'warning' : 'primary'" 
             class="metric-chip"
-            [class.clickable-chip]="data.task.is_non_standard === 1 && !isWorker() && !isTaskConfirmed(data.task.id, data.phase)"
-            (click)="data.task.is_non_standard === 1 && !isWorker() && !isTaskConfirmed(data.task.id, data.phase) && openEditStandardHoursModal(data.task, data.phase)">
+            [class.clickable-chip]="data.task.is_non_standard === 1"
+            (click)="data.task.is_non_standard === 1 && openEditStandardHoursModal(data.task, data.phase)">
             <ion-icon name="time-outline"></ion-icon>
             <ion-label>标准 {{ data.standardHours }}h</ion-label>
-            <ion-icon *ngIf="data.task.is_non_standard === 1 && !isWorker() && !isTaskConfirmed(data.task.id, data.phase)" name="create-outline" style="margin-left: 4px;"></ion-icon>
+            <ion-icon *ngIf="data.task.is_non_standard === 1" name="create-outline" style="margin-left: 4px;"></ion-icon>
           </ion-chip>
           
           <ion-chip color="tertiary" class="metric-chip">

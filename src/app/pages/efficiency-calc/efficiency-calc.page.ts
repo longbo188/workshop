@@ -2474,8 +2474,8 @@ export class EfficiencyCalcPage implements OnInit {
     const phaseNames: { [key: string]: string } = {
       'machining': '机加阶段',
       'electrical': '电气阶段',
-      'pre_assembly': '组装前段阶段',
-      'post_assembly': '组装后段阶段',
+      'pre_assembly': '总装前段阶段',
+      'post_assembly': '总装后段阶段',
       'debugging': '调试阶段'
     };
     return phaseNames[phase] || phase;

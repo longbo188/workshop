@@ -139,7 +139,11 @@ export class ExceptionReportsPage implements OnInit {
       'approved': '已审批',
       'rejected': '已驳回',
       'processing': '处理中',
-      'resolved': '已解决'
+      'resolved': '已解决',
+      // 兼容更多后台状态，统一显示中文
+      'pending_second_approval': '待二级审批',
+      'pending_staff_confirmation': '待责任部门确认',
+      'staff_confirmed': '责任部门已确认'
     };
     return statusMap[status] || status;
   }
