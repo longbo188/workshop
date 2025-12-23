@@ -11,8 +11,8 @@
   - 全部阶段
   - 机加阶段
   - 电控阶段
-  - 组装前段
-  - 组装后段
+  - 总装前段
+  - 总装后段
   - 调试阶段
   - 未开始（没有当前阶段的任务）
 
@@ -43,8 +43,8 @@
         <ion-select-option value="">全部阶段</ion-select-option>
         <ion-select-option value="machining">机加阶段</ion-select-option>
         <ion-select-option value="electrical">电控阶段</ion-select-option>
-        <ion-select-option value="pre_assembly">组装前段</ion-select-option>
-        <ion-select-option value="post_assembly">组装后段</ion-select-option>
+        <ion-select-option value="pre_assembly">总装前段</ion-select-option>
+        <ion-select-option value="post_assembly">总装后段</ion-select-option>
         <ion-select-option value="debugging">调试阶段</ion-select-option>
         <ion-select-option value="not_started">未开始</ion-select-option>
       </ion-select>
@@ -177,6 +177,8 @@ clearAllFilters() {
 
 ## 总结
 通过添加阶段筛选功能，主管可以更精确地管理不同生产阶段的任务，提高派工效率和任务管理的可视化程度。这个功能让生产管理更加精细化和专业化。
+
+
 
 
 

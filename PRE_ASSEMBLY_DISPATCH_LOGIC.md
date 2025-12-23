@@ -1,26 +1,26 @@
-# 组装前段任务派工逻辑说明
+# 总装前段任务派工逻辑说明
 
 ## 一、待派工任务筛选逻辑（前端）
 
 ### 1.1 筛选条件
-当用户在派工页面选择"组装前段"作为筛选条件时，系统会显示满足以下条件的任务：
+当用户在派工页面选择"总装前段"作为筛选条件时，系统会显示满足以下条件的任务：
 
 **必须满足的条件：**
 - ✅ 机加阶段已派工（`machining_assignee` 不为空）或机加阶段已完成（`machining_phase === 1`）
-- ✅ 组装前段未分配（`pre_assembly_assignee` 为空）
-- ✅ 组装前段未完成（`pre_assembly_phase === 0`）
+- ✅ 总装前段未分配（`pre_assembly_assignee` 为空）
+- ✅ 总装前段未完成（`pre_assembly_phase === 0`）
 - ✅ 任务未完成（`status !== 'completed'`）
 
 ### 1.2 筛选流程
 
 #### 第一步：基础筛选（`base` 过滤）
 ```typescript
-// 如果筛选组装前段
+// 如果筛选总装前段
 if (this.unassignedTaskFilters.phase === 'pre_assembly') {
-  // 如果组装前段已分配，直接排除
+  // 如果总装前段已分配，直接排除
   if (task.pre_assembly_assignee) return false;
   
-  // 机加已派工且组装前段未分配，应该显示
+  // 机加已派工且总装前段未分配，应该显示
   const machiningAssigned = task.machining_assignee || task.machining_phase === 1;
   if (machiningAssigned && task.pre_assembly_phase === 0) {
     return true;
@@ -30,13 +30,13 @@ if (this.unassignedTaskFilters.phase === 'pre_assembly') {
 
 #### 第二步：详细筛选
 ```typescript
-// 组装前段筛选条件
+// 总装前段筛选条件
 if (p === 'pre_assembly') {
   // 机加阶段已派工（已分配或已完成）
   const machiningAssigned = task.machining_assignee || task.machining_phase === 1;
   if (!machiningAssigned) return false;
   
-  // 如果组装前段已分配，则不在待派工列表中
+  // 如果总装前段已分配，则不在待派工列表中
   if (task.pre_assembly_assignee) return false;
   
   // 已完成则不在待派工列表中
@@ -47,15 +47,15 @@ if (p === 'pre_assembly') {
 ## 二、派工流程（前端）
 
 ### 2.1 自动派工
-当筛选条件选择"组装前段"时，从待派工任务拖拽到员工，系统会：
+当筛选条件选择"总装前段"时，从待派工任务拖拽到员工，系统会：
 
-1. **自动识别阶段**：不弹出选择对话框，直接分配组装前段
+1. **自动识别阶段**：不弹出选择对话框，直接分配总装前段
 2. **检查任务状态**：
    ```typescript
    if (task.pre_assembly_phase === 0 && !task.pre_assembly_assignee) {
      await this.assignTaskFromUnassigned(task, employeeId, 'pre_assembly');
    } else {
-     this.presentToast('组装前段已完成或已分配，无法分配');
+     this.presentToast('总装前段已完成或已分配，无法分配');
    }
    ```
 
@@ -69,7 +69,7 @@ if (p === 'pre_assembly') {
 
 ### 3.1 检查函数：`canStartPhase`
 
-**组装前段的前置条件：**
+**总装前段的前置条件：**
 - ✅ 只需要：机加阶段已派工（`machining_assignee` 不为空）
 - ❌ 不需要：机加阶段完成（不检查 `machining_phase === 1`）
 
@@ -103,7 +103,7 @@ if (phaseKey === 'pre_assembly') {
    ```
 
 2. **调用 `canStartPhase` 检查**：
-   - 如果返回 `false`，返回错误：`无法分配组装前段阶段，请检查前置条件`
+   - 如果返回 `false`，返回错误：`无法分配总装前段阶段，请检查前置条件`
 
 3. **错误信息包含**：
    - 需要满足的条件：机加阶段已派工（`machining_assignee` 不为空）
@@ -159,13 +159,13 @@ if (verifyTask[0].pre_assembly_assignee != newAssigned) {
 
 ### 6.2 筛选逻辑
 - 机加阶段已派工（`machining_assignee` 不为空）**或** 机加阶段已完成（`machining_phase === 1`）
-- 组装前段未分配（`pre_assembly_assignee` 为空）
-- 组装前段未完成（`pre_assembly_phase === 0`）
+- 总装前段未分配（`pre_assembly_assignee` 为空）
+- 总装前段未完成（`pre_assembly_phase === 0`）
 
 ### 6.3 派工流程
-1. 筛选条件选择"组装前段"
+1. 筛选条件选择"总装前段"
 2. 从待派工任务拖拽到员工
-3. 系统自动分配组装前段（不弹出选择对话框）
+3. 系统自动分配总装前段（不弹出选择对话框）
 4. 后端检查前置条件
 5. 更新数据库
 6. 验证更新成功
@@ -192,8 +192,8 @@ if (verifyTask[0].pre_assembly_assignee != newAssigned) {
 ### 8.1 为什么无法分配？
 可能的原因：
 1. 机加阶段未派工（`machining_assignee` 为空）
-2. 组装前段已分配（`pre_assembly_assignee` 不为空）
-3. 组装前段已完成（`pre_assembly_phase === 1`）
+2. 总装前段已分配（`pre_assembly_assignee` 不为空）
+3. 总装前段已完成（`pre_assembly_phase === 1`）
 
 ### 8.2 如何查看详细信息？
 - 查看服务器控制台的调试日志

@@ -4,7 +4,9 @@ const cors = require('cors'); // 解决跨域问题（前端和后端端口不�
 const multer = require('multer'); // 文件上传中间件
 const XLSX = require('xlsx'); // Excel文件解析库
 const path = require('path'); // 路径处理模块
+const fs = require('fs'); // 文件系统模块
 const https = require('https'); // HTTP客户端，用于调用GitHub API
+const archiver = require('archiver'); // 用于打包zip
 
 // 2. 创建后端服务
 const app = express();
@@ -781,6 +783,40 @@ app.post('/api/standard-hours/import', upload.single('file'), async (req, res) =
   }
 });
 
+// 12.y 下载标准工时Excel模板
+app.get('/api/standard-hours/template', async (req, res) => {
+  try {
+    const workbook = XLSX.utils.book_new();
+    const sheetData = [
+      [
+        '',
+        '产品型号',
+        '机加标准工时(小时)',
+        '电控标准工时(小时)',
+        '总装前段标准工时(小时)',
+        '总装后段标准工时(小时)',
+        '调试标准工时(小时)'
+      ]
+    ];
+    const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
+    XLSX.utils.book_append_sheet(workbook, worksheet, '标准工时模板');
+
+    const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="standard_hours_template.xlsx"'
+    );
+    res.send(buffer);
+  } catch (error) {
+    console.error('生成标准工时模板失败：', error);
+    res.status(500).json({ error: '生成模板失败：' + error.message });
+  }
+});
+
 // 9.2 待审批列表（主管/管理员查看所有 pending 的完成记录）
 app.get('/api/approvals/pending', async (req, res) => {
   try {
@@ -1103,7 +1139,7 @@ app.post('/api/tasks/assign', async (req, res) => {
       
       // 调试信息：记录检查前置条件时的任务状态
       if (phaseKey === 'pre_assembly') {
-        console.log('检查组装前段前置条件 - 任务数据:', {
+        console.log('检查总装前段前置条件 - 任务数据:', {
           taskId,
           machining_assignee: taskForCheck.machining_assignee,
           machining_assignee_type: typeof taskForCheck.machining_assignee,
@@ -1130,7 +1166,7 @@ app.post('/api/tasks/assign', async (req, res) => {
                                      machiningAssignee !== '0';
           const machiningCompleted = machiningPhase === 1 || machiningPhase === '1';
           errorMsg += `。需要：机加阶段已派工（machining_assignee不为空）或已完成（machining_phase=1）。当前：machining_assignee=${machiningAssignee}（类型：${typeof machiningAssignee}，已派工：${machiningAssigned}），machining_phase=${machiningPhase}（类型：${typeof machiningPhase}，已完成：${machiningCompleted}）`;
-          console.error('组装前段分配失败 - 前置条件不满足:', {
+          console.error('总装前段分配失败 - 前置条件不满足:', {
             taskId,
             machining_assignee: machiningAssignee,
             machining_assignee_type: typeof machiningAssignee,
@@ -1170,7 +1206,7 @@ app.post('/api/tasks/assign', async (req, res) => {
             WHERE id = ?
           `, [newAssigned, taskId]);
         } else if (phaseKey === 'pre_assembly') {
-          // 组装前段分配：需要机加已完成，且组装前段未完成
+          // 总装前段分配：需要机加已完成，且总装前段未完成
           await connection.execute(`
             UPDATE tasks SET 
               pre_assembly_assignee = ?,
@@ -1181,7 +1217,7 @@ app.post('/api/tasks/assign', async (req, res) => {
             WHERE id = ?
           `, [newAssigned, taskId]);
         } else if (phaseKey === 'post_assembly') {
-          // 组装后段分配：需要组装前段已派工，且组装后段未完成
+          // 总装后段分配：需要总装前段已派工，且总装后段未完成
           await connection.execute(`
             UPDATE tasks SET 
               post_assembly_assignee = ?,
@@ -1196,7 +1232,7 @@ app.post('/api/tasks/assign', async (req, res) => {
             WHERE id = ?
           `, [newAssigned, taskId]);
         } else if (phaseKey === 'debugging') {
-          // 调试阶段分配：需要组装后段已派工，且调试未完成
+          // 调试阶段分配：需要总装后段已派工，且调试未完成
           await connection.execute(`
             UPDATE tasks SET 
               debugging_assignee = ?,
@@ -2775,8 +2811,8 @@ app.get('/api/tasks/:taskId/phases', async (req, res) => {
     const phases = [
       { key: 'machining', name: '机加', order: 1 },
       { key: 'electrical', name: '电控', order: 2 },
-      { key: 'pre_assembly', name: '组装前段', order: 3 },
-      { key: 'post_assembly', name: '组装后段', order: 4 },
+      { key: 'pre_assembly', name: '总装前段', order: 3 },
+      { key: 'post_assembly', name: '总装后段', order: 4 },
       { key: 'debugging', name: '调试', order: 5 }
     ];
     
@@ -2817,7 +2853,7 @@ function canStartPhase(task, phaseKey) {
     return true;
   }
   
-  // 组装前段需要机加阶段已派工或已完成
+  // 总装前段需要机加阶段已派工或已完成
   if (phaseKey === 'pre_assembly') {
     // 检查机加阶段是否已派工
     const machiningAssignee = task.machining_assignee;
@@ -2833,9 +2869,9 @@ function canStartPhase(task, phaseKey) {
     return machiningAssigned || machiningCompleted;
   }
   
-  // 组装后段需要组装前段已派工
+  // 总装后段需要总装前段已派工
   if (phaseKey === 'post_assembly') {
-    // 检查组装前段是否已派工
+    // 检查总装前段是否已派工
     const preAssemblyAssignee = task.pre_assembly_assignee;
     const preAssemblyAssigned = preAssemblyAssignee != null && 
                                 preAssemblyAssignee !== '' && 
@@ -2843,15 +2879,15 @@ function canStartPhase(task, phaseKey) {
                                 preAssemblyAssignee !== '0' &&
                                 preAssemblyAssignee !== 'null' &&
                                 preAssemblyAssignee !== 'undefined';
-    // 检查组装前段是否已完成（已完成也可以）
+    // 检查总装前段是否已完成（已完成也可以）
     const preAssemblyCompleted = task.pre_assembly_phase === 1 || task.pre_assembly_phase === '1';
     // 已派工或已完成都可以
     return preAssemblyAssigned || preAssemblyCompleted;
   }
   
-  // 调试阶段需要组装后段已派工
+  // 调试阶段需要总装后段已派工
   if (phaseKey === 'debugging') {
-    // 检查组装后段是否已派工
+    // 检查总装后段是否已派工
     const postAssemblyAssignee = task.post_assembly_assignee;
     const postAssemblyAssigned = postAssemblyAssignee != null && 
                                 postAssemblyAssignee !== '' && 
@@ -2859,7 +2895,7 @@ function canStartPhase(task, phaseKey) {
                                 postAssemblyAssignee !== '0' &&
                                 postAssemblyAssignee !== 'null' &&
                                 postAssemblyAssignee !== 'undefined';
-    // 检查组装后段是否已完成（已完成也可以）
+    // 检查总装后段是否已完成（已完成也可以）
     const postAssemblyCompleted = task.post_assembly_phase === 1 || task.post_assembly_phase === '1';
     // 已派工或已完成都可以
     return postAssemblyAssigned || postAssemblyCompleted;
@@ -2924,7 +2960,7 @@ app.post('/api/tasks/:taskId/phases/:phaseKey/start', async (req, res) => {
         WHERE id = ?
       `, [phaseKey, taskId]);
     } else if (phaseKey === 'pre_assembly') {
-      // 组装前段：需要机加已完成
+      // 总装前段：需要机加已完成
       await connection.execute(`
         UPDATE tasks 
         SET 
@@ -2933,7 +2969,7 @@ app.post('/api/tasks/:taskId/phases/:phaseKey/start', async (req, res) => {
         WHERE id = ? AND machining_phase = 1
       `, [phaseKey, taskId]);
     } else if (phaseKey === 'post_assembly') {
-      // 组装后段：需要组装前段已派工
+      // 总装后段：需要总装前段已派工
       await connection.execute(`
         UPDATE tasks 
         SET 
@@ -2946,7 +2982,7 @@ app.post('/api/tasks/:taskId/phases/:phaseKey/start', async (req, res) => {
           AND pre_assembly_assignee != '0'
       `, [phaseKey, taskId]);
     } else if (phaseKey === 'debugging') {
-      // 调试阶段：需要组装后段已派工
+      // 调试阶段：需要总装后段已派工
       await connection.execute(`
         UPDATE tasks 
         SET 
@@ -3222,25 +3258,25 @@ app.post('/api/tasks/:taskId/phases/:phaseKey/complete', async (req, res) => {
       } else {
         // 检查是否可以进入下一个阶段（使用更新后的状态，遵循新逻辑）
         if (phaseKey === 'machining') {
-          // 机加完成后，如果组装前段未完成，进入组装前段
+          // 机加完成后，如果总装前段未完成，进入总装前段
           if (updatedTask.pre_assembly_phase === 0) {
             nextPhase = 'pre_assembly';
           }
-          // 如果组装前段已完成或进行中，但电控未完成，不设置 nextPhase（保持电控阶段，如果已分配）
+          // 如果总装前段已完成或进行中，但电控未完成，不设置 nextPhase（保持电控阶段，如果已分配）
         } else if (phaseKey === 'electrical') {
           // 电控完成后，如果机加未完成，保持机加阶段
           if (updatedTask.machining_phase === 0) {
             nextPhase = 'machining';
           } 
-          // 如果机加已完成且组装前段未完成，进入组装前段
+          // 如果机加已完成且总装前段未完成，进入总装前段
           else if (updatedTask.pre_assembly_phase === 0) {
             nextPhase = 'pre_assembly';
           }
         } else if (phaseKey === 'pre_assembly') {
-          // 组装前段完成后，进入组装后段
+          // 总装前段完成后，进入总装后段
           nextPhase = 'post_assembly';
         } else if (phaseKey === 'post_assembly') {
-          // 组装后段完成后，进入调试阶段
+          // 总装后段完成后，进入调试阶段
           nextPhase = 'debugging';
         }
         
@@ -3330,8 +3366,8 @@ function getPhaseName(phaseKey) {
   const phaseNames = {
     'machining': '机加',
     'electrical': '电控',
-    'pre_assembly': '组装前段',
-    'post_assembly': '组装后段',
+    'pre_assembly': '总装前段',
+    'post_assembly': '总装后段',
     'debugging': '调试'
   };
   return phaseNames[phaseKey] || phaseKey;
@@ -4633,9 +4669,9 @@ app.get('/api/exception-reports/stats', async (req, res) => {
 app.get('/api/exception-reports/approved', async (req, res) => {
   try {
     const { taskId, userId, startDate, endDate } = req.query;
-    
+
     const connection = await mysql.createConnection(dbConfig);
-    
+
     let query = `
       SELECT er.*, t.name as task_name, u.name as user_name
       FROM exception_reports er
@@ -4643,42 +4679,298 @@ app.get('/api/exception-reports/approved', async (req, res) => {
       LEFT JOIN users u ON er.user_id = u.id
       WHERE er.status = 'approved'
     `;
-    
+
     const params = [];
-    
+
     if (taskId) {
       query += ' AND er.task_id = ?';
       params.push(taskId);
     }
-    
+
     if (userId) {
       query += ' AND er.user_id = ?';
       params.push(userId);
     }
-    
+
     if (startDate) {
       query += ' AND er.exception_start_datetime >= ?';
       params.push(startDate);
     }
-    
+
     if (endDate) {
       query += ' AND er.exception_end_datetime <= ?';
       params.push(endDate);
     }
-    
+
     query += ' ORDER BY er.exception_start_datetime ASC';
-    
+
     const [rows] = await connection.execute(query, params);
-    
+
     await connection.end();
-    
+
     res.json({
       success: true,
       data: rows
     });
-    
   } catch (error) {
     res.status(500).json({ error: '获取已批准异常报告失败：' + error.message });
+  }
+});
+
+// 导出异常报告（按审批视角，支持角色和状态筛选）
+app.get('/api/exception-reports/export', async (req, res) => {
+  // 保留此接口以兼容旧逻辑：简单返回JSON，由前端自己导出
+  let connection;
+  try {
+    const { role, userId, status, type, startDate, endDate } = req.query;
+    connection = await mysql.createConnection(dbConfig);
+
+    let query = `
+      SELECT 
+        er.*,
+        t.name AS task_name,
+        u.name AS user_name
+      FROM exception_reports er
+      LEFT JOIN tasks t ON er.task_id = t.id
+      LEFT JOIN users u ON er.user_id = u.id
+      WHERE 1=1
+    `;
+
+    const params = [];
+
+    if (role === 'staff' && userId) {
+      query += ' AND er.assigned_to_staff_id = ?';
+      params.push(userId);
+    } else if ((role === 'supervisor' || role === 'manager') && userId) {
+      const [userRows] = await connection.execute(
+        'SELECT department FROM users WHERE id = ?',
+        [userId]
+      );
+      if (userRows.length > 0 && userRows[0].department) {
+        query += ' AND u.department = ?';
+        params.push(userRows[0].department);
+      }
+    }
+
+    if (status) {
+      query += ' AND er.status = ?';
+      params.push(status);
+    }
+
+    if (type) {
+      query += ' AND (er.modified_exception_type = ? OR er.exception_type = ?)';
+      params.push(type, type);
+    }
+
+    if (startDate) {
+      query += ' AND er.exception_start_datetime >= ?';
+      params.push(startDate);
+    }
+    if (endDate) {
+      query += ' AND er.exception_end_datetime <= ?';
+      params.push(endDate);
+    }
+
+    query += ' ORDER BY er.exception_start_datetime DESC';
+
+    const [rows] = await connection.execute(query, params);
+    await connection.end();
+
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    if (connection) await connection.end();
+    console.error('导出异常报告失败：', error);
+    res.status(500).json({ error: '导出异常报告失败：' + error.message });
+  }
+});
+
+// 导出异常图片ZIP（按与导出接口相同的筛选逻辑）
+app.get('/api/exception-reports/export-images', async (req, res) => {
+  let connection;
+  try {
+    const { role, userId, status, type, startDate, endDate } = req.query;
+    connection = await mysql.createConnection(dbConfig);
+
+    let query = `
+      SELECT er.*
+      FROM exception_reports er
+      LEFT JOIN users u ON er.user_id = u.id
+      WHERE er.image_path IS NOT NULL AND er.image_path <> ''
+    `;
+
+    const params = [];
+
+    if (userId) {
+      const [userRows] = await connection.execute(
+        'SELECT department, role FROM users WHERE id = ?',
+        [userId]
+      );
+
+      const userInfo = userRows[0] || {};
+      const userDept = userInfo.department || null;
+      const userRole = userInfo.role || role;
+
+      // 工程部 staff：可以看到所有异常图片（不加额外限制）
+      if (userRole === 'staff' && userDept === '工程部') {
+        // no extra filter
+      } else if (userRole === 'staff') {
+        // 其他部门 staff：只能看分配给自己的异常
+        query += ' AND er.assigned_to_staff_id = ?';
+        params.push(userId);
+      } else if (userRole === 'manager' || userRole === 'admin') {
+        // 经理 / 管理员：可以看到全部异常图片（不按部门限制）
+        // no extra filter
+      } else if (userRole === 'supervisor') {
+        // 主管：按本部门限制
+        if (userDept) {
+          query += ' AND u.department = ?';
+          params.push(userDept);
+        }
+      }
+    }
+
+    if (status) {
+      query += ' AND er.status = ?';
+      params.push(status);
+    }
+
+    if (type) {
+      query += ' AND (er.modified_exception_type = ? OR er.exception_type = ?)';
+      params.push(type, type);
+    }
+
+    if (startDate) {
+      query += ' AND er.exception_start_datetime >= ?';
+      params.push(startDate);
+    }
+    if (endDate) {
+      query += ' AND er.exception_end_datetime <= ?';
+      params.push(endDate);
+    }
+
+    query += ' ORDER BY er.exception_start_datetime DESC';
+
+    const [rows] = await connection.execute(query, params);
+    await connection.end();
+
+    const fs = require('fs');
+    const zip = archiver('zip', { zlib: { level: 9 } });
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="exception_images.zip"'
+    );
+
+    zip.on('error', (err) => {
+      console.error('打包异常图片失败：', err);
+      res.status(500).end();
+    });
+
+    zip.pipe(res);
+
+    const baseDir = path.join(__dirname);
+
+    rows.forEach((row) => {
+      if (!row.image_path) return;
+      const relPath = row.image_path.startsWith('/')
+        ? row.image_path.substring(1)
+        : row.image_path;
+      const filePath = path.join(baseDir, relPath);
+      if (fs.existsSync(filePath)) {
+        const fileName = `exception_${row.id}_${path.basename(filePath)}`;
+        zip.file(filePath, { name: fileName });
+      }
+    });
+
+    zip.finalize();
+  } catch (error) {
+    if (connection) await connection.end();
+    console.error('导出异常图片失败：', error);
+    res.status(500).json({ error: '导出异常图片失败：' + error.message });
+  }
+});
+
+// ==================== 数据库备份功能 ====================
+const backupModule = require('./backup-database');
+
+// API: 手动触发数据库备份
+app.post('/api/database/backup', async (req, res) => {
+  try {
+    console.log('收到手动备份请求');
+    const backupFile = await backupModule.backupDatabase();
+    backupModule.cleanOldBackups();
+    
+    res.json({ 
+      success: true, 
+      message: '数据库备份成功',
+      backupFile: path.basename(backupFile),
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('手动备份失败:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: '数据库备份失败：' + error.message 
+    });
+  }
+});
+
+// API: 获取备份文件列表
+app.get('/api/database/backups', async (req, res) => {
+  try {
+    const backupDir = backupModule.backupConfig.backupDir;
+    
+    if (!fs.existsSync(backupDir)) {
+      return res.json({ backups: [] });
+    }
+    
+    const files = fs.readdirSync(backupDir)
+      .filter(file => file.startsWith('workshop_db_') && file.endsWith('.sql'))
+      .map(file => {
+        const filePath = path.join(backupDir, file);
+        const stats = fs.statSync(filePath);
+        return {
+          filename: file,
+          size: stats.size,
+          sizeFormatted: (stats.size / 1024).toFixed(2) + ' KB',
+          created: stats.birthtime,
+          modified: stats.mtime
+        };
+      })
+      .sort((a, b) => b.modified - a.modified); // 按修改时间降序
+    
+    res.json({ backups: files });
+  } catch (error) {
+    res.status(500).json({ error: '获取备份列表失败：' + error.message });
+  }
+});
+
+// API: 下载备份文件
+app.get('/api/database/backups/:filename', (req, res) => {
+  try {
+    const filename = req.params.filename;
+    // 安全检查：防止路径遍历攻击
+    if (filename.includes('..') || !filename.startsWith('workshop_db_') || !filename.endsWith('.sql')) {
+      return res.status(400).json({ error: '无效的文件名' });
+    }
+    
+    const filePath = path.join(backupModule.backupConfig.backupDir, filename);
+    
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: '备份文件不存在' });
+    }
+    
+    res.download(filePath, filename, (err) => {
+      if (err) {
+        console.error('下载备份文件失败:', err);
+        if (!res.headersSent) {
+          res.status(500).json({ error: '下载失败' });
+        }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: '下载备份文件失败：' + error.message });
   }
 });
 

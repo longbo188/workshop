@@ -2,7 +2,7 @@
 
 ## 功能概述
 
-成功实现了基于五个生产阶段的固定流程控制功能，确保任务按照**机加→电控→组装前段→组装后段→调试**的顺序进行，只有前一个阶段完成后才能开始下一个阶段。
+成功实现了基于五个生产阶段的固定流程控制功能，确保任务按照**机加→电控→总装前段→总装后段→调试**的顺序进行，只有前一个阶段完成后才能开始下一个阶段。
 
 ## 实现的功能
 
@@ -12,20 +12,20 @@
 - `current_phase` - 当前阶段（ENUM类型）
 - `machining_start_time` - 机加开始时间
 - `electrical_start_time` - 电控开始时间  
-- `pre_assembly_start_time` - 组装前段开始时间
-- `post_assembly_start_time` - 组装后段开始时间
+- `pre_assembly_start_time` - 总装前段开始时间
+- `post_assembly_start_time` - 总装后段开始时间
 - `debugging_start_time` - 调试开始时间
 - `machining_complete_time` - 机加完成时间
 - `electrical_complete_time` - 电控完成时间
-- `pre_assembly_complete_time` - 组装前段完成时间
-- `post_assembly_complete_time` - 组装后段完成时间
+- `pre_assembly_complete_time` - 总装前段完成时间
+- `post_assembly_complete_time` - 总装后段完成时间
 - `debugging_complete_time` - 调试完成时间
 
 #### 阶段状态字段（已存在）
 - `machining_phase` - 机加阶段状态（0/1）
 - `electrical_phase` - 电控阶段状态（0/1）
-- `pre_assembly_phase` - 组装前段阶段状态（0/1）
-- `post_assembly_phase` - 组装后段阶段状态（0/1）
+- `pre_assembly_phase` - 总装前段阶段状态（0/1）
+- `post_assembly_phase` - 总装后段阶段状态（0/1）
 - `debugging_phase` - 调试阶段状态（0/1）
 
 ### 2. 后端API实现 ✅
@@ -36,7 +36,7 @@
 - `POST /api/tasks/:taskId/phases/:phaseKey/complete` - 完成阶段
 
 #### 核心功能
-- **阶段顺序控制**：确保按机加→电控→组装前段→组装后段→调试的顺序进行
+- **阶段顺序控制**：确保按机加→电控→总装前段→总装后段→调试的顺序进行
 - **权限验证**：只有分配给该用户的任务才能操作
 - **状态管理**：自动更新当前阶段和完成状态
 - **事务处理**：确保数据一致性
@@ -60,9 +60,9 @@
 #### 阶段顺序
 1. **机加** - 第一个阶段，可以直接开始
 2. **电控** - 需要机加阶段完成后才能开始
-3. **组装前段** - 需要电控阶段完成后才能开始
-4. **组装后段** - 需要组装前段完成后才能开始
-5. **调试** - 需要组装后段完成后才能开始
+3. **总装前段** - 需要电控阶段完成后才能开始
+4. **总装后段** - 需要总装前段完成后才能开始
+5. **调试** - 需要总装后段完成后才能开始
 
 #### 控制规则
 - 只有前一个阶段完成后，下一个阶段才能开始
@@ -147,6 +147,8 @@ npm start
 3. **阶段负责人**：支持不同阶段分配给不同负责人
 4. **阶段模板**：支持不同产品类型的阶段模板
 5. **阶段报告**：生成详细的阶段完成报告
+
+
 
 
 
