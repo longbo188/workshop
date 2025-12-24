@@ -5,7 +5,7 @@
 export const environment = {
   production: false,
   // 局域网后端地址（真机调试）。Web 可改回 http://localhost:3000
-  apiBase: 'http://10.10.10.110:3000'
+  apiBase: 'http://10.10.10.60:3000'
 };
 
 /*

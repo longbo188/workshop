@@ -5,6 +5,8 @@ import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { ToastController } from '@ionic/angular';
 import { timeout, catchError } from 'rxjs/operators';
+import { Capacitor } from '@capacitor/core';
+import { environment } from '../../../environments/environment';
 import {
   IonHeader,
   IonToolbar,
@@ -1045,7 +1047,8 @@ export class EfficiencyCalcPage implements OnInit {
 
 
   private getApiBase(): string {
-    return 'http://localhost:3000';
+    const isNative = Capacitor.isNativePlatform();
+    return isNative ? (environment.apiBase.replace('localhost', '10.0.2.2')) : environment.apiBase;
   }
 
   // 获取已批准的异常报告
