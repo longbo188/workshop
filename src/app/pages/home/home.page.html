@@ -342,7 +342,7 @@
               (click)="resumeCurrentPhase(task)"
               [disabled]="isSubmitting">
               <ion-icon name="play-circle"></ion-icon>
-              继续{{ getCurrentPhaseName(task) }}阶段
+              {{ getCurrentPhaseName(task) }}继续
             </ion-button>
             
             <!-- 完成任务按钮（仅在活跃任务视图中显示，已完成任务不显示） -->

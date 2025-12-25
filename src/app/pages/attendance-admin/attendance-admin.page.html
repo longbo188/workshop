@@ -28,13 +28,13 @@
           <input type="text" [(ngModel)]="userNameFilter" placeholder="可选" class="filter-input" />
         </div>
         <div class="filter-item">
-          <ion-label>筛选车间</ion-label>
+          <ion-label>筛选工段</ion-label>
           <ion-select 
             [(ngModel)]="selectedDepartmentFilter" 
             placeholder="选择车间"
             (ionChange)="onDepartmentFilterChange()"
             class="filter-select">
-            <ion-select-option value="">全部车间</ion-select-option>
+            <ion-select-option value="">全部工段</ion-select-option>
             <ion-select-option *ngFor="let dept of availableDepartmentsFilter" [value]="dept">
               {{ dept }}
             </ion-select-option>
