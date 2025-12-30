@@ -50,10 +50,32 @@ async function backupDatabase() {
     console.log(`备份文件: ${filepath}`);
     
     // 构建 mysqldump 命令
-    // Windows XAMPP 默认路径，如果路径不同请修改
-    const mysqldumpPath = process.platform === 'win32' 
-      ? 'C:\\Program Files\\MySQL\\MySQL Server 8.0\\bin\\mysqldump.exe' // XAMPP 默认路径，根据实际情况修改
-      : 'mysqldump';
+    // 尝试多个可能的路径
+    let mysqldumpPath = 'mysqldump'; // 默认使用系统 PATH 中的 mysqldump
+    
+    if (process.platform === 'win32') {
+      // Windows 常见路径
+      const possiblePaths = [
+        'C:\\Program Files\\MySQL\\MySQL Server 8.0\\bin\\mysqldump.exe',
+        'C:\\xampp\\mysql\\bin\\mysqldump.exe',
+        'C:\\Program Files\\xampp\\mysql\\bin\\mysqldump.exe',
+        'C:\\wamp64\\bin\\mysql\\mysql8.0.27\\bin\\mysqldump.exe',
+        'mysqldump.exe' // 如果在 PATH 中
+      ];
+      
+      // 检查哪个路径存在
+      for (const testPath of possiblePaths) {
+        if (fs.existsSync(testPath)) {
+          mysqldumpPath = testPath;
+          break;
+        }
+      }
+      
+      // 如果都不存在，尝试在 PATH 中查找
+      if (!fs.existsSync(mysqldumpPath)) {
+        mysqldumpPath = 'mysqldump.exe';
+      }
+    }
     
     // 使用 --password= 格式避免交互式输入
     const command = `"${mysqldumpPath}" ` +

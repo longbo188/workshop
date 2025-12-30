@@ -1927,26 +1927,26 @@ app.get('/api/daily-attendance', async (req, res) => {
       const holidays = holidaySets.get(year) || new Set();
       const isHoliday = holidays.has(dateStr); // isOffDay === true
       
-      // 调试日志：检查特定日期
-      if (dateStr === '2025-01-02' || dateStr === '2026-01-04') {
-        console.log(`[后端调试] ${dateStr} 判断结果:`, {
-          dateStr,
-          isHoliday,
-          standardWorkHours,
-          workTimeUpdatedAt
-        });
-      }
-      
       let calculatedStandardHours = 0.00;
-      // 根据 holiday-cn 的 isOffDay 字段判断
-      if (!isHoliday) {
-        // isOffDay === false：工作日（包括调休日和普通工作日）
-        // 如果日期 >= 工作时间设置更新时间，使用标准工作时长
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6; // 0=周日, 6=周六
+
+      // 获取调休日集合（周末需要上班的情况）
+      const workingDays = workingDaySets.get(year) || new Set();
+      const isWorkingDay = workingDays.has(dateStr); // 调休日（周末需要上班）
+      
+      // 根据 holiday-cn 的 isOffDay 字段和周末判断
+      if (!isHoliday && !isWeekend) {
+        // 不是节假日，也不是周末：普通工作日
+        if (workTimeUpdatedAt && date >= new Date(workTimeUpdatedAt)) {
+          calculatedStandardHours = standardWorkHours || 0.00;
+        }
+      } else if (isWorkingDay) {
+        // 调休日（周末需要上班）：使用标准工作时长
         if (workTimeUpdatedAt && date >= new Date(workTimeUpdatedAt)) {
           calculatedStandardHours = standardWorkHours || 0.00;
         }
       } else {
-        // isOffDay === true：节假日，标准考勤时长为0
+        // 节假日或周末（非调休日）：标准考勤时长为0
         calculatedStandardHours = 0.00;
       }
       
@@ -2282,17 +2282,29 @@ app.get('/api/daily-attendance/stats', async (req, res) => {
       if (standardHours === null || standardHours === undefined) {
         const holidays = holidaySets.get(year) || new Set();
         const isHoliday = holidays.has(dateStr); // isOffDay === true
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6; // 0=周日, 6=周六
         
-        // 根据 holiday-cn 的 isOffDay 字段判断
-        if (!isHoliday) {
-          // isOffDay === false：工作日
+        // 获取调休日集合（周末需要上班的情况）
+        const workingDays = workingDaySets.get(year) || new Set();
+        const isWorkingDay = workingDays.has(dateStr); // 调休日（周末需要上班）
+        
+        // 根据 holiday-cn 的 isOffDay 字段和周末判断
+        if (!isHoliday && !isWeekend) {
+          // 不是节假日，也不是周末：普通工作日
+          if (workTimeUpdatedAt && date >= new Date(workTimeUpdatedAt)) {
+            standardHours = standardWorkHours || 0.00;
+          } else {
+            standardHours = 0.00;
+          }
+        } else if (isWorkingDay) {
+          // 调休日（周末需要上班）：使用标准工作时长
           if (workTimeUpdatedAt && date >= new Date(workTimeUpdatedAt)) {
             standardHours = standardWorkHours || 0.00;
           } else {
             standardHours = 0.00;
           }
         } else {
-          // isOffDay === true：节假日
+          // 节假日或周末（非调休日）：标准考勤时长为0
           standardHours = 0.00;
         }
       }
@@ -4123,12 +4135,30 @@ app.post('/api/exception-reports', upload.any(), async (req, res) => {
       return res.status(400).json({ error: '结束时间必须晚于开始时间' });
     }
     
-    // 插入异常报告
-    const [result] = await connection.execute(`
-      INSERT INTO exception_reports (
-        task_id, user_id, exception_type, description, exception_start_datetime, exception_end_datetime, approved_by, status, image_path
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
-    `, [taskId, userId, exceptionType, description, startDateTime, endDateTime, approverId, imagePath]);
+    // 获取阶段信息（如果前端传入了phase字段）
+    const phase = req.body.phase || null;
+    
+    // 插入异常报告（如果phase字段存在则包含它）
+    let result;
+    try {
+      // 尝试包含 phase 字段的插入
+      [result] = await connection.execute(`
+        INSERT INTO exception_reports (
+          task_id, phase, user_id, exception_type, description, exception_start_datetime, exception_end_datetime, approved_by, status, image_path
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+      `, [taskId, phase, userId, exceptionType, description, startDateTime, endDateTime, approverId, imagePath]);
+    } catch (phaseError) {
+      // 如果 phase 字段不存在，使用不包含 phase 的插入语句（兼容旧数据库）
+      if (phaseError.code === 'ER_BAD_FIELD_ERROR' || phaseError.message.includes('Unknown column') || phaseError.message.includes('phase')) {
+        [result] = await connection.execute(`
+          INSERT INTO exception_reports (
+            task_id, user_id, exception_type, description, exception_start_datetime, exception_end_datetime, approved_by, status, image_path
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+        `, [taskId, userId, exceptionType, description, startDateTime, endDateTime, approverId, imagePath]);
+      } else {
+        throw phaseError;
+      }
+    }
     
     await connection.end();
     
@@ -4978,6 +5008,30 @@ app.get('/api/database/backups/:filename', (req, res) => {
 const PORT = 3000;
 const HOST = '0.0.0.0'; // 监听所有网卡，允许局域网访问
 
+// 启动自动备份服务
+const cron = require('node-cron');
+const schedule = process.env.BACKUP_SCHEDULE || '0 2 * * *'; // 每天凌晨 2:00
+
+cron.schedule(schedule, async () => {
+  const timestamp = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+  console.log(`\n[${timestamp}] 开始定时备份...`);
+  try {
+    const backupFile = await backupModule.backupDatabase();
+    backupModule.cleanOldBackups();
+    console.log(`[${timestamp}] ✓ 定时备份完成: ${backupFile}\n`);
+  } catch (error) {
+    console.error(`[${timestamp}] ✗ 定时备份失败: ${error.message}\n`);
+  }
+});
+
+console.log('========================================');
+console.log('数据库自动备份服务已启动');
+console.log('========================================');
+console.log(`备份计划: ${schedule} (每天凌晨 2:00)`);
+console.log(`备份目录: ${backupModule.backupConfig.backupDir}`);
+console.log(`保留备份数: ${backupModule.backupConfig.maxBackups}`);
+console.log('========================================\n');
+
 app.listen(PORT, HOST, () => {
   try {
     const os = require('os');
@@ -5171,8 +5225,8 @@ async function getHolidaysFromGitHub(year) {
   // 检查缓存
   if (holidayCache.has(year)) {
     const cached = holidayCache.get(year);
-    // 缓存24小时
-    if (Date.now() - cached.timestamp < 24 * 60 * 60 * 1000) {
+    // 缓存30天（一个月）
+    if (Date.now() - cached.timestamp < 30 * 24 * 60 * 60 * 1000) {
       return cached.data;
     }
   }
@@ -5209,20 +5263,43 @@ async function getHolidaysFromGitHub(year) {
             const holidays = new Set(); // 非工作日（isOffDay === true）
             const workingDays = new Set(); // 调休日（isWorkingDay === true，需要上班）
             
+            // 添加统计变量
+            let isOffDayTrueCount = 0;  // isOffDay === true 的数量
+            let isOffDayFalseCount = 0; // isOffDay === false 的数量
+            let isOffDayUndefinedCount = 0; // isOffDay 为 undefined 的数量
+            let isWorkingDayTrueCount = 0; // isWorkingDay === true 的数量
+            let totalDays = 0; // 总条目数
+            
             if (response?.days) {
               const daysArray = Array.isArray(response.days) 
                 ? response.days 
                 : Object.values(response.days);
               
+              totalDays = daysArray.length;
+              
               daysArray.forEach((item) => {
                 const dateStr = item.date || '';
                 if (dateStr && dateStr.length > 0) {
-                  // 存储非工作日（节假日）
+                  // 统计 isOffDay
                   if (item.isOffDay === true) {
+                    isOffDayTrueCount++;
                     holidays.add(dateStr);
+                  } else if (item.isOffDay === false) {
+                    isOffDayFalseCount++;
+                    // 如果 isOffDay=false 且是周末，判断为调休日
+                    const date = new Date(dateStr);
+                    const dayOfWeek = date.getDay(); // 0=周日, 6=周六
+                    if (dayOfWeek === 0 || dayOfWeek === 6) {
+                      // 周末且 isOffDay=false，说明是调休日（周末需要上班）
+                      workingDays.add(dateStr);
+                    }
+                  } else {
+                    isOffDayUndefinedCount++;
                   }
-                  // 存储调休日（需要上班的工作日）
+                  
+                  // 统计 isWorkingDay
                   if (item.isWorkingDay === true) {
+                    isWorkingDayTrueCount++;
                     workingDays.add(dateStr);
                   }
                 }
@@ -5240,17 +5317,16 @@ async function getHolidaysFromGitHub(year) {
               timestamp: Date.now()
             });
             
-            console.log(`[后端] 已从GitHub加载 ${holidays.size} 个节假日，${workingDays.size} 个调休日（${year}年）`);
-            
-            // 调试：检查2025年1月1-3日
-            if (year === 2025) {
-              const janDates = ['2025-01-01', '2025-01-02', '2025-01-03'];
-              janDates.forEach(d => {
-                const isHoliday = holidays.has(d);
-                const isWorkingDay = workingDays.has(d);
-                console.log(`[后端调试] ${d}: 节假日=${isHoliday}, 调休日=${isWorkingDay}`);
-              });
-            }
+            // 输出详细统计信息
+            console.log(`[后端] 已从GitHub加载 ${year}年数据统计:`, {
+              总条目数: totalDays,
+              节假日数量: holidays.size,
+              'isOffDay=true': isOffDayTrueCount,
+              'isOffDay=false': isOffDayFalseCount,
+              'isOffDay=undefined': isOffDayUndefinedCount,
+              调休日数量: workingDays.size,
+              'isWorkingDay=true': isWorkingDayTrueCount
+            });
             
             resolve(result);
           } catch (error) {

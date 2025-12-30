@@ -1067,10 +1067,15 @@ export class EfficiencyCalcPage implements OnInit {
       if (response.success && response.data) {
         // 转换数据格式以匹配ExceptionReport接口
         return response.data.map((item: any) => {
-          // 如果有任务信息，使用更准确的阶段确定逻辑
-          const phase = task ? 
-            this.determinePhaseFromExceptionTime(item.exception_start_datetime, item.exception_end_datetime, task) :
-            this.determinePhaseFromTask(item.task_id);
+          // 优先使用数据库中的 phase 字段（哪个阶段发生的异常，就使用哪个阶段）
+          let phase = item.phase;
+          
+          // 如果数据库中没有 phase 字段，则根据异常时间段和任务阶段时间来确定（兼容旧数据）
+          if (!phase && task) {
+            phase = this.determinePhaseFromExceptionTime(item.exception_start_datetime, item.exception_end_datetime, task);
+          } else if (!phase) {
+            phase = this.determinePhaseFromTask(item.task_id);
+          }
             
           return {
             id: item.id,
@@ -1109,11 +1114,14 @@ export class EfficiencyCalcPage implements OnInit {
   }
 
   // 根据异常时间段和任务阶段时间确定异常属于哪个阶段
+  // 选择重叠时间最长的阶段，而不是第一个匹配的阶段
   private determinePhaseFromExceptionTime(exceptionStart: string, exceptionEnd: string, task: Task): string {
     if (!exceptionStart || !exceptionEnd) return 'machining';
     
     const exceptionStartTime = new Date(exceptionStart).getTime();
     const exceptionEndTime = new Date(exceptionEnd).getTime();
+    
+    if (isNaN(exceptionStartTime) || isNaN(exceptionEndTime)) return 'machining';
     
     // 检查各个阶段的时间范围
     const phases = [
@@ -1124,20 +1132,30 @@ export class EfficiencyCalcPage implements OnInit {
       { name: 'debugging', start: task.debugging_start_time, end: task.debugging_complete_time }
     ];
     
+    let maxOverlap = 0;
+    let matchedPhase = 'machining'; // 默认值
+    
+    // 计算异常时间段与每个阶段的重叠时长，选择重叠最长的阶段
     for (const phase of phases) {
       if (phase.start && phase.end) {
         const phaseStartTime = new Date(phase.start).getTime();
         const phaseEndTime = new Date(phase.end).getTime();
         
-        // 如果异常时间段与阶段时间段有重叠，则属于该阶段
-        if (exceptionStartTime < phaseEndTime && exceptionEndTime > phaseStartTime) {
-          return phase.name;
+        if (isNaN(phaseStartTime) || isNaN(phaseEndTime)) continue;
+        
+        // 计算重叠时长
+        const overlapStart = Math.max(exceptionStartTime, phaseStartTime);
+        const overlapEnd = Math.min(exceptionEndTime, phaseEndTime);
+        const overlap = Math.max(0, overlapEnd - overlapStart);
+        
+        if (overlap > maxOverlap) {
+          maxOverlap = overlap;
+          matchedPhase = phase.name;
         }
       }
     }
     
-    // 如果没有找到匹配的阶段，返回默认阶段
-    return 'machining';
+    return matchedPhase;
   }
 
   // 计算异常持续时间（小时）
@@ -1718,10 +1736,75 @@ export class EfficiencyCalcPage implements OnInit {
             const rawExceptionReports = exceptionResponse || [];
             
             // 确保异常报告有正确的phase字段
-            const exceptionReports: ExceptionReport[] = rawExceptionReports.map((report: any) => ({
-              ...report,
-              phase: report.phase || this.selectedPhase // 如果没有phase字段，使用当前选择的阶段
-            }));
+            // 直接使用数据库中的 phase 字段（哪个阶段发生的异常，就使用哪个阶段）
+            const exceptionReports: ExceptionReport[] = rawExceptionReports.map((report: any) => {
+              // 严格使用数据库中的 phase 字段，不要覆盖
+              // 如果数据库中有phase字段（非null、非undefined、非空字符串），直接使用，不要做任何fallback
+              let phase: string | null | undefined = report.phase;
+              
+              // 调试日志：检查phase字段
+              if (task.id === 128) {
+                console.log(`任务128异常报告phase字段检查 [异常ID: ${report.id}]:`, {
+                  dbPhase: report.phase,
+                  dbPhaseType: typeof report.phase,
+                  dbPhaseIsNull: report.phase === null,
+                  dbPhaseIsUndefined: report.phase === undefined,
+                  dbPhaseIsEmpty: report.phase === '',
+                  dbPhaseIsFalsy: !report.phase,
+                  selectedPhase: this.selectedPhase,
+                  willUseFallback: (phase === null || phase === undefined || phase === '')
+                });
+              }
+              
+              // 只有在phase确实为空（null、undefined、空字符串）时，才使用fallback逻辑
+              // 如果数据库中有phase字段，直接使用，不要覆盖
+              if (phase === null || phase === undefined || phase === '') {
+                // 尝试通过时间段判断阶段（兼容旧数据）
+                if (task) {
+                  const exceptionStart = report.exception_start_datetime || report.start_time;
+                  const exceptionEnd = report.exception_end_datetime || report.end_time;
+                  if (exceptionStart && exceptionEnd) {
+                    phase = this.determinePhaseFromExceptionTime(exceptionStart, exceptionEnd, task);
+                    
+                    if (task.id === 128) {
+                      console.log(`⚠️ 任务128异常报告通过时间段判断阶段 [异常ID: ${report.id}]:`, {
+                        determinedPhase: phase,
+                        exceptionStart: exceptionStart,
+                        exceptionEnd: exceptionEnd,
+                        warning: '数据库中没有phase字段，通过时间段判断'
+                      });
+                    }
+                  }
+                }
+                
+                // 如果通过时间段也无法判断，使用当前选择的阶段作为默认值（最后的fallback）
+                if (phase === null || phase === undefined || phase === '') {
+                  phase = this.selectedPhase;
+                  
+                  if (task.id === 128) {
+                    console.log(`⚠️ 任务128异常报告使用selectedPhase作为默认值 [异常ID: ${report.id}]:`, {
+                      selectedPhase: this.selectedPhase,
+                      finalPhase: phase,
+                      warning: '数据库中没有phase字段且无法通过时间段判断，使用了当前选择的阶段作为默认值'
+                    });
+                  }
+                }
+              } else {
+                // 数据库中有phase字段，直接使用，不要覆盖
+                if (task.id === 128) {
+                  console.log(`✓ 任务128异常报告使用数据库中的phase字段 [异常ID: ${report.id}]:`, {
+                    dbPhase: report.phase,
+                    finalPhase: phase,
+                    note: '直接使用数据库中的phase字段，未做任何修改'
+                  });
+                }
+              }
+              
+              return {
+                ...report,
+                phase: phase
+              };
+            });
             
             const allAttendanceRecords: any[] = attendanceResponse || [];
             
@@ -1865,8 +1948,19 @@ export class EfficiencyCalcPage implements OnInit {
       }
     }
     
-    // 合并异常报告（原有的 + 已批准的）
-    const allExceptionReports = [...exceptionReports, ...approvedExceptionReports];
+    // 合并异常报告（原有的 + 已批准的），去重避免重复计算
+    const exceptionMap = new Map<number, ExceptionReport>();
+    // 先添加原有的异常报告
+    exceptionReports.forEach(er => {
+      exceptionMap.set(er.id, er);
+    });
+    // 再添加已批准的异常报告（如果已存在则跳过，避免重复）
+    approvedExceptionReports.forEach(er => {
+      if (!exceptionMap.has(er.id)) {
+        exceptionMap.set(er.id, er);
+      }
+    });
+    const allExceptionReports = Array.from(exceptionMap.values());
     
     if (!phaseStartTime || !phaseEndTime) {
       console.log(`任务 ${task.id} 的 ${phase} 阶段缺少时间数据，跳过计算`);
@@ -1948,6 +2042,9 @@ export class EfficiencyCalcPage implements OnInit {
     const workTimeSettings = await this.loadWorkTimeSettings();
     if (!workTimeSettings) {
       console.error('无法加载工作时间设置，跳过效率计算');
+      // 只返回发生在当前阶段的异常报告
+      const phaseExceptionReports = allExceptionReports.filter(ex => ex.phase === phase);
+      
       return [{
         task: task,
         phase: phase,
@@ -1958,7 +2055,7 @@ export class EfficiencyCalcPage implements OnInit {
         hasAssistTasks: false,
         efficiency: 0,
         workReports: workReports,
-        exceptionReports: allExceptionReports,
+        exceptionReports: phaseExceptionReports, // 只包含当前阶段的异常
         attendanceRecords: attendanceRecords,
         phaseStartTime: phaseStartTime,
         phaseEndTime: phaseEndTime,
@@ -2060,23 +2157,54 @@ export class EfficiencyCalcPage implements OnInit {
       });
     }
     
-    allExceptionReports.forEach(exception => {
+    // 只添加发生在当前阶段的异常报告
+    // 先过滤出只属于当前阶段的异常报告
+    const normalizedPhase = phase ? String(phase).trim() : '';
+    const phaseExceptionReports = allExceptionReports.filter(exception => {
+      const exceptionPhase = exception.phase;
+      const normalizedExceptionPhase = exceptionPhase ? String(exceptionPhase).trim() : '';
+      return normalizedExceptionPhase === normalizedPhase;
+    });
+    
+    // 调试日志：显示过滤结果
+    if (task.id === 1493 || task.id === 128) {
+      console.log(`异常报告阶段过滤 [任务${task.id}, 阶段${phase}]:`, {
+        totalExceptions: allExceptionReports.length,
+        phaseExceptions: phaseExceptionReports.length,
+        allExceptionPhases: allExceptionReports.map(ex => ({
+          id: ex.id,
+          phase: ex.phase,
+          phaseType: typeof ex.phase,
+          normalized: ex.phase ? String(ex.phase).trim() : ''
+        })),
+        targetPhase: phase,
+        normalizedTargetPhase: normalizedPhase,
+        filteredExceptionIds: phaseExceptionReports.map(ex => ex.id)
+      });
+    }
+    
+    // 只处理属于当前阶段的异常报告
+    phaseExceptionReports.forEach(exception => {
       const exceptionPhase = exception.phase;
       
-      if (task.id === 1493) {
-        console.log(`任务1493异常报告检查:`, {
-          exceptionId: exception.id,
-          exceptionPhase,
-          targetPhase: phase,
-          matches: exceptionPhase === phase
-        });
-      }
-      
-      if (exceptionPhase === phase && efficiencyMap.has(phase)) {
+      if (efficiencyMap.has(phase)) {
         const efficiency = efficiencyMap.get(phase)!;
-        efficiency.exceptionReports.push(exception);
+        // 检查是否已经添加过（避免重复）
+        const alreadyAdded = efficiency.exceptionReports.some(ex => ex.id === exception.id);
+        if (!alreadyAdded) {
+          efficiency.exceptionReports.push(exception);
+          
+          // 调试日志
+          if (task.id === 1493 || task.id === 128) {
+            console.log(`✓ 异常报告已添加到阶段${phase}:`, {
+              exceptionId: exception.id,
+              exceptionPhase: exceptionPhase,
+              targetPhase: phase
+            });
+          }
+        }
         
-        // 计算异常时间段与工作时间的重叠时长
+        // 计算异常时间段与工作时间的重叠时长（只计算匹配阶段的异常）
         const startTime = exception.start_time || exception.exception_start_datetime;
         const endTime = exception.end_time || exception.exception_end_datetime;
         let durationHours = 0;
@@ -2096,12 +2224,12 @@ export class EfficiencyCalcPage implements OnInit {
           durationHours = exception.duration_hours;
         } else if (exception.duration_hours) {
           // 如果duration_hours是字符串，解析为数字
-          durationHours = parseFloat(exception.duration_hours) || 0;
+          durationHours = parseFloat(String(exception.duration_hours)) || 0;
         }
         efficiency.exceptionHours += durationHours;
         
-        if (task.id === 1493) {
-          console.log(`任务1493异常报告已添加:`, {
+        if (task.id === 1493 || task.id === 128) {
+          console.log(`任务${task.id}异常报告已添加:`, {
             exceptionId: exception.id,
             originalDurationHours: exception.duration_hours,
             startTime: exception.start_time || exception.exception_start_datetime,
@@ -2279,12 +2407,18 @@ export class EfficiencyCalcPage implements OnInit {
     });
     
     // 添加异常时间
+    // 只添加发生在目标阶段的异常报告
     exceptionReports.forEach(exception => {
       const exceptionPhase = exception.phase;
       
+      // 严格匹配：只有异常报告的阶段与目标阶段完全一致时，才添加到该阶段的效率数据中
       if (exceptionPhase === targetPhase && efficiencyMap.has(targetPhase)) {
         const efficiency = efficiencyMap.get(targetPhase)!;
-        efficiency.exceptionReports.push(exception);
+        // 检查是否已经添加过（避免重复）
+        const alreadyAdded = efficiency.exceptionReports.some(ex => ex.id === exception.id);
+        if (!alreadyAdded) {
+          efficiency.exceptionReports.push(exception);
+        }
         
         // 计算异常时长
         const startTime = exception.start_time || exception.exception_start_datetime;
@@ -2299,7 +2433,7 @@ export class EfficiencyCalcPage implements OnInit {
           durationHours = exception.duration_hours;
         } else if (exception.duration_hours) {
           // 如果duration_hours是字符串，解析为数字
-          durationHours = parseFloat(exception.duration_hours) || 0;
+          durationHours = parseFloat(String(exception.duration_hours)) || 0;
         }
         efficiency.exceptionHours += durationHours;
       }

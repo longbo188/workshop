@@ -506,7 +506,10 @@
                 异常记录数: {{ data.exceptionReports.length }}条
               </p>
               <div *ngIf="data.exceptionReports.length > 0" class="exception-breakdown">
-                <div class="exception-breakdown-item" *ngFor="let exception of data.exceptionReports">
+                <div class="exception-breakdown-item" *ngFor="let exception of data.exceptionReports" style="border-left: 3px solid #3880ff; padding-left: 8px; margin-bottom: 8px;">
+                  <div style="font-size: 0.85em; color: #666; margin-bottom: 4px;">
+                    异常阶段: <strong>{{ exception.phase || '未设置' }}</strong> | 计算阶段: <strong>{{ data.phase }}</strong>
+                  </div>
                   <ion-chip color="danger" size="small">
                     {{ exception.user_name }}: {{ (exception.duration_hours || 0).toFixed(2) }}h ({{ exception.exception_type }})
                   </ion-chip>
@@ -594,6 +597,10 @@
                   {{ formatTime(exception.start_time || exception.exception_start_datetime || null) }} 
                   → 
                   {{ formatTime(exception.end_time || exception.exception_end_datetime || null) }}
+                </p>
+                <p class="exception-phase" style="color: #666; font-size: 0.9em; margin-top: 4px;">
+                  <ion-icon name="information-circle-outline"></ion-icon>
+                  阶段: <strong>{{ exception.phase || '未设置' }}</strong> | 当前计算阶段: <strong>{{ data.phase }}</strong>
                 </p>
                 <p class="exception-total">
                   <ion-icon name="warning-outline"></ion-icon>

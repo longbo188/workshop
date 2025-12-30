@@ -1674,6 +1674,9 @@ export class HomePage implements OnInit, OnDestroy {
     this.isSubmitting = true;
 
     try {
+      // 获取当前任务的阶段（哪个阶段发生的异常，就记录到哪个阶段）
+      const currentPhase = this.getTaskOperatePhase(this.selectedTaskForException) || this.selectedTaskForException.current_phase || 'machining';
+      
       // 创建FormData以支持文件上传
       const formData = new FormData();
       formData.append('taskId', this.selectedTaskForException.id.toString());
@@ -1683,6 +1686,7 @@ export class HomePage implements OnInit, OnDestroy {
       formData.append('exceptionStartDateTime', this.exceptionStartDateTime);
       formData.append('exceptionEndDateTime', this.exceptionEndDateTime);
       formData.append('approverId', this.selectedApproverId!.toString());
+      formData.append('phase', currentPhase); // 添加阶段信息
       
       if (this.selectedImageFile) {
         formData.append('image', this.selectedImageFile);
