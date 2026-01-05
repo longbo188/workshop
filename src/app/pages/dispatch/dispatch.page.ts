@@ -205,9 +205,10 @@ export class DispatchPage implements OnInit {
       // 清除所有缓存，因为任务数据已更新
       this.clearAllCache();
       
-      // 获取部门列表（去重并按指定顺序排序）
+      // 获取部门列表（只从worker角色的用户中提取，去重并按指定顺序排序）
       const preferredOrder = ['机加', '电控', '总装前段', '总装后段', '调试'];
-      this.departments = [...new Set(this.users
+      const workerUsers = this.users.filter(u => u.role === 'worker');
+      this.departments = [...new Set(workerUsers
         .map(user => user.department)
         .filter(dept => dept && dept.trim() !== '')
         .filter(dept => dept !== 'IT部门' && dept !== '生产部')
@@ -1490,6 +1491,31 @@ export class DispatchPage implements OnInit {
       // 先为所有用户创建条目
       let employeeData = workerUsers.map(user => {
         const tasks = employeeTasks.get(user.id) || [];
+        
+        // 对任务进行排序：按拖动顺序（*_order字段）排序
+        // 先分配的放上面（order值小的在上），后分配的放下面（order值大的在下）
+        tasks.sort((a, b) => {
+          // 获取任务的阶段key（从assignedPhase中文名转换为key）
+          const getPhaseKey = (phaseCn: string): string => {
+            const phaseMap: any = { '机加': 'machining', '电控': 'electrical', '总装前段': 'pre_assembly', '总装后段': 'post_assembly', '调试': 'debugging' };
+            return phaseMap[phaseCn] || 'machining';
+          };
+          
+          // 获取任务对应的order字段值
+          const getTaskOrder = (task: any): number => {
+            const phaseKey = getPhaseKey(task.assignedPhase || '');
+            const orderField = `${phaseKey}_order`;
+            const orderValue = task[orderField];
+            // 如果没有order值，返回999（排到最后）
+            return orderValue !== null && orderValue !== undefined ? Number(orderValue) : 999;
+          };
+          
+          const orderA = getTaskOrder(a);
+          const orderB = getTaskOrder(b);
+          // 升序排序：order值小的（先分配的/先拖动的）在上
+          return orderA - orderB;
+        });
+        
         return {
           id: user.id,
           name: user.name,  // 使用中文名称
