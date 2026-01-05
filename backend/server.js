@@ -4123,12 +4123,24 @@ app.post('/api/exception-reports', upload.any(), async (req, res) => {
       return res.status(400).json({ error: '结束时间必须晚于开始时间' });
     }
     
+    // 自动生成标题：从描述中提取或使用异常类型
+    let title = '';
+    if (description && description.trim().length > 0) {
+      // 从描述中提取标题（前50个字符）
+      title = description.length > 50 
+        ? description.substring(0, 50) + '...' 
+        : description;
+    } else {
+      // 如果描述为空，使用异常类型作为标题
+      title = `${exceptionType}异常报告`;
+    }
+    
     // 插入异常报告
     const [result] = await connection.execute(`
       INSERT INTO exception_reports (
-        task_id, user_id, exception_type, description, exception_start_datetime, exception_end_datetime, approved_by, status, image_path
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
-    `, [taskId, userId, exceptionType, description, startDateTime, endDateTime, approverId, imagePath]);
+        task_id, user_id, exception_type, title, description, exception_start_datetime, exception_end_datetime, approved_by, status, image_path
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+    `, [taskId, userId, exceptionType, title, description, startDateTime, endDateTime, approverId, imagePath]);
     
     await connection.end();
     

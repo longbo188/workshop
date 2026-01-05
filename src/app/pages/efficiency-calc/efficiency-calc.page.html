@@ -60,6 +60,13 @@
               <ion-icon name="download-outline" slot="start"></ion-icon>
               导出效率数据
             </ion-button>
+            <ion-button 
+              *ngIf="currentUser?.role === 'admin'" 
+              color="warning" 
+              (click)="clearConfirmedTasks()">
+              <ion-icon name="trash-outline" slot="start"></ion-icon>
+              清除已确认任务
+            </ion-button>
           </div>
         </div>
       </div>
@@ -230,9 +237,12 @@
             <col class="col-phase">
             <col class="col-assignee">
             <col class="col-standard-hours">
+            <col class="col-effective-hours">
             <col class="col-actual-hours">
+            <col class="col-completion-date">
             <col class="col-efficiency">
             <col class="col-exception">
+            <col class="col-exception-hours">
             <col class="col-ops">
           </colgroup>
           <thead>
@@ -242,10 +252,12 @@
               <th>阶段</th>
               <th>负责人</th>
               <th>标准工时(h)</th>
+              <th>有效工时(h)</th>
               <th>实际工时(h)</th>
               <th>完工日期</th>
               <th>效率</th>
               <th>异常</th>
+              <th>异常时间(h)</th>
               <th>操作</th>
             </tr>
             <tr class="filter-row">
@@ -277,6 +289,7 @@
                   [(ngModel)]="tableAssigneeFilter" 
                   (ngModelChange)="applyTableFilters()">
               </th>
+              <th></th>
               <th></th>
               <th></th>
               <th>
@@ -315,10 +328,11 @@
                 </select>
               </th>
               <th></th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
-            <tr *ngFor="let data of filteredEfficiencyData; let i = index">
+            <tr *ngFor="let data of paginatedEfficiencyData; let i = index">
               <td>{{ i + 1 }}</td>
               <td>{{ data.task.name }}</td>
               <td>{{ getPhaseDisplayName(data.phase) }}</td>
@@ -332,6 +346,12 @@
                   <ion-icon name="time-outline"></ion-icon>
                   <ion-label>{{ data.standardHours }}h</ion-label>
                   <ion-icon *ngIf="data.task.is_non_standard === 1" name="create-outline" style="margin-left: 4px;"></ion-icon>
+                </ion-chip>
+              </td>
+              <td>
+                <ion-chip color="success" class="metric-chip">
+                  <ion-icon name="checkmark-circle-outline"></ion-icon>
+                  <ion-label>{{ getEffectiveHours(data).toFixed(1) }}h</ion-label>
                 </ion-chip>
               </td>
               <td>
@@ -360,6 +380,15 @@
                 <span *ngIf="data.exceptionReports.length === 0">-</span>
               </td>
               <td>
+                <ion-chip *ngIf="(data.exceptionHours || 0) > 0" 
+                          color="warning" 
+                          class="metric-chip">
+                  <ion-icon name="time-outline"></ion-icon>
+                  <ion-label>{{ (data.exceptionHours || 0).toFixed(1) }}h</ion-label>
+                </ion-chip>
+                <span *ngIf="(data.exceptionHours || 0) === 0">-</span>
+              </td>
+              <td>
                 <ion-button 
                   fill="outline" 
                   size="small" 
@@ -371,12 +400,63 @@
               </td>
             </tr>
             <tr *ngIf="filteredEfficiencyData.length === 0">
-              <td class="table-empty-row" colspan="10">
+              <td class="table-empty-row" colspan="12">
                 暂无符合条件的效率明细
               </td>
             </tr>
           </tbody>
         </table>
+      </div>
+      
+      <!-- 分页控件 -->
+      <div class="pagination-container" *ngIf="filteredEfficiencyData.length > 0">
+        <div class="pagination-info">
+          <span>共 {{ filteredEfficiencyData.length }} 条记录</span>
+          <span class="pagination-separator">|</span>
+          <span>每页显示</span>
+          <select 
+            [(ngModel)]="pageSize" 
+            (ngModelChange)="onPageSizeChange()"
+            class="page-size-select">
+            <option [value]="20">20</option>
+            <option [value]="50">50</option>
+            <option [value]="100">100</option>
+          </select>
+          <span>条</span>
+        </div>
+        <div class="pagination-controls">
+          <ion-button 
+            fill="outline" 
+            size="small" 
+            (click)="goToPage(1)"
+            [disabled]="currentPage === 1">
+            首页
+          </ion-button>
+          <ion-button 
+            fill="outline" 
+            size="small" 
+            (click)="previousPage()"
+            [disabled]="currentPage === 1">
+            上一页
+          </ion-button>
+          <span class="page-info">
+            第 {{ currentPage }} / {{ getTotalPages() }} 页
+          </span>
+          <ion-button 
+            fill="outline" 
+            size="small" 
+            (click)="nextPage()"
+            [disabled]="currentPage >= getTotalPages()">
+            下一页
+          </ion-button>
+          <ion-button 
+            fill="outline" 
+            size="small" 
+            (click)="goToPage(getTotalPages())"
+            [disabled]="currentPage >= getTotalPages()">
+            末页
+          </ion-button>
+        </div>
       </div>
     </ion-card-content>
   </ion-card>

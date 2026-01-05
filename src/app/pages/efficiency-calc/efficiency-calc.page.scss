@@ -347,7 +347,15 @@
   width: 120px;
 }
 
+.col-effective-hours {
+  width: 120px;
+}
+
 .col-actual-hours {
+  width: 120px;
+}
+
+.col-completion-date {
   width: 120px;
 }
 
@@ -359,8 +367,12 @@
   width: 100px;
 }
 
-.col-ops {
+.col-exception-hours {
   width: 150px;
+}
+
+.col-ops {
+  width: 200px;
 }
 
 // 表格筛选样式
@@ -1245,6 +1257,77 @@ ion-note {
 .work-report-notes ion-icon {
   color: var(--ion-color-success);
   font-size: 1em;
+}
+
+// 分页控件样式
+.pagination-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 16px;
+  padding: 12px;
+  background-color: var(--ion-color-light);
+  border-radius: 8px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.pagination-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--ion-color-dark);
+}
+
+.pagination-separator {
+  margin: 0 4px;
+  color: var(--ion-color-medium);
+}
+
+.page-size-select {
+  padding: 4px 8px;
+  border: 1px solid var(--ion-color-medium);
+  border-radius: 4px;
+  background-color: var(--ion-color-light);
+  font-size: 14px;
+  cursor: pointer;
+  outline: none;
+  
+  &:hover {
+    border-color: var(--ion-color-primary);
+  }
+  
+  &:focus {
+    border-color: var(--ion-color-primary);
+  }
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page-info {
+  margin: 0 8px;
+  font-size: 14px;
+  color: var(--ion-color-dark);
+  min-width: 80px;
+  text-align: center;
+}
+
+@media (max-width: 768px) {
+  .pagination-container {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .pagination-info,
+  .pagination-controls {
+    justify-content: center;
+    width: 100%;
+  }
 }
 
 
