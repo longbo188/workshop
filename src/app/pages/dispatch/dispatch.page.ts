@@ -2286,13 +2286,25 @@ export class DispatchPage implements OnInit {
       // 为每个任务更新紧急顺序（数字越小越紧急）
       const orderUpdates = employee.tasks.map((task: any, index: number) => {
         // 构造 update data，包括紧急顺序
-        const phase = this.getTaskPhase(task);
         const updateData: any = {};
-        
+
+        // 优先根据可视化里的 assignedPhase 决定具体阶段
+        const phaseMap: any = {
+          '机加': 'machining',
+          '电控': 'electrical',
+          '总装前段': 'pre_assembly',
+          '总装后段': 'post_assembly',
+          '调试': 'debugging'
+        };
+
+        const phaseKeyFromAssigned = task.assignedPhase ? phaseMap[task.assignedPhase] : null;
+        // 如果 assignedPhase 没有匹配到（理论上不应发生），退回到根据负责人推断阶段
+        const phase = phaseKeyFromAssigned || this.getTaskPhase(task);
+
         // 根据阶段设置紧急顺序字段
         const orderField = `${phase}_order`;
         updateData[orderField] = index;
-        
+
         return this.http.put(`${environment.apiBase}/api/tasks/${task.id}`, updateData).toPromise();
       });
       

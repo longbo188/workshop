@@ -53,3 +53,4 @@ SELECT status, COUNT(*) as count FROM tasks GROUP BY status;
 
 
 
+

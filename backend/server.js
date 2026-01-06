@@ -1183,44 +1183,85 @@ app.post('/api/tasks/assign', async (req, res) => {
 
       // 更新阶段分配 - 支持所有阶段
       try {
+        // 计算该用户在对应阶段下一个可用的顺序号（*_order = 当前最大 + 1）
+        let nextOrder = null;
+        if (newAssigned !== null) {
+          let orderField = null;
+          let assigneeField = null;
+          if (phaseKey === 'machining') {
+            orderField = 'machining_order';
+            assigneeField = 'machining_assignee';
+          } else if (phaseKey === 'electrical') {
+            orderField = 'electrical_order';
+            assigneeField = 'electrical_assignee';
+          } else if (phaseKey === 'pre_assembly') {
+            orderField = 'pre_assembly_order';
+            assigneeField = 'pre_assembly_assignee';
+          } else if (phaseKey === 'post_assembly') {
+            orderField = 'post_assembly_order';
+            assigneeField = 'post_assembly_assignee';
+          } else if (phaseKey === 'debugging') {
+            orderField = 'debugging_order';
+            assigneeField = 'debugging_assignee';
+          }
+
+          if (orderField && assigneeField) {
+            try {
+              const [orderRows] = await connection.execute(
+                `SELECT COALESCE(MAX(${orderField}), -1) AS maxOrder FROM tasks WHERE ${assigneeField} = ?`,
+                [newAssigned]
+              );
+              const maxOrder = (orderRows && orderRows[0] && orderRows[0].maxOrder != null) ? Number(orderRows[0].maxOrder) : -1;
+              nextOrder = maxOrder + 1;
+            } catch (orderErr) {
+              console.error('计算任务顺序失败，将使用 NULL 作为顺序:', orderErr);
+              nextOrder = null;
+            }
+          }
+        }
+
         if (phaseKey === 'machining') {
           // 机加分配：如果机加未完成，设置为机加阶段（允许与电控并行）
           await connection.execute(`
             UPDATE tasks SET 
               machining_assignee = ?,
+              machining_order = ?,
               current_phase = CASE 
                 WHEN machining_phase = 0 THEN 'machining'
                 ELSE current_phase
               END
             WHERE id = ?
-          `, [newAssigned, taskId]);
+          `, [newAssigned, nextOrder, taskId]);
         } else if (phaseKey === 'electrical') {
           // 电控分配：如果机加未完成，设置为电控阶段（允许与机加并行）
           await connection.execute(`
             UPDATE tasks SET 
               electrical_assignee = ?,
+              electrical_order = ?,
               current_phase = CASE 
                 WHEN machining_phase = 0 THEN 'electrical'
                 ELSE current_phase
               END
             WHERE id = ?
-          `, [newAssigned, taskId]);
+          `, [newAssigned, nextOrder, taskId]);
         } else if (phaseKey === 'pre_assembly') {
           // 总装前段分配：需要机加已完成，且总装前段未完成
           await connection.execute(`
             UPDATE tasks SET 
               pre_assembly_assignee = ?,
+              pre_assembly_order = ?,
               current_phase = CASE 
                 WHEN machining_phase = 1 AND pre_assembly_phase = 0 THEN 'pre_assembly'
                 ELSE current_phase
               END
             WHERE id = ?
-          `, [newAssigned, taskId]);
+          `, [newAssigned, nextOrder, taskId]);
         } else if (phaseKey === 'post_assembly') {
           // 总装后段分配：需要总装前段已派工，且总装后段未完成
           await connection.execute(`
             UPDATE tasks SET 
               post_assembly_assignee = ?,
+              post_assembly_order = ?,
               current_phase = CASE 
                 WHEN pre_assembly_assignee IS NOT NULL 
                  AND pre_assembly_assignee != '' 
@@ -1230,12 +1271,13 @@ app.post('/api/tasks/assign', async (req, res) => {
                 ELSE current_phase
               END
             WHERE id = ?
-          `, [newAssigned, taskId]);
+          `, [newAssigned, nextOrder, taskId]);
         } else if (phaseKey === 'debugging') {
           // 调试阶段分配：需要总装后段已派工，且调试未完成
           await connection.execute(`
             UPDATE tasks SET 
               debugging_assignee = ?,
+              debugging_order = ?,
               current_phase = CASE 
                 WHEN post_assembly_assignee IS NOT NULL 
                  AND post_assembly_assignee != '' 
@@ -1245,7 +1287,7 @@ app.post('/api/tasks/assign', async (req, res) => {
                 ELSE current_phase
               END
             WHERE id = ?
-          `, [newAssigned, taskId]);
+          `, [newAssigned, nextOrder, taskId]);
         }
       } catch (error) {
         // 如果新字段不存在，使用旧的方式
