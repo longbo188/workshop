@@ -242,14 +242,14 @@ export class HomePage implements OnInit, OnDestroy {
     const base = isNative ? (environment.apiBase.replace('localhost', '10.0.2.2')) : environment.apiBase;
     
     let url: string;
-    if (this.currentUser?.role === 'supervisor' || this.currentUser?.role === 'manager') {
-      // 主管和经理始终看全部任务（不区分完成状态，由前端过滤）
+    if (this.currentUser?.role === 'manager') {
+      // 经理始终看全部任务（不区分完成状态，由前端过滤）
       url = `${base}/api/tasks`;
     } else if (this.currentUser?.role === 'admin' && this.viewScope === 'all') {
       // 管理员选择查看全部
       url = `${base}/api/tasks`;
     } else {
-      // 工人和管理员看自己
+      // 工人、主管和管理员看自己
       if (this.taskViewMode === 'completed') {
         // 已完成任务
         url = `${base}/api/tasks/user/${this.currentUser?.id}/completed`;
@@ -276,8 +276,8 @@ export class HomePage implements OnInit, OnDestroy {
             priority: this.normalizePriorityValue(task.priority)
           }));
           
-          // 根据taskViewMode过滤任务（仅主管、经理和管理员）
-          if (this.currentUser?.role === 'supervisor' || this.currentUser?.role === 'manager' || (this.currentUser?.role === 'admin' && this.viewScope === 'all')) {
+          // 根据taskViewMode过滤任务（仅经理和管理员看全部任务时需要）
+          if (this.currentUser?.role === 'manager' || (this.currentUser?.role === 'admin' && this.viewScope === 'all')) {
             if (this.taskViewMode === 'active') {
               // 进行中视图：只显示未完成的任务
               this.tasks = this.tasks.filter((t: any) => t.status !== 'completed');
@@ -753,6 +753,12 @@ export class HomePage implements OnInit, OnDestroy {
   getAssignedPhase(task: any): string | null {
     if (!this.currentUser) return null;
     
+    // 优先使用后端返回的 assigned_phase 字段（如果存在）
+    if (task.assigned_phase) {
+      return task.assigned_phase;
+    }
+    
+    // 如果没有 assigned_phase 字段，则检查各个阶段的 assignee（兼容旧逻辑）
     if (task.machining_assignee === this.currentUser.id) return 'machining';
     if (task.electrical_assignee === this.currentUser.id) return 'electrical';
     if (task.pre_assembly_assignee === this.currentUser.id) return 'pre_assembly';
@@ -826,6 +832,20 @@ export class HomePage implements OnInit, OnDestroy {
   isTaskAssignedToUser(task: any): boolean {
     if (!this.currentUser) return false;
     
+    // 如果任务有 assigned_phase 字段，说明该任务在该阶段分配给了当前用户
+    if (task.assigned_phase) {
+      // 检查对应阶段的 assignee 是否匹配当前用户
+      const phaseAssigneeMap: any = {
+        'machining': task.machining_assignee,
+        'electrical': task.electrical_assignee,
+        'pre_assembly': task.pre_assembly_assignee,
+        'post_assembly': task.post_assembly_assignee,
+        'debugging': task.debugging_assignee
+      };
+      return phaseAssigneeMap[task.assigned_phase] === this.currentUser.id;
+    }
+    
+    // 兼容旧逻辑：检查各个阶段的 assignee
     return task.machining_assignee === this.currentUser.id || 
            task.electrical_assignee === this.currentUser.id ||
            task.pre_assembly_assignee === this.currentUser.id ||
@@ -951,8 +971,8 @@ export class HomePage implements OnInit, OnDestroy {
 
   // 查找下一个任务
   findNextTask(currentTask: any): any | null {
-    // 只对工人角色生效
-    if (this.currentUser?.role !== 'worker') {
+    // 只对工人和主管角色生效
+    if (this.currentUser?.role !== 'worker' && this.currentUser?.role !== 'supervisor') {
       return null;
     }
     
@@ -969,20 +989,32 @@ export class HomePage implements OnInit, OnDestroy {
     // 应用筛选条件，获取过滤后的任务列表
     this.applyFilters();
     
-    // 获取当前任务在列表中的索引
-    const currentTaskIndex = this.filteredTasks.findIndex(t => t.id === currentTask.id);
+    // 获取当前任务的阶段
+    const currentPhase = this.getTaskOperatePhase(currentTask);
     
-    // 查找下一个任务（排除当前任务）
-    const nextTask = this.filteredTasks.find((t, index) => 
-      index > currentTaskIndex &&
-      this.isTaskAssignedToUser(t) && 
-      t.status !== 'completed' &&
-      t.current_phase &&
-      !this.isPhaseStarted(t) &&
-      !this.isPhasePaused(t) &&
-      !this.isPhaseCompleted(t) &&
-      this.canOperateTask(t)
-    );
+    // 获取当前任务和阶段在列表中的索引
+    const currentTaskIndex = this.filteredTasks.findIndex(t => {
+      return t.id === currentTask.id && this.getTaskOperatePhase(t) === currentPhase;
+    });
+    
+    // 查找下一个任务（可以是同一任务的不同阶段，也可以是不同的任务）
+    const nextTask = this.filteredTasks.find((t, index) => {
+      const taskPhase = this.getTaskOperatePhase(t);
+      
+      // 检查是否是同一个任务的不同阶段，或者是不同的任务
+      const isSameTaskDifferentPhase = t.id === currentTask.id && taskPhase !== currentPhase;
+      const isDifferentTask = t.id !== currentTask.id;
+      
+      return index > currentTaskIndex &&
+        (isSameTaskDifferentPhase || isDifferentTask) &&
+        this.isTaskAssignedToUser(t) && 
+        t.status !== 'completed' &&
+        taskPhase &&
+        !this.isPhaseStarted(t) &&
+        !this.isPhasePaused(t) &&
+        !this.isPhaseCompleted(t) &&
+        this.canOperateTask(t);
+    });
     
     return nextTask || null;
   }
@@ -1027,8 +1059,16 @@ export class HomePage implements OnInit, OnDestroy {
       const isNative = Capacitor.isNativePlatform();
       const base = isNative ? (environment.apiBase.replace('localhost', '10.0.2.2')) : environment.apiBase;
       
+      // 获取当前任务的操作阶段（分配给用户的阶段）
+      const currentPhase = this.getTaskOperatePhase(currentTask);
+      if (!currentPhase) {
+        this.presentToast('无法确定要暂停的阶段');
+        this.isSubmitting = false;
+        return;
+      }
+      
       // 1. 先暂停当前任务
-      const pauseResponse: any = await this.http.post(`${base}/api/tasks/${currentTask.id}/phases/${currentTask.current_phase}/pause`, {
+      const pauseResponse: any = await this.http.post(`${base}/api/tasks/${currentTask.id}/phases/${currentPhase}/pause`, {
         userId: this.currentUser.id,
         note: note || null
       }).toPromise();
@@ -1040,24 +1080,85 @@ export class HomePage implements OnInit, OnDestroy {
       
       // 2. 刷新任务列表，等待加载完成
       await this.loadTasks();
-      this.presentToast(pauseResponse.message || '阶段已暂停');
       
-      // 3. 重新应用筛选，获取最新的下一个任务
+      // 3. 重新应用筛选，获取最新的任务列表
       this.applyFilters();
-      const updatedNextTask = this.filteredTasks.find(t => t.id === nextTask.id);
       
-      if (updatedNextTask) {
-        // 如果下一个任务的阶段未开始，先开始阶段
-        if (!this.isPhaseStarted(updatedNextTask) && !this.isPhasePaused(updatedNextTask)) {
-          // 调用开始阶段方法（该方法内部会刷新任务列表）
-          await this.startCurrentPhase(updatedNextTask);
-          // 开始成功后，再次刷新任务列表，确保界面更新
-          await this.loadTasks();
-          this.presentToast(`已开始下一个任务：${updatedNextTask.name}`);
-        } else {
-          // 阶段已经开始了，只需要刷新任务列表
-          await this.loadTasks();
+      // 4. 重新查找下一个任务（因为任务列表已刷新，需要重新查找）
+      const updatedCurrentTask = this.filteredTasks.find(t => t.id === currentTask.id);
+      if (!updatedCurrentTask) {
+        this.presentToast('未找到当前任务');
+        this.presentToast(pauseResponse.message || '阶段已暂停');
+        return;
+      }
+      
+      // 重新查找下一个任务
+      const updatedNextTask = this.findNextTask(updatedCurrentTask);
+      
+      if (!updatedNextTask) {
+        // 没有找到下一个任务，提示用户
+        this.presentToast('未找到下一个任务');
+        this.presentToast(pauseResponse.message || '阶段已暂停');
+        return;
+      }
+      
+      // 4. 检查下一个任务的阶段状态
+      const nextPhase = this.getTaskOperatePhase(updatedNextTask);
+      if (!nextPhase) {
+        this.presentToast('无法确定下一个任务的阶段');
+        this.presentToast(pauseResponse.message || '阶段已暂停');
+        return;
+      }
+      
+      // 5. 如果下一个任务的阶段未开始且未暂停，则开始阶段
+      const isNextPhaseStarted = updatedNextTask[`${nextPhase}_start_time`] != null && 
+                                  updatedNextTask[`${nextPhase}_start_time`] !== '';
+      const isNextPhasePaused = updatedNextTask[`${nextPhase}_paused_at`] != null && 
+                                updatedNextTask[`${nextPhase}_paused_at`] !== undefined;
+      
+      console.log('下一个任务状态检查:', {
+        taskId: updatedNextTask.id,
+        taskName: updatedNextTask.name,
+        phase: nextPhase,
+        isNextPhaseStarted,
+        isNextPhasePaused,
+        startTime: updatedNextTask[`${nextPhase}_start_time`],
+        pausedAt: updatedNextTask[`${nextPhase}_paused_at`]
+      });
+      
+      if (!isNextPhaseStarted && !isNextPhasePaused) {
+        // 直接调用开始阶段的API，跳过 findCurrentActiveTask 检查（因为当前任务已经暂停）
+        try {
+          console.log('准备开始下一个任务:', {
+            taskId: updatedNextTask.id,
+            phase: nextPhase,
+            userId: this.currentUser.id
+          });
+          
+          const startResponse: any = await this.http.post(`${base}/api/tasks/${updatedNextTask.id}/phases/${nextPhase}/start`, {
+            userId: this.currentUser.id
+          }).toPromise();
+          
+          console.log('开始任务响应:', startResponse);
+          
+          if (startResponse.success) {
+            // 开始成功后，刷新任务列表，确保界面更新
+            await this.loadTasks();
+            this.presentToast(`阶段已暂停，已开始下一个任务：${updatedNextTask.name}`);
+          } else {
+            console.error('开始任务失败:', startResponse);
+            this.presentToast('暂停成功，但开始下一个任务失败：' + (startResponse.error || '未知错误'));
+            this.presentToast(pauseResponse.message || '阶段已暂停');
+          }
+        } catch (error: any) {
+          console.error('开始任务异常:', error);
+          this.presentToast('暂停成功，但开始下一个任务失败：' + (error.error?.error || error.message));
+          this.presentToast(pauseResponse.message || '阶段已暂停');
         }
+      } else {
+        // 阶段已经开始了或已暂停，只需要提示暂停成功
+        console.log('下一个任务阶段已开始或已暂停，跳过开始操作');
+        this.presentToast(pauseResponse.message || '阶段已暂停');
       }
       
     } catch (error: any) {
@@ -1138,14 +1239,23 @@ export class HomePage implements OnInit, OnDestroy {
       const isNative = Capacitor.isNativePlatform();
       const base = isNative ? (environment.apiBase.replace('localhost', '10.0.2.2')) : environment.apiBase;
       
+      // 获取当前活跃任务的阶段（分配给用户的阶段）
+      const currentActivePhase = this.getTaskOperatePhase(currentActiveTask);
+      if (!currentActivePhase) {
+        this.presentToast('无法确定要暂停的阶段');
+        this.isSubmitting = false;
+        return;
+      }
+      
       // 1. 暂停当前正在进行的任务（继续阶段时不需要备注）
-      const pauseResponse: any = await this.http.post(`${base}/api/tasks/${currentActiveTask.id}/phases/${currentActiveTask.current_phase}/pause`, {
+      const pauseResponse: any = await this.http.post(`${base}/api/tasks/${currentActiveTask.id}/phases/${currentActivePhase}/pause`, {
         userId: this.currentUser.id,
         note: null
       }).toPromise();
       
       if (!pauseResponse.success) {
         this.presentToast('暂停任务失败：' + (pauseResponse.error || '未知错误'));
+        this.isSubmitting = false;
         return;
       }
       
@@ -1153,9 +1263,19 @@ export class HomePage implements OnInit, OnDestroy {
       await this.loadTasks();
       this.presentToast(`${currentActiveTask.name}的${this.getCurrentPhaseName(currentActiveTask)}阶段已暂停`);
       
-      // 3. 重新应用筛选，获取最新的任务
+      // 3. 重新应用筛选，获取最新的任务（通过 id 和 assigned_phase 匹配）
       this.applyFilters();
-      const updatedTask = this.filteredTasks.find(t => t.id === taskToResume.id) || taskToResume;
+      const taskToResumePhase = this.getTaskOperatePhase(taskToResume);
+      const updatedTask = this.filteredTasks.find(t => {
+        return t.id === taskToResume.id && this.getTaskOperatePhase(t) === taskToResumePhase;
+      });
+      
+      if (!updatedTask) {
+        this.presentToast('未找到要继续的任务');
+        this.isSubmitting = false;
+        return;
+      }
+      
       await this.executeResume(updatedTask);
       
     } catch (error: any) {
@@ -1167,8 +1287,8 @@ export class HomePage implements OnInit, OnDestroy {
 
   // 查找当前正在进行的任务（阶段已开始且未暂停）
   findCurrentActiveTask(excludeTask: any): any | null {
-    // 只对工人角色生效
-    if (this.currentUser?.role !== 'worker') {
+    // 只对工人和主管角色生效
+    if (this.currentUser?.role !== 'worker' && this.currentUser?.role !== 'supervisor') {
       return null;
     }
     
@@ -1180,17 +1300,35 @@ export class HomePage implements OnInit, OnDestroy {
     // 应用筛选条件，获取过滤后的任务列表
     this.applyFilters();
     
-    // 查找正在进行的任务（阶段已开始且未暂停，且不是要排除的任务）
-    const activeTask = this.filteredTasks.find(t => 
-      t.id !== excludeTask.id &&
-      this.isTaskAssignedToUser(t) && 
-      t.status !== 'completed' &&
-      t.current_phase &&
-      this.isPhaseStarted(t) &&
-      !this.isPhasePaused(t) &&
-      !this.isPhaseCompleted(t) &&
-      this.canOperateTask(t)
-    );
+    // 获取要排除的任务的阶段
+    const excludePhase = this.getTaskOperatePhase(excludeTask);
+    
+    // 查找正在进行的任务（阶段已开始且未暂停）
+    // 检查：不同的任务，或者同一任务的不同阶段
+    const activeTask = this.filteredTasks.find(t => {
+      // 必须是分配给当前用户的任务
+      if (!this.isTaskAssignedToUser(t)) return false;
+      if (t.status === 'completed') return false;
+      if (!this.isPhaseStarted(t)) return false;
+      if (this.isPhasePaused(t)) return false;
+      if (this.isPhaseCompleted(t)) return false;
+      if (!this.canOperateTask(t)) return false;
+      
+      // 获取当前任务正在进行的阶段
+      const tPhase = this.getTaskOperatePhase(t);
+      
+      // 如果是不同的任务，或者同一任务的不同阶段，则认为是冲突的
+      if (t.id !== excludeTask.id) {
+        return true; // 不同任务正在运行
+      }
+      
+      // 同一任务，检查是否是不同阶段
+      if (tPhase && excludePhase && tPhase !== excludePhase) {
+        return true; // 同一任务的不同阶段正在运行
+      }
+      
+      return false;
+    });
     
     return activeTask || null;
   }
@@ -1299,11 +1437,21 @@ export class HomePage implements OnInit, OnDestroy {
 
         // 确保任务列表刷新后再开始下一个任务
         await this.loadTasks();
-
-        const updatedNextTask = this.tasks.find(t => t.id === nextTask.id);
+        
+        // 重新应用筛选条件
+        this.applyFilters();
+        
+        // 查找更新后的下一个任务（通过 id 和 assigned_phase 匹配）
+        const nextPhase = this.getTaskOperatePhase(nextTask);
+        const updatedNextTask = this.filteredTasks.find(t => {
+          return t.id === nextTask.id && this.getTaskOperatePhase(t) === nextPhase;
+        });
+        
         if (updatedNextTask) {
           await this.startOrResumeNextTask(updatedNextTask);
           await this.loadTasks();
+        } else {
+          this.presentToast('未找到下一个任务，请手动开始');
         }
       }
     } catch (error: any) {
@@ -1388,7 +1536,7 @@ export class HomePage implements OnInit, OnDestroy {
   }
 
   private getAvailableNextTasks(currentTask: any): any[] {
-    if (this.currentUser?.role !== 'worker') {
+    if (this.currentUser?.role !== 'worker' && this.currentUser?.role !== 'supervisor') {
       return [];
     }
 
@@ -1400,36 +1548,55 @@ export class HomePage implements OnInit, OnDestroy {
       return [];
     }
 
+    // 按当前筛选/排序获取任务列表
     this.applyFilters();
 
-    const currentTaskIndex = this.filteredTasks.findIndex(t => t.id === currentTask.id);
+    // 当前任务的阶段（可能是同一任务的某个具体阶段）
+    const currentPhase = this.getTaskOperatePhase(currentTask);
 
-    const availableTasks: any[] = [];
+    // 在 filteredTasks 中找到“当前任务 + 当前阶段”的位置
+    const currentTaskIndex = this.filteredTasks.findIndex(t => {
+      return t.id === currentTask.id && this.getTaskOperatePhase(t) === currentPhase;
+    });
+
+    let firstNotStarted: any | null = null;
+    const pausedTasks: any[] = [];
 
     this.filteredTasks.forEach((task, index) => {
-      if (
-        index > currentTaskIndex &&
-        task.id !== currentTask.id &&
-        this.isTaskAssignedToUser(task) &&
-        task.status !== 'completed' &&
-        task.current_phase &&
-        !this.isPhaseCompleted(task) &&
-        this.canOperateTask(task)
-      ) {
-        if (!this.isPhaseStarted(task) || this.isPhasePaused(task)) {
-          availableTasks.push(task);
-        }
+      // 只考虑当前任务之后的任务
+      if (index <= currentTaskIndex) return;
+
+      const taskPhase = this.getTaskOperatePhase(task);
+      if (!taskPhase) return;
+      if (!this.isTaskAssignedToUser(task)) return;
+      if (task.status === 'completed') return;
+      if (this.isPhaseCompleted(task)) return;
+      if (!this.canOperateTask(task)) return;
+
+      const started = this.isPhaseStarted(task);
+      const paused = this.isPhasePaused(task);
+
+      // 1) 记录“紧接着的下一个未开始任务”（列表中第一个未开始且未暂停的任务）
+      if (!started && !paused && !firstNotStarted) {
+        firstNotStarted = task;
+        return;
+      }
+
+      // 2) 收集所有已暂停的任务（当前任务之后）
+      if (paused) {
+        pausedTasks.push(task);
       }
     });
 
-    availableTasks.sort((a, b) => {
-      const aPaused = this.isPhasePaused(a);
-      const bPaused = this.isPhasePaused(b);
-      if (aPaused === bPaused) return 0;
-      return aPaused ? 1 : -1; // 未开始的任务排在暂停任务前面
-    });
+    const result: any[] = [];
+    if (firstNotStarted) {
+      result.push(firstNotStarted);
+    }
+    if (pausedTasks.length > 0) {
+      result.push(...pausedTasks);
+    }
 
-    return availableTasks;
+    return result;
   }
 
   // ============= 异常上报相关方法 =============

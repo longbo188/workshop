@@ -27,11 +27,11 @@
         <ion-icon name="warning-outline"></ion-icon>
         <ion-label class="ion-padding-start">{{ currentUser?.role === 'staff' ? '责任部门确认' : '异常审批' }}</ion-label>
       </ion-button>
-      <ion-button *ngIf="currentUser?.role==='worker'" [routerLink]="['/exception-reports']" title="我的异常报告">
+      <ion-button *ngIf="currentUser?.role==='worker' || currentUser?.role==='supervisor'" [routerLink]="['/exception-reports']" title="我的异常报告">
         <ion-icon name="document-text-outline"></ion-icon>
         <ion-label class="ion-padding-start">我的异常</ion-label>
       </ion-button>
-      <ion-button *ngIf="currentUser?.role==='worker'" [routerLink]="['/efficiency-calc']" title="我的效率">
+      <ion-button *ngIf="currentUser?.role==='worker' " [routerLink]="['/efficiency-calc']" title="我的效率">
         <ion-icon name="analytics-outline"></ion-icon>
         <ion-label class="ion-padding-start">我的效率</ion-label>
       </ion-button>
@@ -134,7 +134,7 @@
       <p>部门：{{ currentUser.department }}</p>
       
       <!-- 按钮功能说明（仅工人显示） -->
-      <div *ngIf="currentUser.role === 'worker'" class="button-instructions">
+      <div *ngIf="currentUser.role === 'worker' || currentUser.role === 'supervisor'" class="button-instructions">
         <h4>操作说明：</h4>
         <div class="instruction-grid">
           <div class="instruction-item">
@@ -262,7 +262,7 @@
   </ion-refresher>
 
   <!-- 任务紧急程度说明 -->
-  <ion-card *ngIf="currentUser?.role === 'worker' && filteredTasks.length > 0" style="margin: 16px 0; background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%); border-left: 4px solid #ff9800;">
+  <ion-card *ngIf="(currentUser?.role === 'worker' || currentUser?.role === 'supervisor') && filteredTasks.length > 0" style="margin: 16px 0; background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%); border-left: 4px solid #ff9800;">
     <ion-card-content style="padding: 12px;">
       <div style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #e65100;">
         <ion-icon name="alert-circle-outline" style="font-size: 20px; color: #ff9800;"></ion-icon>
@@ -324,6 +324,15 @@
     <ion-item *ngFor="let task of filteredTasks">
       <ion-label>
         <h2>{{ task.name }}</h2>
+        <!-- 显示被分配的阶段 -->
+        <p *ngIf="task.assigned_phase" style="color: #3880ff; font-weight: 500;">
+          <strong>当前阶段：</strong>
+          <span *ngIf="task.assigned_phase === 'machining'">机加</span>
+          <span *ngIf="task.assigned_phase === 'electrical'">电控</span>
+          <span *ngIf="task.assigned_phase === 'pre_assembly'">总装前段</span>
+          <span *ngIf="task.assigned_phase === 'post_assembly'">总装后段</span>
+          <span *ngIf="task.assigned_phase === 'debugging'">调试</span>
+        </p>
         <p>优先级：{{ getPriorityText(task.priority) }}</p>
         <p *ngIf="task.assigned_user_name">分配给：{{ task.assigned_user_name }}</p>
         <p *ngIf="task.estimated_hours">预计工时：{{ task.estimated_hours }}小时</p>
@@ -365,8 +374,8 @@
         </div>
       </ion-label>
       
-      <!-- 按任务计时按钮：仅工人且当前用户被分配的任务可操作；只显示一个按钮 -->
-      <ng-container *ngIf="currentUser?.role==='worker' && isTaskAssignedToUser(task)">
+      <!-- 按任务计时按钮：工人和主管且当前用户被分配的任务可操作；只显示一个按钮 -->
+      <ng-container *ngIf="(currentUser?.role==='worker' || currentUser?.role==='supervisor') && isTaskAssignedToUser(task)">
         <div slot="end" class="task-actions">
           <!-- 按钮组 -->
           <div class="button-group">

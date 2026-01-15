@@ -643,7 +643,7 @@ app.get('/api/tasks/user/:userId', async (req, res) => {
     const { userId } = req.params;
     const connection = await mysql.createConnection(dbConfig);
     
-    // 基于阶段负责人查询任务
+    // 使用 UNION ALL 为每个阶段返回一条记录，使同一任务的不同阶段分别显示
     const [rows] = await connection.execute(`
       SELECT t.*, 
              u1.name as machining_assignee_name,
@@ -657,14 +657,8 @@ app.get('/api/tasks/user/:userId', async (req, res) => {
              t.post_assembly_start_time, t.debugging_start_time,
              t.machining_complete_time, t.electrical_complete_time, t.pre_assembly_complete_time, 
              t.post_assembly_complete_time, t.debugging_complete_time,
-             CASE 
-               WHEN t.machining_assignee = ? THEN COALESCE(t.machining_order, 999)
-               WHEN t.electrical_assignee = ? THEN COALESCE(t.electrical_order, 999)
-               WHEN t.pre_assembly_assignee = ? THEN COALESCE(t.pre_assembly_order, 999)
-               WHEN t.post_assembly_assignee = ? THEN COALESCE(t.post_assembly_order, 999)
-               WHEN t.debugging_assignee = ? THEN COALESCE(t.debugging_order, 999)
-               ELSE 999
-             END as task_priority_order
+             'machining' as assigned_phase,
+             COALESCE(t.machining_order, 999) as task_priority_order
       FROM tasks t
       LEFT JOIN users u1 ON t.machining_assignee = u1.id
       LEFT JOIN users u2 ON t.electrical_assignee = u2.id
@@ -681,16 +675,164 @@ app.get('/api/tasks/user/:userId', async (req, res) => {
         ) x
         JOIN work_reports w ON w.id = x.last_id
       ) wr ON wr.task_id = t.id
-      WHERE t.status != 'completed' AND (
-        -- 用户在某个阶段被分配，且该阶段未完成
-        (t.machining_assignee = ? AND COALESCE(t.machining_phase, 0) = 0) OR
-        (t.electrical_assignee = ? AND COALESCE(t.electrical_phase, 0) = 0) OR
-        (t.pre_assembly_assignee = ? AND COALESCE(t.pre_assembly_phase, 0) = 0) OR
-        (t.post_assembly_assignee = ? AND COALESCE(t.post_assembly_phase, 0) = 0) OR
-        (t.debugging_assignee = ? AND COALESCE(t.debugging_phase, 0) = 0)
-      )
-      ORDER BY task_priority_order ASC, t.created_at DESC
-    `, [userId, userId, userId, userId, userId, userId, userId, userId, userId, userId]);
+      WHERE t.status != 'completed' 
+        AND t.machining_assignee = ? 
+        AND COALESCE(t.machining_phase, 0) = 0
+      
+      UNION ALL
+      
+      SELECT t.*, 
+             u1.name as machining_assignee_name,
+             u2.name as electrical_assignee_name,
+             u3.name as pre_assembly_assignee_name,
+             u4.name as post_assembly_assignee_name,
+             u5.name as debugging_assignee_name,
+             wr.approval_status as latest_completion_status, 
+             wr.created_at as latest_completion_created_at,
+             t.machining_start_time, t.electrical_start_time, t.pre_assembly_start_time, 
+             t.post_assembly_start_time, t.debugging_start_time,
+             t.machining_complete_time, t.electrical_complete_time, t.pre_assembly_complete_time, 
+             t.post_assembly_complete_time, t.debugging_complete_time,
+             'electrical' as assigned_phase,
+             COALESCE(t.electrical_order, 999) as task_priority_order
+      FROM tasks t
+      LEFT JOIN users u1 ON t.machining_assignee = u1.id
+      LEFT JOIN users u2 ON t.electrical_assignee = u2.id
+      LEFT JOIN users u3 ON t.pre_assembly_assignee = u3.id
+      LEFT JOIN users u4 ON t.post_assembly_assignee = u4.id
+      LEFT JOIN users u5 ON t.debugging_assignee = u5.id
+      LEFT JOIN (
+        SELECT x.task_id, w.approval_status, w.created_at
+        FROM (
+          SELECT task_id, MAX(id) AS last_id
+          FROM work_reports
+          WHERE work_type = 'complete'
+          GROUP BY task_id
+        ) x
+        JOIN work_reports w ON w.id = x.last_id
+      ) wr ON wr.task_id = t.id
+      WHERE t.status != 'completed' 
+        AND t.electrical_assignee = ? 
+        AND COALESCE(t.electrical_phase, 0) = 0
+      
+      UNION ALL
+      
+      SELECT t.*, 
+             u1.name as machining_assignee_name,
+             u2.name as electrical_assignee_name,
+             u3.name as pre_assembly_assignee_name,
+             u4.name as post_assembly_assignee_name,
+             u5.name as debugging_assignee_name,
+             wr.approval_status as latest_completion_status, 
+             wr.created_at as latest_completion_created_at,
+             t.machining_start_time, t.electrical_start_time, t.pre_assembly_start_time, 
+             t.post_assembly_start_time, t.debugging_start_time,
+             t.machining_complete_time, t.electrical_complete_time, t.pre_assembly_complete_time, 
+             t.post_assembly_complete_time, t.debugging_complete_time,
+             'pre_assembly' as assigned_phase,
+             COALESCE(t.pre_assembly_order, 999) as task_priority_order
+      FROM tasks t
+      LEFT JOIN users u1 ON t.machining_assignee = u1.id
+      LEFT JOIN users u2 ON t.electrical_assignee = u2.id
+      LEFT JOIN users u3 ON t.pre_assembly_assignee = u3.id
+      LEFT JOIN users u4 ON t.post_assembly_assignee = u4.id
+      LEFT JOIN users u5 ON t.debugging_assignee = u5.id
+      LEFT JOIN (
+        SELECT x.task_id, w.approval_status, w.created_at
+        FROM (
+          SELECT task_id, MAX(id) AS last_id
+          FROM work_reports
+          WHERE work_type = 'complete'
+          GROUP BY task_id
+        ) x
+        JOIN work_reports w ON w.id = x.last_id
+      ) wr ON wr.task_id = t.id
+      WHERE t.status != 'completed' 
+        AND t.pre_assembly_assignee = ? 
+        AND COALESCE(t.pre_assembly_phase, 0) = 0
+      
+      UNION ALL
+      
+      SELECT t.*, 
+             u1.name as machining_assignee_name,
+             u2.name as electrical_assignee_name,
+             u3.name as pre_assembly_assignee_name,
+             u4.name as post_assembly_assignee_name,
+             u5.name as debugging_assignee_name,
+             wr.approval_status as latest_completion_status, 
+             wr.created_at as latest_completion_created_at,
+             t.machining_start_time, t.electrical_start_time, t.pre_assembly_start_time, 
+             t.post_assembly_start_time, t.debugging_start_time,
+             t.machining_complete_time, t.electrical_complete_time, t.pre_assembly_complete_time, 
+             t.post_assembly_complete_time, t.debugging_complete_time,
+             'post_assembly' as assigned_phase,
+             COALESCE(t.post_assembly_order, 999) as task_priority_order
+      FROM tasks t
+      LEFT JOIN users u1 ON t.machining_assignee = u1.id
+      LEFT JOIN users u2 ON t.electrical_assignee = u2.id
+      LEFT JOIN users u3 ON t.pre_assembly_assignee = u3.id
+      LEFT JOIN users u4 ON t.post_assembly_assignee = u4.id
+      LEFT JOIN users u5 ON t.debugging_assignee = u5.id
+      LEFT JOIN (
+        SELECT x.task_id, w.approval_status, w.created_at
+        FROM (
+          SELECT task_id, MAX(id) AS last_id
+          FROM work_reports
+          WHERE work_type = 'complete'
+          GROUP BY task_id
+        ) x
+        JOIN work_reports w ON w.id = x.last_id
+      ) wr ON wr.task_id = t.id
+      WHERE t.status != 'completed' 
+        AND t.post_assembly_assignee = ? 
+        AND COALESCE(t.post_assembly_phase, 0) = 0
+      
+      UNION ALL
+      
+      SELECT t.*, 
+             u1.name as machining_assignee_name,
+             u2.name as electrical_assignee_name,
+             u3.name as pre_assembly_assignee_name,
+             u4.name as post_assembly_assignee_name,
+             u5.name as debugging_assignee_name,
+             wr.approval_status as latest_completion_status, 
+             wr.created_at as latest_completion_created_at,
+             t.machining_start_time, t.electrical_start_time, t.pre_assembly_start_time, 
+             t.post_assembly_start_time, t.debugging_start_time,
+             t.machining_complete_time, t.electrical_complete_time, t.pre_assembly_complete_time, 
+             t.post_assembly_complete_time, t.debugging_complete_time,
+             'debugging' as assigned_phase,
+             COALESCE(t.debugging_order, 999) as task_priority_order
+      FROM tasks t
+      LEFT JOIN users u1 ON t.machining_assignee = u1.id
+      LEFT JOIN users u2 ON t.electrical_assignee = u2.id
+      LEFT JOIN users u3 ON t.pre_assembly_assignee = u3.id
+      LEFT JOIN users u4 ON t.post_assembly_assignee = u4.id
+      LEFT JOIN users u5 ON t.debugging_assignee = u5.id
+      LEFT JOIN (
+        SELECT x.task_id, w.approval_status, w.created_at
+        FROM (
+          SELECT task_id, MAX(id) AS last_id
+          FROM work_reports
+          WHERE work_type = 'complete'
+          GROUP BY task_id
+        ) x
+        JOIN work_reports w ON w.id = x.last_id
+      ) wr ON wr.task_id = t.id
+      WHERE t.status != 'completed' 
+        AND t.debugging_assignee = ? 
+        AND COALESCE(t.debugging_phase, 0) = 0
+      
+      ORDER BY task_priority_order ASC, id ASC, 
+               CASE assigned_phase 
+                 WHEN 'machining' THEN 1
+                 WHEN 'electrical' THEN 2
+                 WHEN 'pre_assembly' THEN 3
+                 WHEN 'post_assembly' THEN 4
+                 WHEN 'debugging' THEN 5
+                 ELSE 999
+               END ASC
+    `, [userId, userId, userId, userId, userId]);
     
     await connection.end();
     res.json(rows);
@@ -1177,61 +1319,63 @@ app.post('/api/tasks/assign', async (req, res) => {
 
     // 如果指定了阶段，进行阶段分配
     if (phaseKey && (phaseKey === 'machining' || phaseKey === 'electrical' || phaseKey === 'pre_assembly' || phaseKey === 'post_assembly' || phaseKey === 'debugging')) {
-      // 检查阶段是否可以开始
-      // 注意：需要获取完整的任务信息（包括各阶段的assignee）来检查前置条件
-      const [fullTask] = await connection.execute(`
-        SELECT id, status, current_phase, 
-               machining_assignee, machining_phase,
-               electrical_assignee, electrical_phase,
-               pre_assembly_assignee, pre_assembly_phase,
-               post_assembly_assignee, post_assembly_phase,
-               debugging_assignee, debugging_phase
-        FROM tasks WHERE id = ?
-      `, [taskId]);
-      const taskForCheck = fullTask[0] || task;
-      
-      // 调试信息：记录检查前置条件时的任务状态
-      if (phaseKey === 'pre_assembly') {
-        console.log('检查总装前段前置条件 - 任务数据:', {
-          taskId,
-          machining_assignee: taskForCheck.machining_assignee,
-          machining_assignee_type: typeof taskForCheck.machining_assignee,
-          machining_phase: taskForCheck.machining_phase,
-          machining_phase_type: typeof taskForCheck.machining_phase,
-          pre_assembly_phase: taskForCheck.pre_assembly_phase,
-          pre_assembly_assignee: taskForCheck.pre_assembly_assignee,
-          fullTaskData: JSON.stringify(taskForCheck)
-        });
-      }
-      
-      const canStart = canStartPhase(taskForCheck, phaseKey);
-      
-      if (!canStart) {
-        await connection.end();
-        // 提供更详细的错误信息
-        let errorMsg = `无法分配${getPhaseName(phaseKey)}阶段，请检查前置条件`;
+      // 检查阶段是否可以开始（仅在分配时检查，取消分配时不检查）
+      if (newAssigned !== null) {
+        // 注意：需要获取完整的任务信息（包括各阶段的assignee和start_time）来检查前置条件
+        const [fullTask] = await connection.execute(`
+          SELECT id, status, current_phase, 
+                 machining_assignee, machining_phase, machining_start_time,
+                 electrical_assignee, electrical_phase, electrical_start_time,
+                 pre_assembly_assignee, pre_assembly_phase, pre_assembly_start_time,
+                 post_assembly_assignee, post_assembly_phase, post_assembly_start_time,
+                 debugging_assignee, debugging_phase, debugging_start_time
+          FROM tasks WHERE id = ?
+        `, [taskId]);
+        const taskForCheck = fullTask[0] || task;
+        
+        // 调试信息：记录检查前置条件时的任务状态
         if (phaseKey === 'pre_assembly') {
-          const machiningAssignee = taskForCheck.machining_assignee;
-          const machiningPhase = taskForCheck.machining_phase;
-          const machiningAssigned = machiningAssignee != null && 
-                                     machiningAssignee !== '' && 
-                                     machiningAssignee !== 0 && 
-                                     machiningAssignee !== '0';
-          const machiningCompleted = machiningPhase === 1 || machiningPhase === '1';
-          errorMsg += `。需要：机加阶段已派工（machining_assignee不为空）或已完成（machining_phase=1）。当前：machining_assignee=${machiningAssignee}（类型：${typeof machiningAssignee}，已派工：${machiningAssigned}），machining_phase=${machiningPhase}（类型：${typeof machiningPhase}，已完成：${machiningCompleted}）`;
-          console.error('总装前段分配失败 - 前置条件不满足:', {
+          console.log('检查总装前段前置条件 - 任务数据:', {
             taskId,
-            machining_assignee: machiningAssignee,
-            machining_assignee_type: typeof machiningAssignee,
-            machining_assignee_assigned: machiningAssigned,
-            machining_phase: machiningPhase,
-            machining_phase_type: typeof machiningPhase,
-            machining_phase_completed: machiningCompleted,
-            canStartResult: canStart,
-            taskForCheck: JSON.stringify(taskForCheck)
+            machining_assignee: taskForCheck.machining_assignee,
+            machining_assignee_type: typeof taskForCheck.machining_assignee,
+            machining_phase: taskForCheck.machining_phase,
+            machining_phase_type: typeof taskForCheck.machining_phase,
+            pre_assembly_phase: taskForCheck.pre_assembly_phase,
+            pre_assembly_assignee: taskForCheck.pre_assembly_assignee,
+            fullTaskData: JSON.stringify(taskForCheck)
           });
         }
-        return res.status(400).json({ error: errorMsg });
+        
+        const canStart = canStartPhase(taskForCheck, phaseKey, true); // true 表示检查是否可以分配
+        
+        if (!canStart) {
+          await connection.end();
+          // 提供更详细的错误信息
+          let errorMsg = `无法分配${getPhaseName(phaseKey)}阶段，请检查前置条件`;
+          if (phaseKey === 'pre_assembly') {
+            const machiningAssignee = taskForCheck.machining_assignee;
+            const machiningPhase = taskForCheck.machining_phase;
+            const machiningAssigned = machiningAssignee != null && 
+                                       machiningAssignee !== '' && 
+                                       machiningAssignee !== 0 && 
+                                       machiningAssignee !== '0';
+            const machiningCompleted = machiningPhase === 1 || machiningPhase === '1';
+            errorMsg += `。需要：机加阶段已派工（machining_assignee不为空）或已完成（machining_phase=1）。当前：machining_assignee=${machiningAssignee}（类型：${typeof machiningAssignee}，已派工：${machiningAssigned}），machining_phase=${machiningPhase}（类型：${typeof machiningPhase}，已完成：${machiningCompleted}）`;
+            console.error('总装前段分配失败 - 前置条件不满足:', {
+              taskId,
+              machining_assignee: machiningAssignee,
+              machining_assignee_type: typeof machiningAssignee,
+              machining_assignee_assigned: machiningAssigned,
+              machining_phase: machiningPhase,
+              machining_phase_type: typeof machiningPhase,
+              machining_phase_completed: machiningCompleted,
+              canStartResult: canStart,
+              taskForCheck: JSON.stringify(taskForCheck)
+            });
+          }
+          return res.status(400).json({ error: errorMsg });
+        }
       }
 
       // 更新阶段分配 - 支持所有阶段
@@ -2960,7 +3104,8 @@ app.get('/api/tasks/:taskId/phases', async (req, res) => {
 });
 
 // 检查是否可以开始某个阶段
-function canStartPhase(task, phaseKey) {
+// isAssign: true 表示检查是否可以分配，false 表示检查是否可以开始
+function canStartPhase(task, phaseKey, isAssign = false) {
   // 如果当前阶段已完成，不能重复开始
   if (task[`${phaseKey}_phase`] === 1) {
     return false;
@@ -2987,36 +3132,48 @@ function canStartPhase(task, phaseKey) {
     return machiningAssigned || machiningCompleted;
   }
   
-  // 总装后段需要总装前段已派工
+  // 总装后段
   if (phaseKey === 'post_assembly') {
-    // 检查总装前段是否已派工
-    const preAssemblyAssignee = task.pre_assembly_assignee;
-    const preAssemblyAssigned = preAssemblyAssignee != null && 
-                                preAssemblyAssignee !== '' && 
-                                preAssemblyAssignee !== 0 && 
-                                preAssemblyAssignee !== '0' &&
-                                preAssemblyAssignee !== 'null' &&
-                                preAssemblyAssignee !== 'undefined';
-    // 检查总装前段是否已完成（已完成也可以）
-    const preAssemblyCompleted = task.pre_assembly_phase === 1 || task.pre_assembly_phase === '1';
-    // 已派工或已完成都可以
-    return preAssemblyAssigned || preAssemblyCompleted;
+    if (isAssign) {
+      // 分配时：只需要总装前段已分配
+      const preAssemblyAssignee = task.pre_assembly_assignee;
+      const preAssemblyAssigned = preAssemblyAssignee != null && 
+                                  preAssemblyAssignee !== '' && 
+                                  preAssemblyAssignee !== 0 && 
+                                  preAssemblyAssignee !== '0' &&
+                                  preAssemblyAssignee !== 'null' &&
+                                  preAssemblyAssignee !== 'undefined';
+      const preAssemblyCompleted = task.pre_assembly_phase === 1 || task.pre_assembly_phase === '1';
+      return preAssemblyAssigned || preAssemblyCompleted;
+    } else {
+      // 开始时：需要总装前段已开始或已完成
+      const preAssemblyStarted = task.pre_assembly_start_time != null && 
+                                 task.pre_assembly_start_time !== '';
+      const preAssemblyCompleted = task.pre_assembly_phase === 1 || task.pre_assembly_phase === '1';
+      return preAssemblyStarted || preAssemblyCompleted;
+    }
   }
   
-  // 调试阶段需要总装后段已派工
+  // 调试阶段
   if (phaseKey === 'debugging') {
-    // 检查总装后段是否已派工
-    const postAssemblyAssignee = task.post_assembly_assignee;
-    const postAssemblyAssigned = postAssemblyAssignee != null && 
-                                postAssemblyAssignee !== '' && 
-                                postAssemblyAssignee !== 0 && 
-                                postAssemblyAssignee !== '0' &&
-                                postAssemblyAssignee !== 'null' &&
-                                postAssemblyAssignee !== 'undefined';
-    // 检查总装后段是否已完成（已完成也可以）
-    const postAssemblyCompleted = task.post_assembly_phase === 1 || task.post_assembly_phase === '1';
-    // 已派工或已完成都可以
-    return postAssemblyAssigned || postAssemblyCompleted;
+    if (isAssign) {
+      // 分配时：只需要总装后段已分配
+      const postAssemblyAssignee = task.post_assembly_assignee;
+      const postAssemblyAssigned = postAssemblyAssignee != null && 
+                                   postAssemblyAssignee !== '' && 
+                                   postAssemblyAssignee !== 0 && 
+                                   postAssemblyAssignee !== '0' &&
+                                   postAssemblyAssignee !== 'null' &&
+                                   postAssemblyAssignee !== 'undefined';
+      const postAssemblyCompleted = task.post_assembly_phase === 1 || task.post_assembly_phase === '1';
+      return postAssemblyAssigned || postAssemblyCompleted;
+    } else {
+      // 开始时：需要总装后段已开始或已完成
+      const postAssemblyStarted = task.post_assembly_start_time != null && 
+                                  task.post_assembly_start_time !== '';
+      const postAssemblyCompleted = task.post_assembly_phase === 1 || task.post_assembly_phase === '1';
+      return postAssemblyStarted || postAssemblyCompleted;
+    }
   }
   
   return false;
@@ -3304,16 +3461,25 @@ app.post('/api/tasks/:taskId/phases/:phaseKey/complete', async (req, res) => {
       return res.status(403).json({ error: '无权限操作此任务，只有负责人可以完成阶段' });
     }
     
-    // 检查当前阶段是否正确
-    if (task.current_phase !== phaseKey) {
+    // 检查用户是否有权限完成该阶段（检查该阶段的 assignee）
+    const phaseAssigneeField = `${phaseKey}_assignee`;
+    const hasPhasePermission = task[phaseAssigneeField] == userId;
+    
+    if (!hasPhasePermission) {
       await connection.end();
-      return res.status(400).json({ error: '当前阶段不匹配' });
+      return res.status(403).json({ error: '无权限完成该阶段，只有该阶段的负责人可以完成' });
     }
     
     // 检查是否已经完成
     if (task[`${phaseKey}_phase`] === 1) {
       await connection.end();
       return res.status(400).json({ error: '该阶段已完成' });
+    }
+    
+    // 检查阶段是否已开始（必须已开始才能完成）
+    if (!task[`${phaseKey}_start_time`]) {
+      await connection.end();
+      return res.status(400).json({ error: '该阶段尚未开始，无法完成' });
     }
     
     // 开始事务

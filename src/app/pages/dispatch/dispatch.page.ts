@@ -349,7 +349,26 @@ export class DispatchPage implements OnInit {
 
   // 判断当前阶段是否已开始（已打卡/有开始时间）
   private hasCurrentPhaseStarted(task: any): boolean {
-    const phase = this.getEffectivePhase(task);
+    // 优先使用 assignedPhase（可视化数据中的字段）
+    let phase: string | string[] | null = null;
+    
+    if (task.assignedPhase) {
+      // 将中文阶段名转换为英文阶段key
+      const phaseMap: any = {
+        '机加': 'machining',
+        '电控': 'electrical',
+        '总装前段': 'pre_assembly',
+        '总装后段': 'post_assembly',
+        '调试': 'debugging'
+      };
+      phase = phaseMap[task.assignedPhase] || null;
+    }
+    
+    // 如果没有 assignedPhase，使用 getEffectivePhase
+    if (!phase) {
+      phase = this.getEffectivePhase(task);
+    }
+    
     if (!phase) return false;
     
     // 如果是数组（多阶段并行），检查是否有任何一个阶段已开始
@@ -2277,7 +2296,21 @@ export class DispatchPage implements OnInit {
             this.presentToast('当前阶段已开始，禁止取消分配');
             return;
           }
-          await this.assignTask(task.id, null, task.current_phase || 'machining');
+          
+          // 确定要取消的阶段
+          let phaseToUnassign = task.current_phase || 'machining';
+          if (task.assignedPhase) {
+            const phaseMap: any = {
+              '机加': 'machining',
+              '电控': 'electrical',
+              '总装前段': 'pre_assembly',
+              '总装后段': 'post_assembly',
+              '调试': 'debugging'
+            };
+            phaseToUnassign = phaseMap[task.assignedPhase] || phaseToUnassign;
+          }
+          
+          await this.assignTask(task.id, null, phaseToUnassign);
           this.presentToast('已取消分配，任务回到待分配');
           // 后台更新可视化
           try { this.loadVizData && this.loadVizData(); } catch {}
