@@ -279,13 +279,22 @@ ion-content.viz-content {
             border-color: #e0e0e0;
             
             .task-block-content {
-              .task-name {
+              .task-name,
+              .task-model,
+              span,
+              div {
                 color: #000 !important;
               }
               
               .task-model {
                 color: #000 !important;
                 opacity: 1 !important;
+              }
+              
+              // 覆盖内联样式中的颜色（包括开工时间和承诺时间）
+              span[style*="color"],
+              div[style*="color"] {
+                color: #000 !important;
               }
             }
           }

@@ -296,6 +296,56 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+// 4.1 修改密码接口
+app.post('/api/users/change-password', async (req, res) => {
+  try {
+    const { userId, username, oldPassword, newPassword } = req.body || {};
+
+    if ((!userId && !username) || !oldPassword || !newPassword) {
+      return res.status(400).json({ error: '参数不完整' });
+    }
+
+    const connection = await mysql.createConnection(dbConfig);
+
+    let rows;
+    let targetUserId = userId;
+
+    // 校验旧密码是否正确（优先使用 userId，其次使用 username）
+    if (userId) {
+      [rows] = await connection.execute(
+        'SELECT id FROM users WHERE id = ? AND password = ?',
+        [userId, oldPassword]
+      );
+    } else {
+      [rows] = await connection.execute(
+        'SELECT id FROM users WHERE username = ? AND password = ?',
+        [username, oldPassword]
+      );
+      if (rows.length > 0) {
+        targetUserId = rows[0].id;
+      }
+    }
+
+    if (rows.length === 0) {
+      await connection.end();
+      return res.status(400).json({ error: '原密码不正确' });
+    }
+
+    // 更新为新密码（当前系统为明文存储，这里保持一致）
+    await connection.execute(
+      'UPDATE users SET password = ? WHERE id = ?',
+      [newPassword, targetUserId]
+    );
+
+    await connection.end();
+
+    res.json({ success: true, message: '密码修改成功' });
+  } catch (error) {
+    console.error('修改密码失败:', error);
+    res.status(500).json({ error: '修改密码失败：' + error.message });
+  }
+});
+
 // 5. 获取所有生产任务
 app.get('/api/tasks', async (req, res) => {
   try {
@@ -942,8 +992,11 @@ app.get('/api/users', async (_req, res) => {
 app.get('/api/users/template', (_req, res) => {
   try {
     const data = [
-      ['username', 'name', 'role', 'department', 'user_group', 'password']
-      // 注意：第一行为列名，从第二行开始填写数据
+      // 第1行：英文字段名（必须保持不变，用于程序识别）
+      ['username（用户名）', 'name（姓名）', 'role（角色）', 'department（部门）', 'user_group（用户组（可选））', 'password（密码）'],
+      // 第2行：对应中文说明，方便用户理解每一列含义
+      
+      // 注意：从第3行开始填写实际数据
       // user_group为可选字段，填写该员工所属的组（如：宋明雄组、组长等）
       // 示例: ['zhang3', '张三', 'worker', '组装车间', '宋明雄组', '123456']
     ];
@@ -1402,8 +1455,17 @@ app.post('/api/tasks/import', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'Excel文件数据不足，至少需要2行数据' });
     }
 
+    // 查询数据库中所有已存在的设备号（用于重复检查）
+    const [existingDevices] = await connection.execute(
+      'SELECT device_number FROM tasks WHERE device_number IS NOT NULL AND device_number != ""'
+    );
+    const existingDeviceNumbers = new Set(
+      existingDevices.map((row) => row.device_number.trim().toLowerCase())
+    );
+
     const tasks = [];
     const errors = [];
+    const deviceNumbersInFile = new Set(); // 用于检查Excel内部重复
 
     // 从第2行开始解析（跳过标题行）
     for (let i = 1; i < data.length; i++) {
@@ -1434,6 +1496,20 @@ app.post('/api/tasks/import', upload.single('file'), async (req, res) => {
       // 验证必要字段
       if (!deviceNumber) {
         errors.push(`第${i + 1}行：设备号不能为空`);
+        continue;
+      }
+
+      // 检查Excel文件内部是否有重复设备号
+      const deviceNumberLower = deviceNumber.toLowerCase();
+      if (deviceNumbersInFile.has(deviceNumberLower)) {
+        errors.push(`第${i + 1}行：设备号"${deviceNumber}"在Excel文件中重复`);
+        continue;
+      }
+      deviceNumbersInFile.add(deviceNumberLower);
+
+      // 检查数据库中是否已存在该设备号
+      if (existingDeviceNumbers.has(deviceNumberLower)) {
+        errors.push(`第${i + 1}行：设备号"${deviceNumber}"在数据库中已存在，不允许重复导入`);
         continue;
       }
 
@@ -3863,14 +3939,14 @@ app.post('/api/task-pool/:taskId/assign', async (req, res) => {
       return res.status(400).json({ error: '所有阶段均已完成，无法分配' });
     }
     
-    // 检查用户是否存在
+    // 检查用户是否存在（允许 worker 和 supervisor 被派工）
     const [userRows] = await connection.execute(`
-      SELECT * FROM users WHERE id = ? AND role = 'worker'
+      SELECT * FROM users WHERE id = ? AND role IN ('worker', 'supervisor')
     `, [userId]);
     
     if (userRows.length === 0) {
       await connection.end();
-      return res.status(404).json({ error: '用户不存在或不是工人' });
+      return res.status(404).json({ error: '用户不存在或角色不是工人/主管' });
     }
     
     // 分配任务给工人
@@ -3912,13 +3988,13 @@ app.post('/api/task-pool/:taskId/assign', async (req, res) => {
   }
 });
 
-// 获取可分配的工人列表
+// 获取可分配的工人/主管列表
 app.get('/api/workers', async (req, res) => {
   try {
     const connection = await mysql.createConnection(dbConfig);
     
     const [rows] = await connection.execute(`
-      SELECT id, name, role FROM users WHERE role = 'worker' ORDER BY name
+      SELECT id, name, role FROM users WHERE role IN ('worker', 'supervisor') ORDER BY name
     `);
     
     await connection.end();

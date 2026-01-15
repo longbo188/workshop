@@ -2,7 +2,7 @@ import { Component, OnInit, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { IonHeader, IonToolbar, IonTitle, IonContent, IonCard, IonCardHeader, IonCardTitle, IonCardContent, IonList, IonItem, IonLabel, IonSpinner, IonButton, IonIcon, IonModal, IonChip, IonButtons, IonInput, IonSelect, IonSelectOption, IonRow, IonCol, IonBadge, IonPopover, IonTextarea, IonDatetime, IonSearchbar, ToastController, ActionSheetController, IonCheckbox } from '@ionic/angular/standalone';
+import { IonHeader, IonToolbar, IonTitle, IonContent, IonCard, IonCardHeader, IonCardTitle, IonCardContent, IonList, IonItem, IonLabel, IonSpinner, IonButton, IonIcon, IonModal, IonChip, IonButtons, IonInput, IonSelect, IonSelectOption, IonRow, IonCol, IonBadge, IonPopover, IonTextarea, IonDatetime, IonSearchbar, ToastController, ActionSheetController, IonCheckbox, IonToggle } from '@ionic/angular/standalone';
 import { environment } from '../../../environments/environment';
 import * as XLSX from 'xlsx';
 
@@ -17,7 +17,7 @@ import * as XLSX from 'xlsx';
     IonHeader, IonToolbar, IonTitle, IonContent,
     IonCard, IonCardHeader, IonCardTitle, IonCardContent,
     IonList, IonItem, IonLabel, IonSpinner, IonButton, IonIcon,
-    IonModal, IonChip, IonButtons, IonInput, IonSelect, IonSelectOption, IonRow, IonCol, IonBadge, IonPopover, IonTextarea, IonDatetime, IonSearchbar, IonCheckbox
+    IonModal, IonChip, IonButtons, IonInput, IonSelect, IonSelectOption, IonRow, IonCol, IonBadge, IonPopover, IonTextarea, IonDatetime, IonSearchbar, IonCheckbox, IonToggle
   ]
 })
 export class DispatchPage implements OnInit {
@@ -71,6 +71,8 @@ export class DispatchPage implements OnInit {
   vizDepartmentFilter = ''; // 可视化部门筛选
   vizGroupFilter = ''; // 可视化组筛选
   vizEmployeeLimit: number = 10; // 可视化显示员工上限
+  hiddenEmployeeIds: number[] = []; // 被隐藏的员工ID列表（避免已离职人员占用位置）
+  showHiddenEmployees: boolean = false; // 是否显示被隐藏的员工（用于筛选时临时显示）
   unassignedTasks: any[] = []; // 待分配任务列表
   
   // 待分配任务筛选
@@ -184,6 +186,16 @@ export class DispatchPage implements OnInit {
       if (!Number.isNaN(n) && n > 0) this.vizEmployeeLimit = n;
     }
     
+    // 读取隐藏员工列表
+    const savedHidden = localStorage.getItem('hiddenEmployeeIds');
+    if (savedHidden) {
+      try {
+        this.hiddenEmployeeIds = JSON.parse(savedHidden);
+      } catch (e) {
+        this.hiddenEmployeeIds = [];
+      }
+    }
+    
     this.loadData();
   }
 
@@ -195,6 +207,24 @@ export class DispatchPage implements OnInit {
         this.http.get<any[]>(`${environment.apiBase}/api/users`).toPromise(),
         this.http.get<any[]>(`${environment.apiBase}/api/tasks`).toPromise(),
       ]);
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/91721043-712f-42a4-b142-8681d3f05f43',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          sessionId:'debug-session',
+          runId:'supervisor-visibility',
+          hypothesisId:'H1',
+          location:'dispatch.page.ts:loadData',
+          message:'Loaded users for dispatch',
+          data:{
+            totalUsers:(users || []).length,
+            rolesCount:(users || []).reduce((acc:any,u:any)=>{acc[u.role]=(acc[u.role]||0)+1;return acc;},{}),
+          },
+          timestamp:Date.now()
+        })
+      }).catch(()=>{});
+      // #endregion
       this.users = users || [];
       this.managerUsers = this.users.filter(u => u.role === 'manager');
       // 仅展示未完成的任务
@@ -205,10 +235,12 @@ export class DispatchPage implements OnInit {
       // 清除所有缓存，因为任务数据已更新
       this.clearAllCache();
       
-      // 获取部门列表（只从worker角色的用户中提取，去重并按指定顺序排序）
+      // 获取部门列表（从 worker + supervisor 两种角色中提取，去重并按指定顺序排序）
       const preferredOrder = ['机加', '电控', '总装前段', '总装后段', '调试'];
-      const workerUsers = this.users.filter(u => u.role === 'worker');
-      this.departments = [...new Set(workerUsers
+      const workerAndSupervisorUsers = this.users.filter(
+        u => u.role === 'worker' || u.role === 'supervisor'
+      );
+      this.departments = [...new Set(workerAndSupervisorUsers
         .map(user => user.department)
         .filter(dept => dept && dept.trim() !== '')
         .filter(dept => dept !== 'IT部门' && dept !== '生产部')
@@ -606,8 +638,27 @@ export class DispatchPage implements OnInit {
   // 获取筛选后的用户列表
   getFilteredUsers() {
     let filtered = this.users;
-    // 剔除主管/管理员，仅显示工人
-    filtered = filtered.filter(u => u.role === 'worker');
+    // 剔除管理员，仅显示工人和主管（可被派工人员）
+    filtered = filtered.filter(u => u.role === 'worker' || u.role === 'supervisor');
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/91721043-712f-42a4-b142-8681d3f05f43',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        sessionId:'debug-session',
+        runId:'supervisor-visibility',
+        hypothesisId:'H2',
+        location:'dispatch.page.ts:getFilteredUsers',
+        message:'Filtered users for dispatch candidates',
+        data:{
+          totalUsers:(this.users || []).length,
+          filteredCount:filtered.length,
+          rolesCount:(this.users || []).reduce((acc:any,u:any)=>{acc[u.role]=(acc[u.role]||0)+1;return acc;},{}),
+        },
+        timestamp:Date.now()
+      })
+    }).catch(()=>{});
+    // #endregion
     
     // 搜索筛选
     if (this.userSearchKeyword) {
@@ -1485,8 +1536,8 @@ export class DispatchPage implements OnInit {
         });
       });
 
-      // 仅保留工人，剔除主管/管理员
-      const workerUsers = usersArray.filter((u: any) => u.role === 'worker');
+      // 保留工人和主管（可被派工人员），剔除管理员
+      const workerUsers = usersArray.filter((u: any) => u.role === 'worker' || u.role === 'supervisor');
 
       // 先为所有用户创建条目
       let employeeData = workerUsers.map(user => {
@@ -1512,8 +1563,22 @@ export class DispatchPage implements OnInit {
           
           const orderA = getTaskOrder(a);
           const orderB = getTaskOrder(b);
+          
           // 升序排序：order值小的（先分配的/先拖动的）在上
-          return orderA - orderB;
+          if (orderA !== orderB) {
+            return orderA - orderB;
+          }
+          
+          // 如果order值相同，使用任务ID和阶段作为次要排序条件，确保稳定性
+          if (a.id !== b.id) {
+            return a.id - b.id;
+          }
+          
+          // 如果任务ID也相同，按阶段排序（确保同一任务的不同阶段都能显示）
+          const phaseOrder: any = { '机加': 1, '电控': 2, '总装前段': 3, '总装后段': 4, '调试': 5 };
+          const phaseA = phaseOrder[a.assignedPhase] || 999;
+          const phaseB = phaseOrder[b.assignedPhase] || 999;
+          return phaseA - phaseB;
         });
         
         return {
@@ -1533,6 +1598,11 @@ export class DispatchPage implements OnInit {
       // 按组筛选
       if (this.vizGroupFilter) {
         employeeData = employeeData.filter(e => e.user_group === this.vizGroupFilter);
+      }
+
+      // 过滤被隐藏的员工（如果未开启"显示隐藏员工"开关）
+      if (!this.showHiddenEmployees) {
+        employeeData = employeeData.filter(e => !this.hiddenEmployeeIds.includes(e.id));
       }
 
       // 排序：有任务的员工优先（按任务数降序），无任务员工放最后
@@ -2238,6 +2308,59 @@ export class DispatchPage implements OnInit {
     await actionSheet.present();
   }
 
+  // 显示员工菜单（点击员工列头部时调用）
+  async showEmployeeMenu(employee: any) {
+    const isHidden = this.hiddenEmployeeIds.includes(employee.id);
+    const buttons: any[] = [];
+
+    if (isHidden) {
+      // 如果已隐藏，显示"取消隐藏"选项
+      buttons.push({
+        text: '取消隐藏',
+        icon: 'eye-outline',
+        handler: () => {
+          this.hiddenEmployeeIds = this.hiddenEmployeeIds.filter(id => id !== employee.id);
+          this.saveHiddenEmployeeIds();
+          this.loadVizData();
+          this.presentToast(`${employee.name} 已取消隐藏`);
+        }
+      });
+    } else {
+      // 如果未隐藏，显示"隐藏"选项
+      buttons.push({
+        text: '隐藏该员工',
+        icon: 'eye-off-outline',
+        handler: () => {
+          if (!this.hiddenEmployeeIds.includes(employee.id)) {
+            this.hiddenEmployeeIds.push(employee.id);
+            this.saveHiddenEmployeeIds();
+            this.loadVizData();
+            this.presentToast(`${employee.name} 已隐藏`);
+          }
+        }
+      });
+    }
+
+    // 添加取消按钮
+    buttons.push({
+      text: '取消',
+      role: 'cancel'
+    });
+
+    const actionSheet = await this.actionSheetController.create({
+      header: `员工操作`,
+      subHeader: `${employee.name}（${employee.department || '无部门'}）\n当前任务数：${employee.tasks.length}${isHidden ? '\n⚠️ 当前已隐藏' : ''}`,
+      buttons: buttons
+    });
+
+    await actionSheet.present();
+  }
+
+  // 保存隐藏员工列表到 localStorage
+  saveHiddenEmployeeIds() {
+    localStorage.setItem('hiddenEmployeeIds', JSON.stringify(this.hiddenEmployeeIds));
+  }
+
   // 已移除“直接删除任务”，改为上方菜单的取消分配
   async moveTaskToTop(employeeId: number, taskIndex: number) {
     const employee = this.vizData.find(e => e.id === employeeId);
@@ -2416,8 +2539,20 @@ export class DispatchPage implements OnInit {
       } else {
       // 统一口径：当前有效阶段负责人为空才算待分配
       const phase = this.getEffectivePhase(task);
-      const assignee = this.getAssigneeByPhase(task, phase);
-      if (assignee) return false;
+      
+      // 如果是数组（机加和电控并行），需要检查两个阶段是否都有 assignee
+      if (Array.isArray(phase)) {
+        // 只有当所有并行阶段都有 assignee 时，才从待分配列表中移除
+        const allAssigned = phase.every(p => {
+          const assignee = this.getAssigneeByPhase(task, p);
+          return assignee !== null && assignee !== undefined && assignee !== 0;
+        });
+        if (allAssigned) return false;
+      } else if (phase) {
+        // 单个阶段，使用原有逻辑
+        const assignee = this.getAssigneeByPhase(task, phase);
+        if (assignee) return false;
+      }
       }
 
       // 按设备号筛选
@@ -2450,8 +2585,12 @@ export class DispatchPage implements OnInit {
         const p = this.unassignedTaskFilters.phase;
         if (p === 'machining') {
           if (task.machining_phase !== 0) return false;
+          // 如果机加已分配，则不在待分配列表中
+          if (task.machining_assignee) return false;
         } else if (p === 'electrical') {
           if (task.electrical_phase !== 0) return false;
+          // 如果电控已分配，则不在待分配列表中
+          if (task.electrical_assignee) return false;
         } else if (p === 'pre_assembly') {
           // 总装前段：机加阶段已派工（已分配或已完成）且总装前段未分配且未完成
           // 机加阶段已派工：machining_assignee 不为空 或 machining_phase === 1
@@ -2486,6 +2625,22 @@ export class DispatchPage implements OnInit {
       }
       
       return true;
+    });
+
+    // 排序：先按优先级（紧急优先），然后按投产时间（早的优先）
+    result.sort((a, b) => {
+      // 1. 优先级排序：urgent 优先（urgent 在前，normal 在后）
+      const priorityA = this.normalizePriorityValue(a.priority);
+      const priorityB = this.normalizePriorityValue(b.priority);
+      if (priorityA !== priorityB) {
+        // urgent 排在前面（返回 -1），normal 排在后面（返回 1）
+        return priorityA === 'urgent' ? -1 : 1;
+      }
+
+      // 2. 优先级相同，按投产时间排序（早的优先）
+      const timeA = a.production_time ? new Date(a.production_time).getTime() : Number.MAX_SAFE_INTEGER;
+      const timeB = b.production_time ? new Date(b.production_time).getTime() : Number.MAX_SAFE_INTEGER;
+      return timeA - timeB; // 升序：早的在前
     });
 
     // 更新缓存

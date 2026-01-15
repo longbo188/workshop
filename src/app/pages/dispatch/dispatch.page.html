@@ -1374,7 +1374,7 @@
           </div>
           
           <!-- 工位筛选和组筛选放在同一行 -->
-          <div style="display: flex; gap: 12px; flex-wrap: nowrap;">
+          <div style="display: flex; gap: 12px; flex-wrap: nowrap; align-items: center;">
             <ion-select 
               [(ngModel)]="vizDepartmentFilter" 
               (ionChange)="loadVizData()"
@@ -1394,6 +1394,15 @@
               <ion-select-option value="">全部组</ion-select-option>
               <ion-select-option *ngFor="let group of availableGroups" [value]="group">{{ group }}</ion-select-option>
             </ion-select>
+
+            <!-- 显示隐藏员工开关 -->
+            <ion-item style="flex-shrink: 0; min-width: 150px; --background: transparent; --padding-start: 0; --padding-end: 0;">
+              <ion-label style="font-size: 13px;">显示隐藏员工</ion-label>
+              <ion-toggle 
+                [(ngModel)]="showHiddenEmployees" 
+                (ionChange)="loadVizData()">
+              </ion-toggle>
+            </ion-item>
           </div>
         </div>
 
@@ -1426,9 +1435,10 @@
               </div>
               <div class="viz-tasks-wrapper">
                 <!-- 员工姓名固定在顶部 -->
-                <div class="viz-column-header">
+                <div class="viz-column-header" (click)="showEmployeeMenu(employee)" style="cursor: pointer; position: relative;">
                   <div class="viz-name">{{ employee.name }}</div>
                   <div class="viz-count-badge">{{ employee.tasks.length }}</div>
+                  <ion-icon name="ellipsis-horizontal" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 16px; opacity: 0.5;"></ion-icon>
                 </div>
                 <div class="viz-tasks">
                   <div class="viz-task-block" 
@@ -1442,8 +1452,14 @@
                        (contextmenu)="showTaskMenu(task, employee.id, taskIndex); $event.preventDefault()">
                    <div class="task-block-content">
                       <ion-badge class="task-started-badge" color="tertiary" *ngIf="isTaskStarted(task)" title="已开工（当前阶段已开始）">S</ion-badge>
-                      <span class="task-name">{{ task.device_number || getTaskDisplayName(task.name) }}</span>
-                      <span class="task-model" *ngIf="task.product_model">{{ task.product_model }}</span>
+                      <div style="display: flex; align-items: center; gap: 4px; justify-content: center; flex-wrap: wrap;">
+                        <span class="task-name">{{ task.device_number || getTaskDisplayName(task.name) }}</span>
+                        <span class="task-model" *ngIf="task.product_model">{{ task.product_model }}</span>
+                      </div>
+                      <div *ngIf="task.production_time || task.promised_completion_time" style="display: flex; align-items: center; gap: 6px; justify-content: center; flex-wrap: wrap;">
+                        <span *ngIf="task.production_time" style="font-size: 9px; color: #ffffff; opacity: 0.9;">开：{{ task.production_time | date:'MM-dd' }}</span>
+                        <span *ngIf="task.promised_completion_time" style="font-size: 9px; color: #ffffff; opacity: 0.9; font-weight: 500;">交：{{ task.promised_completion_time | date:'MM-dd' }}</span>
+                      </div>
                       <ion-icon name="ellipsis-vertical" class="task-menu-icon"></ion-icon>
                     </div>
                     <div class="task-progress" *ngIf="getTaskProgress(task) > 0">
@@ -1542,9 +1558,14 @@
                     (dragend)="onDragEnd($event)">
                     <div class="task-block-content" style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
                       <div class="task-name" style="display: flex; flex-direction: column; line-height: 1.4; flex: 1; min-width: 0;">
-                        <span>{{ task.device_number || getTaskDisplayName(task.name) }}</span>
-                        <span *ngIf="task.product_model" class="task-model" style="font-size: 0.9em;">{{ task.product_model }}</span>
-                        <span *ngIf="task.production_time" class="task-start-time">开工：{{ task.production_time | date:'yyyy-MM-dd' }}</span>
+                        <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                          <span>{{ task.device_number || getTaskDisplayName(task.name) }}</span>
+                          <span *ngIf="task.product_model" class="task-model" style="font-size: 0.9em;">{{ task.product_model }}</span>
+                        </div>
+                        <div *ngIf="task.production_time || task.promised_completion_time" style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                          <span *ngIf="task.production_time" class="task-start-time" style="font-size: 0.85em; color: #ffffff;">开：{{ task.production_time | date:'MM-dd' }}</span>
+                          <span *ngIf="task.promised_completion_time" class="task-promised-time" style="font-size: 0.85em; color: #ffffff; font-weight: 500;">交：{{ task.promised_completion_time | date:'MM-dd' }}</span>
+                        </div>
                       </div>
                       <div class="task-badges" style="display: flex; flex-direction: column; gap: 4px; flex-shrink: 0;">
                         <ion-badge class="task-started-badge" color="success" *ngIf="unassignedTaskFilters.phase === 'pre_assembly' && task.machining_phase === 1" title="机加阶段已完成" style="--font-size: 9px; --padding-start: 4px; --padding-end: 4px; --padding-top: 1px; --padding-bottom: 1px;">机加✓</ion-badge>

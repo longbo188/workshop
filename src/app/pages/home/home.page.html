@@ -51,7 +51,7 @@
         <ion-icon name="time-outline"></ion-icon>
         <ion-label class="ion-padding-start">导入工时</ion-label>
       </ion-button>
-      <ion-button *ngIf="currentUser?.role==='admin'" (click)="openImportUserModal()" title="导入员工">
+      <ion-button *ngIf="currentUser?.role==='admin' || currentUser?.role==='manager'" (click)="openImportUserModal()" title="导入员工">
         <ion-icon name="person-add-outline"></ion-icon>
         <ion-label class="ion-padding-start">导入员工</ion-label>
       </ion-button>
@@ -161,6 +161,67 @@
       </div>
     </ion-card-content>
   </ion-card>
+
+  <!-- 员工信息查询模态框 -->
+  <ion-modal [isOpen]="isUserListModalOpen" (didDismiss)="closeUserListModal()">
+    <ng-template>
+      <ion-header>
+        <ion-toolbar>
+          <ion-title>员工信息</ion-title>
+          <ion-buttons slot="end">
+            <ion-button (click)="closeUserListModal()">关闭</ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-header>
+      <ion-content class="ion-padding">
+        <ion-item>
+          <ion-label position="stacked">搜索</ion-label>
+          <ion-input
+            [(ngModel)]="userSearchKeyword"
+            placeholder="支持按用户名 / 姓名 / 角色 / 部门 / 组别模糊搜索">
+          </ion-input>
+        </ion-item>
+
+        <ion-list>
+          <ion-item lines="full">
+            <ion-label>
+              <h3>用户名</h3>
+            </ion-label>
+            <ion-label>
+              <h3>姓名</h3>
+            </ion-label>
+            <ion-label>
+              <h3>角色</h3>
+            </ion-label>
+            <ion-label>
+              <h3>部门</h3>
+            </ion-label>
+            <ion-label>
+              <h3>组别</h3>
+            </ion-label>
+          </ion-item>
+
+          <ion-item *ngFor="let u of filteredUsersForModal">
+            <ion-label>
+              <p>{{ u.username }}</p>
+            </ion-label>
+            <ion-label>
+              <p>{{ u.name }}</p>
+            </ion-label>
+            <ion-label>
+              <p>{{ u.role }}</p>
+            </ion-label>
+            <ion-label>
+              <p>{{ u.department }}</p>
+            </ion-label>
+            <ion-label>
+              <p>{{ u.user_group || '-' }}</p>
+            </ion-label>
+          </ion-item>
+        </ion-list>
+      </ion-content>
+    </ng-template>
+  </ion-modal>
 
   <!-- 待审批（主管/管理员可见） -->
   <ion-card *ngIf="(currentUser?.role==='admin' || currentUser?.role==='supervisor' || currentUser?.role==='manager') && (pendingApprovals?.length||0)>0">
@@ -652,8 +713,8 @@
           <p style="margin-top: 8px; color: #666; font-size: 14px;">
             1. 请下载Excel模板，按照模板格式填写员工信息<br/>
             2. 必填字段：username（用户名）、name（姓名）、role（角色）、department（部门）、password（密码）<br/>
-            3. 角色可选：worker（工人）、supervisor（主管）、admin（管理员）<br/>
-            4. user_group（组）：可选字段，填写员工所属组别（如：宋明雄组、组长等）<br/>
+            3. 角色可选：worker（工人）、supervisor（主管）、manager(经理)、admin（管理员）<br/>
+            4. user_group（组）：可选字段，填写员工所属组别<br/>
             5. 密码默认为"123456"，员工可自行修改<br/>
             6. 第一行为字段名，从第二行开始填写数据
           </p>
@@ -710,6 +771,16 @@
               <p *ngFor="let error of importUserResult.errors" style="font-size: 12px; color: #d32f2f;">{{ error }}</p>
             </div>
           </div>
+
+          <ion-button 
+            expand="block" 
+            fill="outline"
+            color="medium"
+            (click)="openUserListModal()"
+            class="ion-margin-top">
+            <ion-icon name="people-circle-outline"></ion-icon>
+            <ion-label class="ion-padding-start">查看现有员工（仅工人）</ion-label>
+          </ion-button>
         </ion-card-content>
       </ion-card>
     </ion-content>

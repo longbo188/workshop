@@ -145,13 +145,15 @@ export class HomePage implements OnInit, OnDestroy {
   selectedUserFile: File | null = null;
   isImportingUsers: boolean = false;
   importUserResult: any = null;
+  // 员工信息查询
+  isUserListModalOpen: boolean = false;
+  userSearchKeyword: string = '';
   
   // 导入标准工时相关属性
   isStdHoursModalOpen: boolean = false;
   selectedStdFile: File | null = null;
   isImportingStd: boolean = false;
   importStdResult: any = null;
-  
   // IonDatetime 辅助范围（防止空白）
   minDateISO: string = '2000-01-01T00:00';
   maxDateISO: string = '2100-12-31T23:59';
@@ -197,6 +199,38 @@ export class HomePage implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.stopTicker();
+  }
+
+  // 打开/关闭员工信息查询模态框
+  openUserListModal() {
+    this.isUserListModalOpen = true;
+    this.userSearchKeyword = '';
+  }
+
+  closeUserListModal() {
+    this.isUserListModalOpen = false;
+    this.userSearchKeyword = '';
+  }
+
+  get filteredUsersForModal() {
+    const keyword = (this.userSearchKeyword || '').trim().toLowerCase();
+    // 只展示 worker 角色
+    const workerUsers = (this.users || []).filter((u: any) => u.role === 'worker');
+    if (!keyword) {
+      return workerUsers;
+    }
+    return workerUsers.filter((u: any) => {
+      const text = [
+        u.username,
+        u.name,
+        u.department,
+        u.user_group
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return text.includes(keyword);
+    });
   }
 
   async loadTasks(): Promise<void> {

@@ -13,7 +13,9 @@ import {
   IonIcon,
   IonCheckbox,
   IonItem,
-  IonLabel
+  IonLabel,
+  IonModal,
+  IonButtons
 } from '@ionic/angular/standalone';
 import { FormsModule } from '@angular/forms'; // 导入模块
 import { environment } from '../../../environments/environment';
@@ -37,6 +39,8 @@ import { OnInit } from '@angular/core';
     IonCheckbox,
     IonItem,
     IonLabel,
+    IonModal,
+    IonButtons,
     FormsModule,
     CommonModule
   ]
@@ -47,7 +51,14 @@ export class LoginPage implements OnInit {
   isLoading: boolean = false;
   errorMessage: string = '';
   rememberMe: boolean = false;
-  
+
+  // 修改密码相关
+  isChangePasswordModalOpen: boolean = false;
+  oldPassword: string = '';
+  newPassword: string = '';
+  confirmPassword: string = '';
+  changePasswordMessage: string = '';
+  changePasswordSuccess: boolean = false;
 
   // 数据可视化元素数据
   mapPoints = [
@@ -141,6 +152,73 @@ export class LoginPage implements OnInit {
       }
     } catch (error: any) {
       this.errorMessage = '登录失败：' + (error.error?.error || error.message);
+    } finally {
+      this.isLoading = false;
+    }
+  }
+
+  // 打开/关闭修改密码弹窗
+  openChangePasswordModal() {
+    this.isChangePasswordModalOpen = true;
+    this.oldPassword = '';
+    this.newPassword = '';
+    this.confirmPassword = '';
+    this.errorMessage = '';
+    this.changePasswordMessage = '';
+  }
+
+  closeChangePasswordModal() {
+    this.isChangePasswordModalOpen = false;
+    this.oldPassword = '';
+    this.newPassword = '';
+    this.confirmPassword = '';
+    this.changePasswordMessage = '';
+  }
+
+  // 登录页修改密码（通过用户名 + 原密码）
+  async changePassword() {
+    if (!this.username) {
+      this.changePasswordMessage = '请先输入用户名';
+      this.changePasswordSuccess = false;
+      return;
+    }
+    if (!this.oldPassword || !this.newPassword || !this.confirmPassword) {
+      this.changePasswordMessage = '请完整填写原密码和新密码';
+      this.changePasswordSuccess = false;
+      return;
+    }
+    if (this.newPassword !== this.confirmPassword) {
+      this.changePasswordMessage = '两次输入的新密码不一致';
+      this.changePasswordSuccess = false;
+      return;
+    }
+    if (this.newPassword.length < 6) {
+      this.changePasswordMessage = '新密码长度不能少于6位';
+      this.changePasswordSuccess = false;
+      return;
+    }
+
+    this.isLoading = true;
+    this.changePasswordMessage = '';
+
+    try {
+      const isNative = Capacitor.isNativePlatform();
+      const base = isNative ? (environment.apiBase.replace('localhost', '10.0.2.2')) : environment.apiBase;
+
+      await this.http.post(`${base}/api/users/change-password`, {
+        username: this.username,
+        oldPassword: this.oldPassword,
+        newPassword: this.newPassword
+      }).toPromise();
+
+      // 修改成功，在模态框中提示
+      this.changePasswordSuccess = true;
+      this.changePasswordMessage = '密码修改成功，请使用新密码登录';
+      // 保留用户名，新密码让用户在登录框里重新输入
+      this.password = '';
+    } catch (error: any) {
+      this.changePasswordSuccess = false;
+      this.changePasswordMessage = error?.error?.error || error?.message || '修改密码失败';
     } finally {
       this.isLoading = false;
     }
