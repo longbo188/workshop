@@ -31,7 +31,7 @@
           <ion-label>筛选工段</ion-label>
           <ion-select 
             [(ngModel)]="selectedDepartmentFilter" 
-            placeholder="选择车间"
+            placeholder="选择工段"
             (ionChange)="onDepartmentFilterChange()"
             class="filter-select">
             <ion-select-option value="">全部工段</ion-select-option>
@@ -282,9 +282,7 @@
       <ion-toolbar>
         <ion-title>调整考勤时长</ion-title>
         <ion-buttons slot="end">
-          <ion-button (click)="closeAdjustModal()">
-            <ion-icon name="close"></ion-icon>
-          </ion-button>
+          <ion-button color="dark" fill="clear" style="color: #111827;" (click)="closeAdjustModal()">关闭</ion-button>
         </ion-buttons>
       </ion-toolbar>
     </ion-header>
@@ -391,9 +389,7 @@
       <ion-toolbar>
         <ion-title>批量调整加班时间</ion-title>
         <ion-buttons slot="end">
-          <ion-button (click)="closeBatchAdjustModal()">
-            <ion-icon name="close"></ion-icon>
-          </ion-button>
+          <ion-button color="dark" fill="clear" style="color: #111827;" (click)="closeBatchAdjustModal()">关闭</ion-button>
         </ion-buttons>
       </ion-toolbar>
     </ion-header>
@@ -547,9 +543,7 @@
       <ion-toolbar>
         <ion-title>批量考勤管理</ion-title>
         <ion-buttons slot="end">
-          <ion-button (click)="closeBatchAttendanceModal()">
-            ✕
-          </ion-button>
+          <ion-button color="dark" fill="clear" style="color: #111827;" (click)="closeBatchAttendanceModal()">关闭</ion-button>
         </ion-buttons>
       </ion-toolbar>
     </ion-header>
@@ -712,9 +706,7 @@
       <ion-toolbar>
         <ion-title>调整工作时间</ion-title>
         <ion-buttons slot="end">
-          <ion-button (click)="closeWorkTimeModal()">
-            <ion-icon name="close"></ion-icon>
-          </ion-button>
+          <ion-button color="dark" fill="clear" style="color: #111827;" (click)="closeWorkTimeModal()">关闭</ion-button>
         </ion-buttons>
       </ion-toolbar>
     </ion-header>

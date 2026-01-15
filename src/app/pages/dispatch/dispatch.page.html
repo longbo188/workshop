@@ -623,8 +623,8 @@
         <ion-toolbar>
           <ion-title>分配任务</ion-title>
           <ion-buttons slot="end">
-            <ion-button (click)="closeAssignModal()">
-              <ion-icon name="close"></ion-icon>
+            <ion-button color="dark" fill="clear" style="color: #111827;" (click)="closeAssignModal()">
+              关闭
             </ion-button>
           </ion-buttons>
         </ion-toolbar>
@@ -766,8 +766,8 @@
         <ion-toolbar>
           <ion-title>指定协助人员</ion-title>
           <ion-buttons slot="end">
-            <ion-button (click)="closeAssignAssistantModal()">
-              <ion-icon name="close"></ion-icon>
+            <ion-button color="dark" fill="clear" style="color: #111827;" (click)="closeAssignAssistantModal()">
+              关闭
             </ion-button>
           </ion-buttons>
         </ion-toolbar>
@@ -1011,8 +1011,8 @@
         <ion-toolbar>
           <ion-title>导入任务</ion-title>
           <ion-buttons slot="end">
-            <ion-button (click)="closeImportModal()">
-              <ion-icon name="close"></ion-icon>
+            <ion-button color="dark" fill="clear" style="color: #111827;" (click)="closeImportModal()">
+              关闭
             </ion-button>
           </ion-buttons>
         </ion-toolbar>
@@ -1108,7 +1108,7 @@
         <ion-toolbar>
           <ion-title>导入标准工时</ion-title>
           <ion-buttons slot="end">
-            <ion-button (click)="closeStdHoursModal()"><ion-icon name="close"></ion-icon></ion-button>
+            <ion-button color="dark" fill="clear" style="color: #111827;" (click)="closeStdHoursModal()">关闭</ion-button>
           </ion-buttons>
         </ion-toolbar>
       </ion-header>
@@ -1174,7 +1174,7 @@
         <ion-toolbar>
           <ion-title>新增任务</ion-title>
           <ion-buttons slot="end">
-            <ion-button (click)="closeCreateTaskModal()"><ion-icon name="close"></ion-icon></ion-button>
+            <ion-button color="dark" fill="clear" style="color: #111827;" (click)="closeCreateTaskModal()">关闭</ion-button>
           </ion-buttons>
         </ion-toolbar>
       </ion-header>
@@ -1249,7 +1249,7 @@
         <ion-toolbar>
           <ion-title>修改任务</ion-title>
           <ion-buttons slot="end">
-            <ion-button (click)="closeEditTaskModal()"><ion-icon name="close"></ion-icon></ion-button>
+            <ion-button color="dark" fill="clear" style="color: #111827;" (click)="closeEditTaskModal()">关闭</ion-button>
           </ion-buttons>
         </ion-toolbar>
       </ion-header>
@@ -1314,7 +1314,7 @@
         <ion-toolbar>
           <ion-title>删除任务</ion-title>
           <ion-buttons slot="end">
-            <ion-button (click)="closeDeleteTaskModal()"><ion-icon name="close"></ion-icon></ion-button>
+            <ion-button color="dark" fill="clear" style="color: #111827;" (click)="closeDeleteTaskModal()">关闭</ion-button>
           </ion-buttons>
         </ion-toolbar>
       </ion-header>
@@ -1351,10 +1351,12 @@
   <ion-modal [isOpen]="isVizModalOpen" (didDismiss)="closeVizModal()" [style.--width]="'95%'" [style.--max-width]="'1800px'" [style.--height]="'95%'">
     <ng-template>
       <ion-header>
-        <ion-toolbar>
+        <ion-toolbar color="light">
           <ion-title>派工任务可视化</ion-title>
           <ion-buttons slot="end">
-            <ion-button (click)="closeVizModal()"><ion-icon name="close"></ion-icon></ion-button>
+            <ion-button color="dark" fill="clear" style="color: #111827;" (click)="closeVizModal()">
+              关闭
+            </ion-button>
           </ion-buttons>
         </ion-toolbar>
       </ion-header>
@@ -1496,7 +1498,7 @@
                   
                   <ion-item>
                     <ion-label position="stacked">阶段</ion-label>
-                    <ion-select [(ngModel)]="unassignedTaskFilters.phase" placeholder="全部阶段">
+                    <ion-select [(ngModel)]="unassignedTaskFilters.phase" (ionChange)="onPhaseFilterChange()" placeholder="全部阶段">
                       <ion-select-option value="">全部阶段</ion-select-option>
                       <ion-select-option value="machining">机加阶段</ion-select-option>
                       <ion-select-option value="electrical">电控阶段</ion-select-option>

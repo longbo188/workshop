@@ -168,9 +168,9 @@
       <ion-header>
         <ion-toolbar>
           <ion-title>员工信息</ion-title>
-          <ion-buttons slot="end">
-            <ion-button (click)="closeUserListModal()">关闭</ion-button>
-          </ion-buttons>
+        <ion-buttons slot="end">
+          <ion-button color="dark" style="color: #111827;" (click)="closeUserListModal()">关闭</ion-button>
+        </ion-buttons>
         </ion-toolbar>
       </ion-header>
       <ion-content class="ion-padding">
@@ -477,8 +477,8 @@
       <ion-toolbar>
         <ion-title>完成{{ selectedTaskPhaseName }}阶段</ion-title>
         <ion-buttons slot="end">
-          <ion-button (click)="closeCompleteModal()">
-            <ion-icon name="close"></ion-icon>
+          <ion-button color="dark" fill="clear" style="color: #111827;" (click)="closeCompleteModal()">
+            关闭
           </ion-button>
         </ion-buttons>
       </ion-toolbar>
@@ -537,8 +537,8 @@
       <ion-toolbar>
         <ion-title>{{ currentUser?.role === 'staff' ? '责任部门确认' : '异常上报' }}</ion-title>
         <ion-buttons slot="end">
-          <ion-button (click)="closeExceptionModal()">
-            <ion-icon name="close"></ion-icon>
+          <ion-button color="dark" fill="clear" style="color: #111827;" (click)="closeExceptionModal()">
+            关闭
           </ion-button>
         </ion-buttons>
       </ion-toolbar>
@@ -711,7 +711,7 @@
       <ion-toolbar>
         <ion-title>导入员工信息</ion-title>
         <ion-buttons slot="end">
-          <ion-button (click)="closeImportUserModal()">关闭</ion-button>
+          <ion-button color="dark" style="color: #111827;" (click)="closeImportUserModal()">关闭</ion-button>
         </ion-buttons>
       </ion-toolbar>
     </ion-header>
@@ -803,7 +803,7 @@
       <ion-toolbar>
         <ion-title>导入标准工时</ion-title>
         <ion-buttons slot="end">
-          <ion-button (click)="closeStdHoursModal()"><ion-icon name="close"></ion-icon></ion-button>
+          <ion-button color="dark" fill="clear" style="color: #111827;" (click)="closeStdHoursModal()">关闭</ion-button>
         </ion-buttons>
       </ion-toolbar>
     </ion-header>

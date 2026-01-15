@@ -97,6 +97,18 @@ export class DispatchPage implements OnInit {
   selectedAssignmentStatus = ''; // 新增：分配状态筛选
   currentPage = 1;
   pageSize = 50;
+
+  // 根据工位名称映射到对应的阶段 key（用于联动）
+  private mapDepartmentToPhase(dept: string): string {
+    const map: any = {
+      '机加': 'machining',
+      '电控': 'electrical',
+      '总装前段': 'pre_assembly',
+      '总装后段': 'post_assembly',
+      '调试': 'debugging'
+    };
+    return map[dept] || '';
+  }
   showFilters = false;
   selectedView = 'all'; // 新增：视图筛选 ('all', 'unassigned', 'assigned', 'urgent')
   tableColumnVisibility: Record<string, boolean> = {
@@ -2505,6 +2517,43 @@ export class DispatchPage implements OnInit {
   private clearUnassignedTasksCache() {
     this._cachedFilteredUnassignedTasks = null;
     this._cachedFilterKey = '';
+  }
+
+  // 工位筛选变更时，只重新加载数据，不控制阶段筛选
+  onVizDepartmentChange() {
+    this.loadVizData();
+  }
+
+  // 阶段筛选变更时的联动逻辑：同步更新工位筛选
+  onPhaseFilterChange() {
+    const phase = this.unassignedTaskFilters.phase || '';
+    const dept = this.mapPhaseToDepartment(phase);
+
+    // 如果阶段能映射到具体工位，则联动设置工位筛选；
+    // 否则（例如选择"全部阶段"）则清空工位筛选。
+    if (dept) {
+      this.vizDepartmentFilter = dept;
+    } else {
+      this.vizDepartmentFilter = '';
+    }
+
+    // 清除待分配任务缓存，保证筛选立即生效
+    this.clearUnassignedTasksCache();
+
+    // 重新加载可视化数据（包括左侧的员工列和右侧的待分配任务区域）
+    this.loadVizData();
+  }
+
+  // 将阶段映射到工位（阶段 -> 工位）
+  private mapPhaseToDepartment(phase: string): string {
+    const phaseMap: { [key: string]: string } = {
+      'machining': '机加',
+      'electrical': '电控',
+      'pre_assembly': '总装前段',
+      'post_assembly': '总装后段',
+      'debugging': '调试'
+    };
+    return phaseMap[phase] || '';
   }
 
   getFilteredUnassignedTasks(): any[] {

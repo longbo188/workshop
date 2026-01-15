@@ -25,6 +25,18 @@
 @import "@ionic/angular/css/text-transformation.css";
 @import "@ionic/angular/css/flex-utils.css";
 
+/* 保证所有模态框右上角的关闭按钮在浅色背景下可见 */
+ion-modal ion-header ion-toolbar ion-buttons[slot="end"] ion-button,
+ion-modal ion-header ion-toolbar ion-buttons[slot="end"] ion-button ion-icon[name="close"] {
+  color: #111827 !important; /* 深色图标/文字 */
+}
+
+/* 可选：给关闭按钮一个浅灰背景，增强可见性 */
+ion-modal ion-header ion-toolbar ion-buttons[slot="end"] ion-button {
+  --background: rgba(0, 0, 0, 0.04);
+  border-radius: 50%;
+}
+
 /**
  * Ionic Dark Mode
  * -----------------------------------------------------
