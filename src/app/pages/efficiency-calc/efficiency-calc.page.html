@@ -56,16 +56,13 @@
               <ion-icon name="bar-chart-outline" slot="start"></ion-icon>
               月度效率
             </ion-button>
+            <ion-button color="secondary" (click)="calculateDeviceEfficiency()">
+              <ion-icon name="hardware-chip" slot="start"></ion-icon>
+              设备效率
+            </ion-button>
             <ion-button color="success" (click)="openExportModal()">
               <ion-icon name="download-outline" slot="start"></ion-icon>
               导出效率数据
-            </ion-button>
-            <ion-button 
-              *ngIf="currentUser?.role === 'admin'" 
-              color="warning" 
-              (click)="clearConfirmedTasks()">
-              <ion-icon name="trash-outline" slot="start"></ion-icon>
-              清除已确认任务
             </ion-button>
           </div>
         </div>
@@ -133,10 +130,21 @@
   <!-- 月度效率汇总（表格样式） -->
   <ion-card *ngIf="monthlyEfficiencyResults.length > 0" class="efficiency-card">
     <ion-card-header>
-      <ion-card-title>月度效率汇总</ion-card-title>
-      <ion-card-subtitle>任务有效工时之和 ÷ 标准工时之和（按员工 + 月份汇总，在所选日期范围内）</ion-card-subtitle>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div>
+          <ion-card-title>月度效率汇总</ion-card-title>
+          <ion-card-subtitle>任务有效工时之和 ÷ 标准工时之和（按员工 + 月份汇总，在所选日期范围内）</ion-card-subtitle>
+        </div>
+        <ion-button 
+          fill="clear" 
+          size="small" 
+          (click)="isMonthlyTableExpanded = !isMonthlyTableExpanded">
+          <ion-icon [name]="isMonthlyTableExpanded ? 'chevron-up-outline' : 'chevron-down-outline'" slot="start"></ion-icon>
+          {{ isMonthlyTableExpanded ? '收起' : '展开' }}
+        </ion-button>
+      </div>
     </ion-card-header>
-    <ion-card-content>
+    <ion-card-content *ngIf="isMonthlyTableExpanded">
       <div class="excel-table-scroll">
         <table class="excel-table">
           <thead>
@@ -213,6 +221,112 @@
     </ion-card-content>
   </ion-card>
 
+  <!-- 设备效率汇总（表格样式） -->
+  <ion-card *ngIf="deviceEfficiencyResults.length > 0" class="efficiency-card">
+    <ion-card-header>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div>
+          <ion-card-title>设备效率汇总</ion-card-title>
+          <ion-card-subtitle>标准工时之和 ÷ 有效工时之和（按设备号汇总所有阶段，在所选日期范围内）</ion-card-subtitle>
+        </div>
+        <ion-button 
+          fill="clear" 
+          size="small" 
+          (click)="isDeviceTableExpanded = !isDeviceTableExpanded">
+          <ion-icon [name]="isDeviceTableExpanded ? 'chevron-up-outline' : 'chevron-down-outline'" slot="start"></ion-icon>
+          {{ isDeviceTableExpanded ? '收起' : '展开' }}
+        </ion-button>
+      </div>
+    </ion-card-header>
+    <ion-card-content *ngIf="isDeviceTableExpanded">
+      <div class="excel-table-scroll">
+        <table class="excel-table">
+          <thead>
+            <tr>
+              <th>序号</th>
+              <th>设备/型号</th>
+              <th>任务数</th>
+              <th>标准工时(h)</th>
+              <th>有效工时(h)</th>
+              <th>效率</th>
+              <th>状态</th>
+            </tr>
+            <tr class="filter-row">
+              <th></th>
+              <!-- 设备/型号筛选 -->
+              <th>
+                <input
+                  class="table-filter-input"
+                  placeholder="筛选设备/型号"
+                  [(ngModel)]="deviceTableModelFilter"
+                  (ngModelChange)="calculateDeviceEfficiency()">
+              </th>
+              <th></th>
+              <th></th>
+              <th></th>
+              <!-- 效率排序 -->
+              <th>
+                <select
+                  class="table-filter-select"
+                  [(ngModel)]="deviceTableEfficiencySort"
+                  (ngModelChange)="calculateDeviceEfficiency()">
+                  <option value="">不排序</option>
+                  <option value="asc">升序</option>
+                  <option value="desc">降序</option>
+                </select>
+              </th>
+              <!-- 完成状态筛选 -->
+              <th>
+                <select
+                  class="table-filter-select"
+                  [(ngModel)]="deviceTableCompletionFilter"
+                  (ngModelChange)="calculateDeviceEfficiency()">
+                  <option value="">全部</option>
+                  <option value="completed">已完成</option>
+                  <option value="incomplete">未完成</option>
+                </select>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let item of getFilteredDeviceResults(); let i = index">
+              <td>{{ i + 1 }}</td>
+              <td>{{ item.deviceLabel }}</td>
+              <td>{{ item.taskCount }}</td>
+              <td>{{ item.standardHours }}h</td>
+              <td>{{ item.actualHours }}h</td>
+              <td>
+                <ion-chip [color]="item.efficiency >= 100 ? 'success' : item.efficiency >= 80 ? 'warning' : 'danger'">
+                  <ion-icon name="speedometer-outline"></ion-icon>
+                  <ion-label>{{ item.efficiency }}%</ion-label>
+                </ion-chip>
+              </td>
+              <td>
+                <ion-chip [color]="item.isCompleted ? 'success' : 'warning'">
+                  <ion-icon [name]="item.isCompleted ? 'checkmark-circle-outline' : 'time-outline'"></ion-icon>
+                  <ion-label>{{ item.isCompleted ? '已完成' : '未完成' }}</ion-label>
+                </ion-chip>
+              </td>
+            </tr>
+            <!-- 合计行：当前筛选条件下的总标准工时 / 总有效工时 / 总效率 -->
+            <tr class="monthly-total-row">
+              <td colspan="3">合计</td>
+              <td>{{ getDeviceTotal().standardHours }}h</td>
+              <td>{{ getDeviceTotal().actualHours }}h</td>
+              <td>
+                <ion-chip [color]="getDeviceTotal().efficiency >= 100 ? 'success' : getDeviceTotal().efficiency >= 80 ? 'warning' : 'danger'">
+                  <ion-icon name="speedometer-outline"></ion-icon>
+                  <ion-label>{{ getDeviceTotal().efficiency.toFixed(2) }}%</ion-label>
+                </ion-chip>
+              </td>
+              <td></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </ion-card-content>
+  </ion-card>
+
   <!-- 加载状态 -->
   <ion-card *ngIf="loading">
     <ion-card-content class="ion-text-center">
@@ -263,7 +377,7 @@
               <th>
                 <input 
                   class="table-filter-input" 
-                  placeholder="筛选型号" 
+                  placeholder="筛选型号/设备号" 
                   [(ngModel)]="tableModelFilter" 
                   (ngModelChange)="applyTableFilters()">
               </th>
@@ -347,25 +461,16 @@
                 </ion-chip>
               </td>
               <td>
-                <ion-chip color="success" class="metric-chip">
-                  <ion-icon name="checkmark-circle-outline"></ion-icon>
-                  <ion-label>{{ getEffectiveHours(data).toFixed(1) }}h</ion-label>
-                </ion-chip>
+                {{ getEffectiveHours(data).toFixed(1) }}h
               </td>
               <td>
-                <ion-chip color="tertiary" class="metric-chip">
-                  <ion-icon name="calendar-outline"></ion-icon>
-                  <ion-label>{{ (data.actualWorkHours || 0).toFixed(1) }}h</ion-label>
-                </ion-chip>
+                {{ (data.actualWorkHours || 0).toFixed(1) }}h
               </td>
               <td>
                 {{ data.phaseEndTime ? formatDate(data.phaseEndTime) : '-' }}
               </td>
               <td>
-                <ion-chip [color]="getEfficiencyColor(data.efficiency)" class="efficiency-chip">
-                  <ion-icon name="trending-up-outline"></ion-icon>
-                  <ion-label>{{ formatEfficiency(data.efficiency) }}</ion-label>
-                </ion-chip>
+                {{ formatEfficiency(data.efficiency) }}
               </td>
               <td>
                 <ion-chip *ngIf="data.exceptionReports.length > 0" 

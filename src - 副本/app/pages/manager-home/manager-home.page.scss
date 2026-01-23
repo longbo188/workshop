@@ -1,0 +1,62 @@
+.error-box {
+  color: #c0392b;
+  background: #fdecea;
+  border: 1px solid #f5c6cb;
+  padding: 10px 12px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
+.spinner-wrapper {
+  display: flex;
+  justify-content: center;
+  margin-top: 24px;
+}
+
+.empty-hint {
+  text-align: center;
+  color: #666;
+  margin-top: 24px;
+}
+
+.card-subtitle {
+  display: flex;
+  gap: 12px;
+  font-size: 13px;
+  color: #606266;
+  margin-top: 4px;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  padding: 6px 0;
+  border-bottom: 1px solid #f0f0f0;
+
+  span {
+    color: #7f8c8d;
+  }
+
+  strong {
+    color: #2c3e50;
+  }
+}
+
+.detail-row:last-of-type {
+  border-bottom: none;
+}
+
+.action-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+  justify-content: flex-end;
+}
+
+
+
+
+
+
+

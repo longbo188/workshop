@@ -1,4 +1,4 @@
-﻿<ion-header>
+<ion-header>
   <ion-toolbar>
     <ion-title>主管派工</ion-title>
     <ion-buttons slot="end">
@@ -1146,6 +1146,10 @@
               <ion-icon *ngIf="!isImportingStd" name="cloud-upload-outline"></ion-icon>
               {{ isImportingStd ? '导入中...' : '开始导入' }}
             </ion-button>
+            <ion-button expand="block" fill="outline" color="medium" (click)="openStandardHoursListModal()" style="margin-top: 12px;">
+              <ion-icon name="list-outline"></ion-icon>
+              <ion-label class="ion-padding-start">查看现有标准工时</ion-label>
+            </ion-button>
         </ion-card-content>
       </ion-card>
         <ion-card *ngIf="importStdResult">
@@ -1161,6 +1165,164 @@
                 <div *ngFor="let e of importStdResult.errors">{{ e }}</div>
     </div>
   </div>
+          </ion-card-content>
+        </ion-card>
+      </ion-content>
+    </ng-template>
+  </ion-modal>
+
+  <!-- 标准工时列表模态框 -->
+  <ion-modal [isOpen]="isStandardHoursListModalOpen" (didDismiss)="closeStandardHoursListModal()" class="large-modal">
+    <ng-template>
+      <ion-header>
+        <ion-toolbar>
+          <ion-title>现有标准工时</ion-title>
+          <ion-buttons slot="start">
+            <ion-button *ngIf="isEngineeringDepartment()" color="primary" fill="solid" (click)="openAddStandardHoursModal()">
+              <ion-icon name="add-outline" slot="start"></ion-icon>
+              新增
+            </ion-button>
+          </ion-buttons>
+          <ion-buttons slot="end">
+            <ion-button color="dark" fill="clear" style="color: #111827;" (click)="closeStandardHoursListModal()">关闭</ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-header>
+      <ion-content class="ion-padding">
+        <ion-card *ngIf="isLoadingStandardHours">
+          <ion-card-content class="ion-text-center">
+            <ion-spinner></ion-spinner>
+            <p>加载中...</p>
+          </ion-card-content>
+        </ion-card>
+        <ion-card *ngIf="!isLoadingStandardHours && standardHoursList.length === 0">
+          <ion-card-content class="ion-text-center">
+            <p>暂无标准工时数据</p>
+          </ion-card-content>
+        </ion-card>
+        <div *ngIf="!isLoadingStandardHours && standardHoursList.length > 0" style="max-height: 70vh; overflow-y: auto;">
+          <table style="width: 100%; border-collapse: collapse; margin-top: 16px;">
+            <thead>
+              <tr style="background-color: #f5f5f5; border-bottom: 2px solid #ddd;">
+                <th style="padding: 12px; text-align: left; border: 1px solid #ddd; font-weight: bold;">产品型号</th>
+                <th style="padding: 12px; text-align: center; border: 1px solid #ddd; font-weight: bold;">机加阶段(h)</th>
+                <th style="padding: 12px; text-align: center; border: 1px solid #ddd; font-weight: bold;">电控阶段(h)</th>
+                <th style="padding: 12px; text-align: center; border: 1px solid #ddd; font-weight: bold;">总装前段(h)</th>
+                <th style="padding: 12px; text-align: center; border: 1px solid #ddd; font-weight: bold;">总装后段(h)</th>
+              <th style="padding: 12px; text-align: center; border: 1px solid #ddd; font-weight: bold;">调试阶段(h)</th>
+              <th style="padding: 12px; text-align: center; border: 1px solid #ddd; font-weight: bold;">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let item of standardHoursList" style="border-bottom: 1px solid #ddd;">
+              <td style="padding: 12px; border: 1px solid #ddd; font-weight: 500;">{{ item.product_model }}</td>
+              <td style="padding: 12px; text-align: center; border: 1px solid #ddd;">{{ item.machining_hours || 0 }}</td>
+              <td style="padding: 12px; text-align: center; border: 1px solid #ddd;">{{ item.electrical_hours || 0 }}</td>
+              <td style="padding: 12px; text-align: center; border: 1px solid #ddd;">{{ item.pre_assembly_hours || 0 }}</td>
+              <td style="padding: 12px; text-align: center; border: 1px solid #ddd;">{{ item.post_assembly_hours || 0 }}</td>
+              <td style="padding: 12px; text-align: center; border: 1px solid #ddd;">{{ item.debugging_hours || 0 }}</td>
+              <td style="padding: 12px; text-align: center; border: 1px solid #ddd;">
+                <ion-button *ngIf="isEngineeringDepartment()" size="small" fill="outline" color="dark" (click)="openEditStandardHoursModal(item)" style="white-space: nowrap;">
+                  <ion-icon name="create-outline" style="color: #000;"></ion-icon>
+                  <ion-label style="color: #000; margin-left: 4px; white-space: nowrap;">修改</ion-label>
+                </ion-button>
+                <span *ngIf="!isEngineeringDepartment()">-</span>
+              </td>
+            </tr>
+            </tbody>
+          </table>
+        </div>
+      </ion-content>
+    </ng-template>
+  </ion-modal>
+
+  <!-- 编辑标准工时模态框 -->
+  <ion-modal [isOpen]="isEditStandardHoursModalOpen" (didDismiss)="closeEditStandardHoursModal()" class="large-modal">
+    <ng-template>
+      <ion-header>
+        <ion-toolbar>
+          <ion-title>{{ editingStandardHoursItem ? '编辑标准工时' : '新增标准工时' }}</ion-title>
+          <ion-buttons slot="end">
+            <ion-button color="dark" fill="clear" style="color: #111827;" (click)="closeEditStandardHoursModal()">关闭</ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-header>
+      <ion-content class="ion-padding">
+        <ion-card>
+          <ion-card-header>
+            <ion-card-title *ngIf="editingStandardHoursItem">{{ editingStandardHoursItem.product_model }}</ion-card-title>
+            <ion-card-title *ngIf="!editingStandardHoursItem">新增标准工时</ion-card-title>
+          </ion-card-header>
+          <ion-card-content>
+            <ion-item *ngIf="!editingStandardHoursItem">
+              <ion-label position="stacked">产品型号 <span style="color: red;">*</span></ion-label>
+              <ion-input 
+                type="text" 
+                [(ngModel)]="newProductModel" 
+                placeholder="请输入产品型号"
+                required>
+              </ion-input>
+            </ion-item>
+            <ion-item>
+              <ion-label position="stacked">机加阶段标准工时（小时）</ion-label>
+              <ion-input 
+                type="number" 
+                [(ngModel)]="editingStandardHours.machining" 
+                placeholder="请输入标准工时"
+                step="0.01"
+                min="0">
+              </ion-input>
+            </ion-item>
+            <ion-item>
+              <ion-label position="stacked">电控阶段标准工时（小时）</ion-label>
+              <ion-input 
+                type="number" 
+                [(ngModel)]="editingStandardHours.electrical" 
+                placeholder="请输入标准工时"
+                step="0.01"
+                min="0">
+              </ion-input>
+            </ion-item>
+            <ion-item>
+              <ion-label position="stacked">总装前段标准工时（小时）</ion-label>
+              <ion-input 
+                type="number" 
+                [(ngModel)]="editingStandardHours.preAssembly" 
+                placeholder="请输入标准工时"
+                step="0.01"
+                min="0">
+              </ion-input>
+            </ion-item>
+            <ion-item>
+              <ion-label position="stacked">总装后段标准工时（小时）</ion-label>
+              <ion-input 
+                type="number" 
+                [(ngModel)]="editingStandardHours.postAssembly" 
+                placeholder="请输入标准工时"
+                step="0.01"
+                min="0">
+              </ion-input>
+            </ion-item>
+            <ion-item>
+              <ion-label position="stacked">调试阶段标准工时（小时）</ion-label>
+              <ion-input 
+                type="number" 
+                [(ngModel)]="editingStandardHours.debugging" 
+                placeholder="请输入标准工时"
+                step="0.01"
+                min="0">
+              </ion-input>
+            </ion-item>
+            
+            <div style="margin-top: 16px;">
+              <ion-button expand="block" (click)="saveStandardHours()" [disabled]="isSavingStandardHours">
+                <ion-spinner *ngIf="isSavingStandardHours" name="crescent"></ion-spinner>
+                <span *ngIf="!isSavingStandardHours">保存</span>
+              </ion-button>
+              <ion-button expand="block" fill="outline" (click)="closeEditStandardHoursModal()" style="margin-top: 8px;">
+                取消
+              </ion-button>
+            </div>
           </ion-card-content>
         </ion-card>
       </ion-content>

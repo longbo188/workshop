@@ -1,0 +1,168 @@
+<ion-header>
+  <ion-toolbar>
+    <ion-title>报工详情</ion-title>
+    <ion-buttons slot="start">
+      <ion-button (click)="goBack()">
+        <ion-icon name="arrow-back-outline"></ion-icon>
+      </ion-button>
+    </ion-buttons>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content class="ion-padding">
+  <!-- 加载状态 -->
+  <ion-spinner *ngIf="isLoading" name="crescent"></ion-spinner>
+
+  <!-- 错误信息 -->
+  <ion-alert *ngIf="errorMsg" color="danger" header="错误" [message]="errorMsg" is-open="true"></ion-alert>
+
+  <!-- 任务信息 -->
+  <ion-card *ngIf="task && !isLoading">
+    <ion-card-header>
+      <ion-card-title>{{ task.name }}</ion-card-title>
+    </ion-card-header>
+    <ion-card-content>
+      <p><strong>任务ID：</strong>{{ task.id }}</p>
+      <p><strong>状态：</strong>{{ task.status === 'in_progress' ? '进行中' : task.status }}</p>
+      <p><strong>优先级：</strong>{{ getPriorityText(task.priority) }}</p>
+      <p *ngIf="task.description"><strong>描述：</strong>{{ task.description }}</p>
+      <p *ngIf="task.estimated_hours"><strong>预计工时：</strong>{{ task.estimated_hours }}小时</p>
+    </ion-card-content>
+  </ion-card>
+
+  <!-- 阶段进度 -->
+  <ion-card *ngIf="phaseInfo && !isLoading">
+    <ion-card-header>
+      <ion-card-title>生产阶段进度</ion-card-title>
+    </ion-card-header>
+    <ion-card-content>
+      <div class="phase-progress">
+        <div *ngFor="let phase of phaseInfo.phases; let i = index" 
+             class="phase-item"
+             [class.completed]="phase.isCompleted"
+             [class.current]="phase.isCurrent"
+             [class.disabled]="!phase.canStart && !phase.isCompleted">
+          
+          <div class="phase-number">{{ phase.order }}</div>
+          <div class="phase-content">
+            <div class="phase-name">{{ phase.name }}</div>
+            <div class="phase-status">
+              <span *ngIf="phase.isCompleted" class="status-completed">
+                <ion-icon name="checkmark-circle" color="success"></ion-icon>
+                已完成
+              </span>
+              <span *ngIf="phase.isCurrent && !phase.isCompleted" class="status-current">
+                <ion-icon name="play-circle" color="primary"></ion-icon>
+                进行中
+              </span>
+              <span *ngIf="!phase.isCurrent && !phase.isCompleted && phase.canStart" class="status-ready">
+                <ion-icon name="time" color="warning"></ion-icon>
+                可开始
+              </span>
+              <span *ngIf="!phase.isCurrent && !phase.isCompleted && !phase.canStart" class="status-waiting">
+                <ion-icon name="lock-closed" color="medium"></ion-icon>
+                等待前置
+              </span>
+            </div>
+            <div class="phase-details" *ngIf="phase.estimatedHours">
+              <small>预计工时: {{ phase.estimatedHours }}小时</small>
+            </div>
+            <div class="phase-times" *ngIf="phase.startTime || phase.completeTime">
+              <small *ngIf="phase.startTime">开始: {{ phase.startTime | date:'MM-dd HH:mm' }}</small>
+              <small *ngIf="phase.completeTime">完成: {{ phase.completeTime | date:'MM-dd HH:mm' }}</small>
+            </div>
+          </div>
+          
+          <!-- 阶段操作按钮 -->
+          <div class="phase-actions" *ngIf="phase.isCurrent && !phase.isCompleted">
+            <ion-button 
+              size="small" 
+              fill="outline" 
+              color="primary"
+              (click)="startPhase(phase.key)"
+              [disabled]="isSubmitting">
+              <ion-icon name="play-circle"></ion-icon>
+              开始
+            </ion-button>
+            <ion-button 
+              size="small" 
+              color="success"
+              (click)="completePhase(phase.key)"
+              [disabled]="isSubmitting">
+              <ion-icon name="checkmark"></ion-icon>
+              完成
+            </ion-button>
+          </div>
+        </div>
+      </div>
+    </ion-card-content>
+  </ion-card>
+
+  <!-- 历史记录 -->
+  <ion-card *ngIf="!isLoading">
+    <ion-card-header>
+      <ion-card-title>历史报工记录</ion-card-title>
+    </ion-card-header>
+    <ion-card-content>
+      <div *ngIf="(history?.length || 0) === 0">暂无历史</div>
+      <ion-list *ngIf="(history?.length || 0) > 0">
+        <ion-item *ngFor="let r of history">
+          <ion-label>
+            <div>{{ r.work_type }} - {{ r.user_name || r.user_id }}</div>
+            <div>开始: {{ r.start_time || '-' }}  结束: {{ r.end_time || '-' }}</div>
+            <div>数量: {{ r.quantity_completed || 0 }}  备注: {{ r.quality_notes || '-' }}</div>
+          </ion-label>
+        </ion-item>
+      </ion-list>
+    </ion-card-content>
+  </ion-card>
+
+  <!-- 阶段报工表单 -->
+  <ion-card *ngIf="task && !isLoading && currentPhase">
+    <ion-card-header>
+      <ion-card-title>{{ getCurrentPhaseName() }}阶段报工</ion-card-title>
+    </ion-card-header>
+    <ion-card-content>
+      <ion-list>
+        <ion-item>
+          <ion-label position="stacked">完成数量 *</ion-label>
+          <ion-input 
+            type="number" 
+            [(ngModel)]="quantityCompleted" 
+            placeholder="请输入完成数量"
+            [disabled]="isSubmitting">
+          </ion-input>
+        </ion-item>
+        
+        <ion-item>
+          <ion-label position="stacked">质量备注</ion-label>
+          <ion-textarea 
+            [(ngModel)]="qualityNotes" 
+            placeholder="请输入质量相关备注"
+            [disabled]="isSubmitting">
+          </ion-textarea>
+        </ion-item>
+        
+        <ion-item>
+          <ion-label position="stacked">问题记录</ion-label>
+          <ion-textarea 
+            [(ngModel)]="issues" 
+            placeholder="记录遇到的问题或异常"
+            [disabled]="isSubmitting">
+          </ion-textarea>
+        </ion-item>
+      </ion-list>
+
+      <ion-button 
+        expand="block" 
+        color="success" 
+        (click)="completeCurrentPhase()" 
+        [disabled]="isSubmitting"
+        class="ion-margin-top">
+        <ion-spinner *ngIf="isSubmitting" name="crescent"></ion-spinner>
+        <span *ngIf="!isSubmitting">完成{{ getCurrentPhaseName() }}阶段</span>
+      </ion-button>
+    </ion-card-content>
+  </ion-card>
+</ion-content>
+

@@ -481,3 +481,216 @@ ion-button {
     }
   }
 }
+
+// 日历视图样式
+.calendar-view {
+  margin: 16px 0;
+  
+  .calendar-legend {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      
+      .legend-color {
+        width: 24px;
+        height: 24px;
+        border-radius: 4px;
+        border: 1px solid #ddd;
+        
+        &.holiday {
+          background-color: #95a5a6;
+        }
+        
+        &.normal {
+          background-color: #3498db;
+        }
+        
+        &.overtime {
+          background-color: #f39c12;
+        }
+        
+        &.no-data {
+          background-color: #ecf0f1;
+        }
+      }
+      
+      span {
+        font-size: 0.9em;
+        color: #2c3e50;
+      }
+    }
+  }
+  
+  .calendar-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 8px;
+    
+    thead {
+      background-color: #f8f9fa;
+      
+      th {
+        padding: 12px 8px;
+        text-align: center;
+        font-weight: 600;
+        font-size: 0.9em;
+        color: #2c3e50;
+        border: 1px solid #dee2e6;
+      }
+    }
+    
+    tbody {
+      tr {
+        border-bottom: 1px solid #dee2e6;
+        
+        &:last-child {
+          border-bottom: none;
+        }
+      }
+    }
+    
+    .calendar-day {
+      width: 14.28%;
+      height: 80px;
+      padding: 4px;
+      text-align: center;
+      vertical-align: top;
+      border: 1px solid #dee2e6;
+      cursor: pointer;
+      transition: background-color 0.2s;
+      position: relative;
+      
+      &:hover:not(.other-month) {
+        background-color: #f0f0f0;
+      }
+      
+      &.other-month {
+        background-color: #f8f9fa;
+        color: #adb5bd;
+        cursor: default;
+      }
+      
+      &.today {
+        border: 2px solid #3498db;
+        font-weight: bold;
+      }
+      
+      &.holiday {
+        background-color: #e8e8e8;
+        
+        .day-number {
+          color: #7f8c8d;
+        }
+      }
+      
+      &.normal {
+        background-color: #e3f2fd;
+        
+        .day-number {
+          color: #1976d2;
+        }
+      }
+      
+      &.overtime {
+        background-color: #fff3e0;
+        
+        .day-number {
+          color: #f57c00;
+        }
+      }
+      
+      &.no-data {
+        background-color: #fafafa;
+        
+        .day-number {
+          color: #bdbdbd;
+        }
+      }
+      
+      .day-number {
+        font-size: 1em;
+        font-weight: 500;
+        margin-bottom: 2px;
+      }
+      
+      .day-type {
+        font-size: 0.7em;
+        color: #666;
+        margin-top: 2px;
+      }
+    }
+  }
+}
+
+// 响应式设计 - 小屏幕优化
+@media (max-width: 768px) {
+  .calendar-view {
+    .calendar-legend {
+      gap: 12px;
+      
+      .legend-item {
+        .legend-color {
+          width: 20px;
+          height: 20px;
+        }
+        
+        span {
+          font-size: 0.8em;
+        }
+      }
+    }
+    
+    .calendar-table {
+      .calendar-day {
+        height: 60px;
+        padding: 2px;
+        
+        .day-number {
+          font-size: 0.9em;
+        }
+        
+        .day-type {
+          font-size: 0.65em;
+        }
+      }
+    }
+  }
+}
+
+@media (max-width: 480px) {
+  .calendar-view {
+    .calendar-table {
+      .calendar-day {
+        height: 50px;
+        
+        .day-number {
+          font-size: 0.85em;
+        }
+        
+        .day-type {
+          font-size: 0.6em;
+        }
+      }
+    }
+  }
+}
+
+// 月份年份选择器标题样式
+.month-year-picker-title {
+  cursor: pointer;
+  user-select: none;
+  padding: 8px;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+  
+  &:hover {
+    background-color: #f0f0f0;
+  }
+}

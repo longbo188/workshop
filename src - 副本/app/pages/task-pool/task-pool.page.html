@@ -1,0 +1,103 @@
+<ion-header>
+  <ion-toolbar>
+    <ion-title>任务池管理</ion-title>
+    <ion-buttons slot="end">
+      <ion-button (click)="refresh()" [disabled]="isLoading">
+        <ion-icon name="refresh"></ion-icon>
+      </ion-button>
+    </ion-buttons>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content>
+  <!-- 错误信息 -->
+  <ion-card *ngIf="errorMsg" color="danger">
+    <ion-card-content>
+      <p>{{ errorMsg }}</p>
+    </ion-card-content>
+  </ion-card>
+
+  <!-- 加载状态 -->
+  <div *ngIf="isLoading" class="loading-container">
+    <ion-spinner name="crescent"></ion-spinner>
+    <p>加载中...</p>
+  </div>
+
+  <!-- 任务池列表 -->
+  <ion-card *ngIf="!isLoading && tasks.length > 0">
+    <ion-card-header>
+      <ion-card-title>任务池 ({{ tasks.length }} 个任务)</ion-card-title>
+    </ion-card-header>
+    <ion-card-content>
+      <ion-list>
+        <ion-item *ngFor="let task of tasks" 
+                  [class.selected]="selectedTaskId === task.id"
+                  (click)="selectTask(task.id)">
+          <ion-label>
+            <h2>{{ task.name }}</h2>
+            <p><strong>当前阶段：</strong>{{ getPhaseName(task.current_phase) }}</p>
+            <p><strong>优先级：</strong>
+              <ion-badge [color]="getPriorityColor(task.priority)">
+                {{ getPriorityText(task.priority) }}
+              </ion-badge>
+            </p>
+            <p><strong>当前负责人：</strong>{{ getCurrentAssigneeName(task) || '未分配' }}</p>
+            <p><strong>完成时间：</strong>{{ task.last_phase_completed_at | date:'yyyy-MM-dd HH:mm' }}</p>
+          </ion-label>
+          <ion-badge slot="end" color="warning">待分配</ion-badge>
+        </ion-item>
+      </ion-list>
+    </ion-card-content>
+  </ion-card>
+
+  <!-- 空状态 -->
+  <ion-card *ngIf="!isLoading && tasks.length === 0">
+    <ion-card-content>
+      <div class="empty-state">
+        <ion-icon name="checkmark-circle" size="large" color="success"></ion-icon>
+        <h3>任务池为空</h3>
+        <p>当前没有待分配的任务</p>
+      </div>
+    </ion-card-content>
+  </ion-card>
+
+  <!-- 分配操作 -->
+  <ion-card *ngIf="selectedTaskId && !isLoading">
+    <ion-card-header>
+      <ion-card-title>分配任务</ion-card-title>
+    </ion-card-header>
+    <ion-card-content>
+      <ion-list>
+        <ion-item>
+          <ion-label position="stacked">选择工人</ion-label>
+          <ion-select 
+            [(ngModel)]="selectedWorkerId" 
+            placeholder="请选择工人"
+            [disabled]="isAssigning">
+            <ion-select-option 
+              *ngFor="let worker of workers" 
+              [value]="worker.id">
+              {{ worker.name }}
+            </ion-select-option>
+          </ion-select>
+        </ion-item>
+      </ion-list>
+
+      <ion-button 
+        expand="block" 
+        color="primary" 
+        (click)="assignTask()" 
+        [disabled]="!selectedWorkerId || isAssigning"
+        class="ion-margin-top">
+        <ion-spinner *ngIf="isAssigning" name="crescent"></ion-spinner>
+        <span *ngIf="!isAssigning">分配任务</span>
+      </ion-button>
+    </ion-card-content>
+  </ion-card>
+</ion-content>
+
+
+
+
+
+

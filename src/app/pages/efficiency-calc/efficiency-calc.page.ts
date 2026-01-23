@@ -42,6 +42,7 @@ interface Task {
   id: number;
   name: string;
   description: string;
+  device_number?: string | null;
   product_model: string;
   current_phase: string;
   phase_progress: number;
@@ -287,13 +288,14 @@ class TimeUtils {
    * @param date Date对象
    */
   static debugTime(label: string, date: Date): void {
-    console.log(`${label}:`, {
-      iso: date.toISOString(),
-      local: date.toLocaleString('zh-CN'),
-      dateString: this.getLocalDateString(date),
-      timeString: this.getLocalTimeString(date),
-      timestamp: date.getTime()
-    });
+    // 调试日志已关闭，如需调试可暂时取消注释
+    // console.log(`${label}:`, {
+    //   iso: date.toISOString(),
+    //   local: date.toLocaleString('zh-CN'),
+    //   dateString: this.getLocalDateString(date),
+    //   timeString: this.getLocalTimeString(date),
+    //   timestamp: date.getTime()
+    // });
   }
 }
 
@@ -336,6 +338,10 @@ class TimeUtils {
   ]
 })
 export class EfficiencyCalcPage implements OnInit {
+  // 全局调试开关：false 时本页面的 console.log 调试输出全部禁用
+  private static readonly DEBUG = false;
+  // 如需保留全局 console.log，可在调试时临时改为 true
+  private originalConsoleLog = console.log;
   private http = inject(HttpClient);
   private toastController = inject(ToastController);
   private alertController = inject(AlertController);
@@ -391,6 +397,26 @@ export class EfficiencyCalcPage implements OnInit {
     efficiency: number;
   }[] = [];
   
+  // 设备效率结果（按 产品型号/设备号 汇总）
+  deviceEfficiencyResults: {
+    deviceKey: string;  // 产品型号或设备号
+    deviceLabel: string; // 显示标签（型号 + 设备号）
+    standardHours: number;
+    actualHours: number;
+    efficiency: number;
+    taskCount: number; // 任务数量
+    isCompleted: boolean; // 是否已完成（所有阶段都已完成）
+  }[] = [];
+  
+  // 设备汇总表头筛选条件
+  deviceTableModelFilter: string = ''; // 型号/设备号筛选
+  deviceTableEfficiencySort: string = ''; // 效率排序
+  deviceTableCompletionFilter: string = ''; // 完成状态筛选：'completed'已完成, 'incomplete'未完成, ''全部
+  
+  // 表格展开/收起状态
+  isMonthlyTableExpanded: boolean = true; // 月度效率汇总表是否展开
+  isDeviceTableExpanded: boolean = true; // 设备效率汇总表是否展开
+  
   // 可用选项
   availableUsers: string[] = [];
   availableModels: string[] = [];
@@ -400,6 +426,7 @@ export class EfficiencyCalcPage implements OnInit {
   
   // 节假日数据（用于工作日计算）
   private holidays: Set<string> = new Set(); // 存储节假日日期，格式: "YYYY-MM-DD"
+  private workingDays: Set<string> = new Set(); // 存储调休日（周末但需要上班），格式: "YYYY-MM-DD"
 
   // 已确认的任务效率（7个工作日前的任务）
   confirmedTasks: Set<string> = new Set(); // 存储已确认的任务，格式: "taskId_phase"
@@ -409,6 +436,9 @@ export class EfficiencyCalcPage implements OnInit {
   
   // 已确认任务数量（用于界面显示）
   confirmedTasksCount: number = 0;
+  
+  // 标准工时缓存（按产品型号+阶段缓存）
+  private standardHoursCache: Map<string, number> = new Map();
   
   // 计算过程详情显示控制
   private calculationDetailsVisible = new Map<string, boolean>();
@@ -437,6 +467,11 @@ export class EfficiencyCalcPage implements OnInit {
   }
 
   ngOnInit() {
+    // 当 DEBUG 为 false 时，关闭 console.log 调试输出以提升性能
+    if (!EfficiencyCalcPage.DEBUG) {
+      console.log = (..._args: any[]) => {};
+    }
+
     this.loadCurrentUser();
     // 如果是员工角色，自动设置为查看自己的效率
     if (this.currentUser?.role === 'worker' && this.currentUser?.name) {
@@ -468,8 +503,9 @@ export class EfficiencyCalcPage implements OnInit {
     if (userStr) {
       try {
       this.currentUser = JSON.parse(userStr);
-        console.log('当前用户信息:', this.currentUser);
-        console.log('用户角色:', this.currentUser?.role);
+        // 调试日志已关闭，如需排查问题可临时打开
+        // console.log('当前用户信息:', this.currentUser);
+        // console.log('用户角色:', this.currentUser?.role);
       } catch (error) {
         console.error('解析用户信息失败:', error);
         this.currentUser = null;
@@ -483,11 +519,12 @@ export class EfficiencyCalcPage implements OnInit {
       return false;
     }
     const isAdmin = this.currentUser.role === 'admin';
-    console.log('isAdmin() 检查结果:', isAdmin, '用户角色:', this.currentUser.role);
+    // 调试日志已关闭，如需排查问题可临时打开
+    // console.log('isAdmin() 检查结果:', isAdmin, '用户角色:', this.currentUser.role);
     return isAdmin;
   }
 
-  // 加载节假日数据（优先使用GitHub数据源，失败时使用后端API）
+  // 加载节假日数据（优先使用GitHub数据源，失败时从考勤日历读取）
   private async loadHolidays(): Promise<void> {
     try {
       // 方案4：优先从GitHub获取节假日数据（NateScarlet/holiday-cn项目）
@@ -508,52 +545,55 @@ export class EfficiencyCalcPage implements OnInit {
             ? githubResponse.days 
             : Object.values(githubResponse.days);
           
-          // 验证和存储节假日数据
-          const holidayEntries = daysArray
-            .filter((item: any) => {
-              // 确保item是对象且有isOffDay属性
-              return item && typeof item === 'object' && item.isOffDay === true;
-            })
-            .map((item: any) => {
-              // 从item对象中提取date和name
+          // 分别处理节假日和调休日
+          const holidayDates = new Set<string>();
+          const workingDayDates = new Set<string>();
+          
+          daysArray.forEach((item: any) => {
+            if (item && typeof item === 'object' && item.date) {
               const dateStr = item.date || '';
-              const name = item.name || '节假日';
-              return { date: dateStr, name: name };
-            })
-            .filter((h: { date: string; name: string }) => h.date && h.date.length > 0); // 过滤掉无效日期
+              if (dateStr && dateStr.length > 0) {
+                // 存储非工作日（节假日/放假）
+                if (item.isOffDay === true) {
+                  holidayDates.add(dateStr);
+                }
+                // 存储调休日（周末但需要上班）
+                if (item.isWorkingDay === true) {
+                  workingDayDates.add(dateStr);
+                }
+              }
+            }
+          });
           
-          console.log('处理后的节假日条目示例:', holidayEntries.slice(0, 3));
+          this.holidays = holidayDates;
+          this.workingDays = workingDayDates;
           
-          this.holidays = new Set(holidayEntries.map((h: { date: string; name: string }) => h.date));
-          
-          // 不再校验“期望值”，以 GitHub 数据为准
-          console.log(`已加载 ${this.holidays.size} 个节假日（来自GitHub，${year}年）`);
-          console.log('节假日列表:', Array.from(this.holidays).sort());
+          console.log(`已加载 ${this.holidays.size} 个节假日，${this.workingDays.size} 个调休日（来自GitHub，${year}年）`);
           return; // 成功获取，直接返回
         } else {
           console.warn('GitHub返回的数据格式不正确，缺少days字段');
           console.warn('返回的数据:', githubResponse);
         }
       } catch (githubError) {
-        console.warn('从GitHub获取节假日数据失败，尝试使用后端API:', githubError);
+        console.warn('从GitHub获取节假日数据失败，尝试从考勤日历读取:', githubError);
       }
       
-      // 备用方案：从后端API获取
+      // 备用方案：从考勤日历读取放假日期
       await this.loadHolidaysFromBackend();
     } catch (error) {
       console.error('加载节假日失败:', error);
-      this.holidays = new Set(); // 失败时使用空集合，只排除周末
+      this.holidays = new Set(); // 失败时使用空集合
+      this.workingDays = new Set();
     }
   }
 
   // 验证节假日数据
   private validateHolidays(holidayEntries: Array<{ date: string; name: string }>, year: number): void {
-    console.log('========== 节假日数据验证 ==========');
-    console.log(`验证年份: ${year}`);
-    console.log(`总节假日数量: ${holidayEntries.length}`);
-    
-    // 先显示原始数据的前几个，用于调试
-    console.log('前5个节假日数据示例:', holidayEntries.slice(0, 5));
+    // 调试日志已关闭，如需验证节假日数据可暂时打开
+    // console.log('========== 节假日数据验证 ==========');
+    // console.log(`验证年份: ${year}`);
+    // console.log(`总节假日数量: ${holidayEntries.length}`);
+    // console.log('前5个节假日数据示例:', holidayEntries.slice(0, 5));
     
     // 验证关键节假日（2025年）
     const keyHolidays = [
@@ -620,65 +660,72 @@ export class EfficiencyCalcPage implements OnInit {
         const allFound = matchedDates.length === holiday.expectedDates.length;
         const exactMatch = allFound && foundDates.length === holiday.expectedDates.length;
         
-        if (exactMatch) {
-          console.log(`✓ ${holiday.name}: 验证通过 (${foundDates.length}天)`);
-          console.log(`  日期: ${foundDates.join(', ')}`);
-        } else {
-          console.warn(`⚠ ${holiday.name}: 验证失败`);
-          console.warn(`  期望: ${holiday.expectedDates.join(', ')} (${holiday.expectedDates.length}天)`);
-          console.warn(`  实际: ${foundDates.length > 0 ? foundDates.join(', ') : '未找到'} (${foundDates.length}天)`);
-          console.warn(`  匹配: ${matchedDates.length}/${holiday.expectedDates.length} 个日期匹配`);
-          if (foundEntries.length > 0) {
-            console.warn(`  找到的条目名称:`, foundEntries.map(h => h.name).join(', '));
-            console.warn(`  找到的条目详情:`, foundEntries.slice(0, 3)); // 只显示前3个
-          }
-        }
+        // 这里原本有详细的节假日验证日志，为提高效率统计页面性能已关闭
       });
     }
     
     // 显示所有节假日（按日期排序）
-    const sortedHolidays = holidayEntries.sort((a: { date: string; name: string }, b: { date: string; name: string }) => {
-      const dateA = typeof a.date === 'string' ? a.date : String(a.date);
-      const dateB = typeof b.date === 'string' ? b.date : String(b.date);
-      return dateA.localeCompare(dateB);
-    });
-    console.log('\n所有节假日列表:');
-    sortedHolidays.forEach((h: { date: string; name: string }) => {
-      const dateStr = typeof h.date === 'string' ? h.date : String(h.date);
-      console.log(`  ${dateStr} - ${h.name}`);
-    });
-    
-    console.log('=====================================');
+    // 原有的节假日列表调试日志已关闭
   }
 
-  // 从后端API加载节假日数据（备用方案）
+  // 从考勤日历加载放假日期（备用方案）
+  // 除开放假全是工作日
   private async loadHolidaysFromBackend(): Promise<void> {
     try {
       const base = this.getApiBase();
-      const response: any = await this.http.get(`${base}/api/holidays`).toPromise();
       
-      if (response?.success && response?.data) {
-        // 只存储非工作日的节假日（is_working_day = false）
-        this.holidays = new Set(
-          response.data
-            .filter((h: any) => !h.is_working_day)
-            .map((h: any) => {
-              // 确保日期格式为 YYYY-MM-DD
-              const date = new Date(h.date);
-              const year = date.getFullYear();
-              const month = String(date.getMonth() + 1).padStart(2, '0');
-              const day = String(date.getDate()).padStart(2, '0');
-              return `${year}-${month}-${day}`;
-            })
-        );
-        console.log(`已加载 ${this.holidays.size} 个节假日（来自后端API）`);
-      } else {
-        console.warn('未获取到节假日数据，将只排除周末');
-        this.holidays = new Set();
+      // 从考勤日历读取放假日期
+      // 获取当前年份及前后各一年的考勤数据，确保覆盖足够的时间范围
+      const currentYear = new Date().getFullYear();
+      const startDate = `${currentYear - 1}-01-01`;
+      const endDate = `${currentYear + 1}-12-31`;
+      
+      try {
+        const attendanceResponse: any = await this.http.get(`${base}/api/daily-attendance`, {
+          params: {
+            start: startDate,
+            end: endDate,
+            pageSize: 10000 // 获取足够多的数据
+          }
+        }).toPromise();
+        
+        if (attendanceResponse?.list && Array.isArray(attendanceResponse.list)) {
+          // 从考勤记录中提取放假日期
+          // 放假条件：standard_attendance_hours === 0 且 overtime_hours === 0
+          const holidayDates = new Set<string>();
+          
+          attendanceResponse.list.forEach((record: any) => {
+            const standardHours = record.standard_attendance_hours || 0;
+            const overtimeHours = record.overtime_hours || 0;
+            
+            // 如果标准工作时长为0且没有加班，则认为是放假
+            if (standardHours === 0 && overtimeHours === 0 && record.date) {
+              const dateStr = record.date instanceof Date 
+                ? record.date.toISOString().slice(0, 10) 
+                : record.date;
+              if (dateStr && dateStr.length >= 10) {
+                holidayDates.add(dateStr.substring(0, 10)); // 确保格式为 YYYY-MM-DD
+              }
+            }
+          });
+          
+          this.holidays = holidayDates;
+          this.workingDays = new Set(); // 考勤日历不提供调休日信息
+          console.log(`已加载 ${this.holidays.size} 个放假日期（来自考勤日历）`);
+        } else {
+          console.warn('未获取到考勤日历数据，将只排除周末');
+          this.holidays = new Set();
+          this.workingDays = new Set();
+        }
+      } catch (attendanceError) {
+        console.error('从考勤日历加载放假日期失败:', attendanceError);
+        this.holidays = new Set(); // 失败时使用空集合
+        this.workingDays = new Set();
       }
     } catch (error) {
-      console.error('从后端API加载节假日失败:', error);
-      this.holidays = new Set();
+      console.error('加载节假日数据失败:', error);
+      this.holidays = new Set(); // 失败时使用空集合
+      this.workingDays = new Set();
     }
   }
 
@@ -688,15 +735,18 @@ export class EfficiencyCalcPage implements OnInit {
     return this.holidays.has(dateStr);
   }
 
-  // 判断日期是否为工作日（排除周末和节假日）
+  // 判断日期是否为工作日
+  // 除开放假日期外，其他日期均为工作日（包括周末，除非是放假）
   private isWorkingDay(date: Date): boolean {
-    const dayOfWeek = date.getDay();
-    // 0 = 周日, 6 = 周六
-    if (dayOfWeek === 0 || dayOfWeek === 6) {
+    const dateStr = TimeUtils.getLocalDateString(date);
+    
+    // 如果日期在放假列表中，则不是工作日
+    if (this.holidays.has(dateStr)) {
       return false;
     }
-    // 检查是否为节假日
-    return !this.isHoliday(date);
+    
+    // 除开放假，其他全是工作日（包括周末）
+    return true;
   }
 
   // 计算工作日（排除周末和节假日）
@@ -720,22 +770,39 @@ export class EfficiencyCalcPage implements OnInit {
     return currentDate;
   }
 
-  // 加载已确认的任务（从 localStorage）
+  // 加载已确认的任务（从后端 task_efficiency 表）
   private loadConfirmedTasks(): void {
+    this.confirmedTasks = new Set();
+    this.confirmedTasksCount = 0;
+
     try {
-      const confirmedStr = localStorage.getItem('confirmedEfficiencyTasks');
-      if (confirmedStr) {
-        const confirmedArray = JSON.parse(confirmedStr);
-        this.confirmedTasks = new Set(confirmedArray);
-        this.confirmedTasksCount = this.confirmedTasks.size;
-        console.log(`已加载 ${this.confirmedTasksCount} 个已确认的任务`);
-      } else {
-        this.confirmedTasksCount = 0;
-      }
+      const base = this.getApiBase();
+      // 只加载 is_confirmed=1 的任务阶段
+      this.http
+        .get<any[]>(`${base}/api/task-efficiency`, { params: { isConfirmed: '1' } })
+        .toPromise()
+        .then(rows => {
+          const list = rows || [];
+          list.forEach(row => {
+            const key = this.getTaskConfirmKey(row.task_id, row.phase);
+            this.confirmedTasks.add(key);
+          });
+          this.confirmedTasksCount = this.confirmedTasks.size;
+          console.log(`从后端加载已确认任务: ${this.confirmedTasksCount} 个阶段`);
+
+          // 可选：同步一份到 localStorage，仅作缓存，不作为真相源
+          try {
+            const confirmedArray = Array.from(this.confirmedTasks);
+            localStorage.setItem('confirmedEfficiencyTasks', JSON.stringify(confirmedArray));
+          } catch (e) {
+            console.error('缓存已确认任务到 localStorage 失败:', e);
+          }
+        })
+        .catch(err => {
+          console.error('从后端加载已确认任务失败:', err);
+        });
     } catch (error) {
-      console.error('加载已确认任务失败:', error);
-      this.confirmedTasks = new Set();
-      this.confirmedTasksCount = 0;
+      console.error('初始化已确认任务失败:', error);
     }
   }
 
@@ -782,6 +849,66 @@ export class EfficiencyCalcPage implements OnInit {
       console.error('加载已确认任务数据失败:', error);
     }
     return {};
+  }
+
+  // 将当前内存中的效率结果保存到后端 task_efficiency 表
+  private async saveEfficiencySnapshotsToBackend(): Promise<void> {
+    try {
+      const base = this.getApiBase();
+
+      const payloads = this.efficiencyData.map(data => {
+        const confirmKey = this.getTaskConfirmKey(data.task.id, data.phase);
+        const isConfirmed = this.confirmedTasks.has(confirmKey);
+
+        // 根据阶段获取负责人ID
+        let assigneeId: number | null = null;
+        const task = data.task as Task;
+        switch (data.phase) {
+          case 'machining':
+            assigneeId = task.machining_assignee || null;
+            break;
+          case 'electrical':
+            assigneeId = task.electrical_assignee || null;
+            break;
+          case 'pre_assembly':
+            assigneeId = task.pre_assembly_assignee || null;
+            break;
+          case 'post_assembly':
+            assigneeId = task.post_assembly_assignee || null;
+            break;
+          case 'debugging':
+            assigneeId = task.debugging_assignee || null;
+            break;
+          default:
+            assigneeId = null;
+        }
+
+        return {
+          taskId: data.task.id,
+          phase: data.phase,
+          assigneeId,
+          standardHours: data.standardHours,
+          actualWorkHours: data.actualWorkHours,
+          exceptionHours: data.exceptionHours,
+          assistHours: data.assistHours,
+          efficiency: data.efficiency,
+          phaseStartTime: data.phaseStartTime,
+          phaseEndTime: data.phaseEndTime,
+          isConfirmed,
+          confirmedBy: isConfirmed ? this.currentUser?.id || null : null
+        };
+      });
+
+      await Promise.all(
+        payloads.map(p =>
+          this.http.post(`${base}/api/task-efficiency`, p).toPromise().catch(err => {
+            console.error('保存任务效率快照失败:', p.taskId, p.phase, err);
+          })
+        )
+      );
+    } catch (error) {
+      console.error('批量保存任务效率快照失败:', error);
+    }
   }
 
   // 判断日期是否在7个工作日之前
@@ -879,15 +1006,16 @@ export class EfficiencyCalcPage implements OnInit {
   // 查看已确认的任务详情
   viewConfirmedTasks() {
     const confirmedList = Array.from(this.confirmedTasks);
-    console.log('========== 已确认的任务列表 ==========');
-    console.log(`总计: ${confirmedList.length} 个任务阶段`);
-    console.log('已确认的任务键值（格式: taskId_phase）:');
-    confirmedList.forEach((key, index) => {
-      const [taskId, phase] = key.split('_');
-      const phaseName = this.getPhaseDisplayName(phase);
-      console.log(`  ${index + 1}. 任务ID: ${taskId}, 阶段: ${phaseName} (${key})`);
-    });
-    console.log('=====================================');
+    // 调试日志已关闭，如需查看控制台详情可临时打开下面的日志
+    // console.log('========== 已确认的任务列表 ==========');
+    // console.log(`总计: ${confirmedList.length} 个任务阶段`);
+    // console.log('已确认的任务键值（格式: taskId_phase）:');
+    // confirmedList.forEach((key, index) => {
+    //   const [taskId, phase] = key.split('_');
+    //   const phaseName = this.getPhaseDisplayName(phase);
+    //   console.log(`  ${index + 1}. 任务ID: ${taskId}, 阶段: ${phaseName} (${key})`);
+    // });
+    // console.log('=====================================');
     
     // 从效率数据中查找已确认任务的详细信息
     const confirmedDetails: any[] = [];
@@ -904,13 +1032,13 @@ export class EfficiencyCalcPage implements OnInit {
       }
     });
     
-    if (confirmedDetails.length > 0) {
-      console.log('\n已确认任务的详细信息:');
-      confirmedDetails.forEach((detail, index) => {
-        console.log(`  ${index + 1}. [${detail.taskId}] ${detail.taskName} - ${detail.phase}`);
-        console.log(`     完工日期: ${detail.endDate}, 效率: ${detail.efficiency}`);
-      });
-    }
+    // if (confirmedDetails.length > 0) {
+    //   console.log('\n已确认任务的详细信息:');
+    //   confirmedDetails.forEach((detail, index) => {
+    //     console.log(`  ${index + 1}. [${detail.taskId}] ${detail.taskName} - ${detail.phase}`);
+    //     console.log(`     完工日期: ${detail.endDate}, 效率: ${detail.efficiency}`);
+    //   });
+    // }
     
     this.presentToast(`已确认 ${confirmedList.length} 个任务阶段，详情请查看控制台`);
   }
@@ -1078,49 +1206,51 @@ export class EfficiencyCalcPage implements OnInit {
     return isNative ? (environment.apiBase.replace('localhost', '10.0.2.2')) : environment.apiBase;
   }
 
-  // 获取已批准的异常报告
-  async loadApprovedExceptionReports(taskId: number, userId: number, startDate: string, endDate: string, task?: Task): Promise<ExceptionReport[]> {
+  // 获取已批准的异常报告（完全使用后台记录的阶段，不再按时间推断）
+  async loadApprovedExceptionReports(
+    taskId: number,
+    userId: number,
+    startDate: string,
+    endDate: string,
+    task?: Task
+  ): Promise<ExceptionReport[]> {
     try {
       const base = this.getApiBase();
       const params = new URLSearchParams({
         taskId: taskId.toString(),
         userId: userId.toString(),
-        startDate: startDate,
-        endDate: endDate
+        startDate,
+        endDate
       });
-      
+
       const response: any = await this.http.get(`${base}/api/exception-reports/approved?${params}`).toPromise();
-      
+
       if (response.success && response.data) {
-        // 转换数据格式以匹配ExceptionReport接口
-        return response.data.map((item: any) => {
-          // 如果有任务信息，使用更准确的阶段确定逻辑
-          const phase = task ? 
-            this.determinePhaseFromExceptionTime(item.exception_start_datetime, item.exception_end_datetime, task) :
-            this.determinePhaseFromTask(item.task_id);
-            
-          return {
-            id: item.id,
-            task_id: item.task_id,
-            user_id: item.user_id,
-            user_name: item.user_name || '未知用户',
-            phase: phase,
-            exception_type: item.exception_type,
-            description: item.description,
-            start_time: item.exception_start_datetime,
-            end_time: item.exception_end_datetime,
-            duration_hours: this.calculateExceptionDuration(item.exception_start_datetime, item.exception_end_datetime),
-            status: item.status,
-            created_at: item.submitted_at,
-            exception_start_datetime: item.exception_start_datetime,
-            exception_end_datetime: item.exception_end_datetime,
-            approved_by: item.approved_by,
-            approved_at: item.approved_at,
-            approval_note: item.approval_note
-          };
-        });
+        // 直接使用后台返回的 phase 字段，不再根据时间或任务推断阶段
+        return response.data.map((item: any) => ({
+          id: item.id,
+          task_id: item.task_id,
+          user_id: item.user_id,
+          user_name: item.user_name || '未知用户',
+          phase: item.phase ?? '',
+          exception_type: item.exception_type,
+          description: item.description,
+          start_time: item.exception_start_datetime,
+          end_time: item.exception_end_datetime,
+          duration_hours: this.calculateExceptionDuration(
+            item.exception_start_datetime,
+            item.exception_end_datetime
+          ),
+          status: item.status,
+          created_at: item.submitted_at,
+          exception_start_datetime: item.exception_start_datetime,
+          exception_end_datetime: item.exception_end_datetime,
+          approved_by: item.approved_by,
+          approved_at: item.approved_at,
+          approval_note: item.approval_note
+        }));
       }
-      
+
       return [];
     } catch (error) {
       console.error('获取已批准异常报告失败:', error);
@@ -1405,6 +1535,9 @@ export class EfficiencyCalcPage implements OnInit {
       });
       console.log('已确认任务数据总数:', confirmedDataMap.size);
       
+      // 批量加载所有任务的标准工时（在开始计算之前）
+      await this.loadStandardHoursForTasks(allTasks);
+      
       // 计算所有阶段（只要该阶段为1且存在开始和结束时间）
       this.efficiencyData = [];
       const phases = ['machining', 'electrical', 'pre_assembly', 'post_assembly', 'debugging'];
@@ -1492,10 +1625,10 @@ export class EfficiencyCalcPage implements OnInit {
               const exceptionResponse = await this.http.get<any>(`${base}/api/exception-reports/by-task/${task.id}`).toPromise();
               const rawExceptionReports = exceptionResponse || [];
               
-              // 确保异常报告有正确的phase字段
+              // 直接使用后端返回的阶段信息，不做前端兜底
               const exceptionReports: ExceptionReport[] = rawExceptionReports.map((report: any) => ({
                 ...report,
-                phase: report.phase || phase // 如果没有phase字段，使用当前计算的阶段
+                phase: report.phase ?? ''
               }));
               
               if (task.id === 846 || task.id === 1493) {
@@ -1623,6 +1756,9 @@ export class EfficiencyCalcPage implements OnInit {
         console.log(`去重完成: 移除了 ${duplicateCount.count} 条重复数据`);
         this.efficiencyData = Array.from(uniqueDataMap.values());
       }
+
+      // 将当前效率结果落库到后端（task_efficiency），区分已确认 / 未确认
+      await this.saveEfficiencySnapshotsToBackend();
       
     } catch (error) {
       console.error('统计效率失败:', error);
@@ -1817,10 +1953,11 @@ export class EfficiencyCalcPage implements OnInit {
             const workReports: WorkReport[] = workReportsResponse || [];
             const rawExceptionReports = exceptionResponse || [];
             
-            // 确保异常报告有正确的phase字段
+            // 直接使用后端返回的阶段信息，不再用当前选择的阶段兜底
             const exceptionReports: ExceptionReport[] = rawExceptionReports.map((report: any) => ({
               ...report,
-              phase: report.phase || this.selectedPhase // 如果没有phase字段，使用当前选择的阶段
+              // 直接使用后端返回的阶段信息，不做前端兜底
+              phase: report.phase ?? ''
             }));
             
             const allAttendanceRecords: any[] = attendanceResponse || [];
@@ -1933,38 +2070,63 @@ export class EfficiencyCalcPage implements OnInit {
       return [];
     }
     
-    // 特别跟踪任务846
-    if (task.id === 846) {
-      console.log(`任务846进入calculateTaskEfficiencyWithAttendance方法，阶段: ${phase}`);
+    // 特别调试日志仅在调试模式下输出
+    if (EfficiencyCalcPage.DEBUG) {
+      if (task.id === 846) {
+        console.log(`任务846进入calculateTaskEfficiencyWithAttendance方法，阶段: ${phase}`);
+      }
+      
+      // 任务182详细调试
+      if (task.id === 182) {
+        console.log(`\n--- 任务182进入calculateTaskEfficiencyWithAttendance方法 ---`);
+        console.log(`阶段: ${phase}`);
+        console.log(`任务负责人ID: ${taskAssigneeId}`);
+        console.log(`报工记录数量: ${workReports.length}`);
+        console.log(`异常报告数量: ${exceptionReports.length}`);
+        console.log(`考勤记录总数: ${allAttendanceRecords.length}`);
+      }
     }
-    
-    // 任务182详细调试
-    if (task.id === 182) {
-      console.log(`\n--- 任务182进入calculateTaskEfficiencyWithAttendance方法 ---`);
-      console.log(`阶段: ${phase}`);
-      console.log(`任务负责人ID: ${taskAssigneeId}`);
-      console.log(`报工记录数量: ${workReports.length}`);
-      console.log(`异常报告数量: ${exceptionReports.length}`);
-      console.log(`考勤记录总数: ${allAttendanceRecords.length}`);
+
+    // 任务622 + 工人175 专门调试：入口概况（仅在调试模式下输出）
+    if (EfficiencyCalcPage.DEBUG && task.id === 622 && taskAssigneeId === 175) {
+      console.log('=== 任务622 / 工人175 效率调试(入口) ===', {
+        phase,
+        taskId: task.id,
+        assigneeId: taskAssigneeId,
+        workReportsCount: workReports.length,
+        rawExceptionReportsCount: exceptionReports.length,
+        allAttendanceRecordsCount: allAttendanceRecords.length
+      });
     }
     
     // 获取阶段开始和结束时间
     const phaseStartTime = this.getPhaseStartTime(task, phase);
     const phaseEndTime = this.getPhaseEndTime(task, phase);
     
-    if (task.id === 846) {
-      console.log(`任务846的阶段时间 - 开始: ${phaseStartTime}, 结束: ${phaseEndTime}`);
+    if (EfficiencyCalcPage.DEBUG) {
+      if (task.id === 846) {
+        console.log(`任务846的阶段时间 - 开始: ${phaseStartTime}, 结束: ${phaseEndTime}`);
+      }
+      
+      // 任务182阶段时间调试
+      if (task.id === 182) {
+        console.log(`任务182的阶段时间 - 开始: ${phaseStartTime}, 结束: ${phaseEndTime}`);
+      }
+      
+      // 添加任务1493的调试日志
+      if (task.id === 1493) {
+        console.log(`任务1493的阶段时间 - 开始: ${phaseStartTime}, 结束: ${phaseEndTime}`);
+        console.log(`任务1493原始数据 - machining_start_time: ${task.machining_start_time}, machining_complete_time: ${task.machining_complete_time}`);
+      }
     }
-    
-    // 任务182阶段时间调试
-    if (task.id === 182) {
-      console.log(`任务182的阶段时间 - 开始: ${phaseStartTime}, 结束: ${phaseEndTime}`);
-    }
-    
-    // 添加任务1493的调试日志
-    if (task.id === 1493) {
-      console.log(`任务1493的阶段时间 - 开始: ${phaseStartTime}, 结束: ${phaseEndTime}`);
-      console.log(`任务1493原始数据 - machining_start_time: ${task.machining_start_time}, machining_complete_time: ${task.machining_complete_time}`);
+
+    // 任务622 + 工人175：检查阶段时间是否完整（仅在调试模式下输出）
+    if (EfficiencyCalcPage.DEBUG && task.id === 622 && taskAssigneeId === 175) {
+      console.log('=== 任务622 / 工人175 阶段时间 ===', {
+        phase,
+        phaseStartTime,
+        phaseEndTime
+      });
     }
     
     
@@ -1999,6 +2161,25 @@ export class EfficiencyCalcPage implements OnInit {
       }
     });
     const allExceptionReports = Array.from(allExceptionReportsMap.values());
+
+    // 任务622 + 工人175：观察合并后的异常列表（仅在调试模式下输出）
+    if (EfficiencyCalcPage.DEBUG && task.id === 622 && taskAssigneeId === 175) {
+      console.log('=== 任务622 / 工人175 合并后所有异常 ===', {
+        phase,
+        total: allExceptionReports.length,
+        byTaskCount: exceptionReports.length,
+        approvedCount: approvedExceptionReports.length,
+        list: allExceptionReports.map(ex => ({
+          id: ex.id,
+          user_id: ex.user_id,
+          phase: ex.phase,
+          status: ex.status,
+          duration_hours: ex.duration_hours,
+          start_time: ex.start_time || ex.exception_start_datetime,
+          end_time: ex.end_time || ex.exception_end_datetime
+        }))
+      });
+    }
     
     if (!phaseStartTime || !phaseEndTime) {
       console.log(`任务 ${task.id} 的 ${phase} 阶段缺少时间数据，跳过计算`);
@@ -2484,8 +2665,68 @@ export class EfficiencyCalcPage implements OnInit {
     return Array.from(efficiencyMap.values());
   }
 
+  // 批量加载标准工时（在计算效率之前调用）
+  private async loadStandardHoursForTasks(tasks: Task[]): Promise<void> {
+    // 清空缓存
+    this.standardHoursCache.clear();
+    
+    // 收集所有需要查询的产品型号（保留原始大小写用于API查询，但缓存键使用大写）
+    const productModels = new Set<string>();
+    const modelMap = new Map<string, string>(); // 大写 -> 原始值
+    tasks.forEach(task => {
+      if (task.product_model && task.product_model.trim()) {
+        const originalModel = task.product_model.trim();
+        const upperModel = originalModel.toUpperCase();
+        productModels.add(upperModel);
+        // 保存原始值，用于API查询（后端会做大小写不敏感匹配）
+        if (!modelMap.has(upperModel)) {
+          modelMap.set(upperModel, originalModel);
+        }
+      }
+    });
+
+    if (productModels.size === 0) {
+      return;
+    }
+
+    try {
+      const base = this.getApiBase();
+      // 批量查询所有产品型号的标准工时
+      const promises = Array.from(productModels).map(async (upperModel) => {
+        try {
+          // 使用原始值查询（后端会做大小写不敏感匹配）
+          const originalModel = modelMap.get(upperModel) || upperModel;
+          const response: any = await this.http.get<any>(
+            `${base}/api/product-standard-hours?productModel=${encodeURIComponent(originalModel)}`
+          ).toPromise();
+          
+          if (response) {
+            // 缓存各阶段的标准工时（使用大写作为键，确保匹配时一致）
+            const machining = response.machining_hours || 0;
+            const electrical = response.electrical_hours || 0;
+            const preAssembly = response.pre_assembly_hours || 0;
+            const postAssembly = response.post_assembly_hours || 0;
+            const debugging = response.debugging_hours || 0;
+            
+            this.standardHoursCache.set(`${upperModel}_machining`, machining);
+            this.standardHoursCache.set(`${upperModel}_electrical`, electrical);
+            this.standardHoursCache.set(`${upperModel}_pre_assembly`, preAssembly);
+            this.standardHoursCache.set(`${upperModel}_post_assembly`, postAssembly);
+            this.standardHoursCache.set(`${upperModel}_debugging`, debugging);
+          }
+        } catch (error) {
+          console.error(`查询产品型号 ${upperModel} 的标准工时失败:`, error);
+        }
+      });
+
+      await Promise.all(promises);
+    } catch (error) {
+      console.error('批量加载标准工时失败:', error);
+    }
+  }
+
   private getStandardHoursForPhase(task: Task, phase: string): number {
-    // 从任务配置中获取标准工时
+    // 先从任务配置中获取标准工时
     let result: number;
     switch (phase) {
       case 'machining':
@@ -2505,6 +2746,17 @@ export class EfficiencyCalcPage implements OnInit {
         break;
       default:
         result = 0;
+    }
+    
+    // 如果任务本身没有标准工时，且任务有产品型号，且不是非标产品，从缓存中查找
+    if (result === 0 && task.product_model && task.product_model.trim() && 
+        (!task.is_non_standard || task.is_non_standard === 0)) {
+      const productModel = task.product_model.trim().toUpperCase();
+      const cacheKey = `${productModel}_${phase}`;
+      const cachedValue = this.standardHoursCache.get(cacheKey);
+      if (cachedValue !== undefined && cachedValue > 0) {
+        result = cachedValue;
+      }
     }
     
     // 检查结果是否为NaN
@@ -3369,12 +3621,14 @@ export class EfficiencyCalcPage implements OnInit {
         }
       }
       
-      // 型号筛选（优先使用表格筛选，如果没有则使用顶部筛选）
+      // 型号/设备号筛选（优先使用表格筛选，如果没有则使用顶部筛选）
       const modelFilter = this.tableModelFilter || this.selectedModel;
       if (modelFilter && modelFilter.trim() !== '') {
         const keyword = modelFilter.trim().toLowerCase();
         const productModel = (data.task.product_model || '').toLowerCase();
-        if (!productModel.includes(keyword)) {
+        const deviceNumber = (data.task.device_number || '').toLowerCase();
+        // 如果既不在型号中也不在设备号中，则过滤掉
+        if (!productModel.includes(keyword) && !deviceNumber.includes(keyword)) {
           return false;
         }
       }
@@ -3434,9 +3688,7 @@ export class EfficiencyCalcPage implements OnInit {
           return efficiencyB - efficiencyA;
         }
       });
-    }
-
-    if (this.tableExceptionSort) {
+    } else if (this.tableExceptionSort) {
       filtered = filtered.sort((a, b) => {
         const exceptionCountA = a.exceptionReports.length || 0;
         const exceptionCountB = b.exceptionReports.length || 0;
@@ -3445,6 +3697,17 @@ export class EfficiencyCalcPage implements OnInit {
         } else {
           return exceptionCountB - exceptionCountA;
         }
+      });
+    } else {
+      // 默认按完工日期降序排序（最新的在前）
+      filtered = filtered.sort((a, b) => {
+        const dateA = a.phaseEndTime ? new Date(a.phaseEndTime).getTime() : 0;
+        const dateB = b.phaseEndTime ? new Date(b.phaseEndTime).getTime() : 0;
+        // 降序：日期大的（新的）在前
+        if (dateA === 0 && dateB === 0) return 0;
+        if (dateA === 0) return 1; // 没有完工日期的排后面
+        if (dateB === 0) return -1; // 没有完工日期的排后面
+        return dateB - dateA; // 降序
       });
     }
 
@@ -3936,7 +4199,7 @@ export class EfficiencyCalcPage implements OnInit {
     });
 
     const efficiency =
-      totalStandard > 0 ? Number(((totalActual / totalStandard) * 100).toFixed(2)) : 0;
+      totalActual > 0 ? Number(((totalStandard / totalActual) * 100).toFixed(2)) : 0;
 
     return {
       standardHours: Number(totalStandard.toFixed(2)),
@@ -4389,8 +4652,8 @@ export class EfficiencyCalcPage implements OnInit {
         standardHours: Number(item.standard.toFixed(2)),
         actualHours: Number(item.actual.toFixed(2)),
         efficiency:
-          item.standard > 0
-            ? Number(((item.actual / item.standard) * 100).toFixed(2))
+          item.actual > 0
+            ? Number(((item.standard / item.actual) * 100).toFixed(2))
             : 0
       }))
       // 排序：同一员工内部按月份倒序，员工按名称排序
@@ -4400,5 +4663,238 @@ export class EfficiencyCalcPage implements OnInit {
         }
         return a.employee.localeCompare(b.employee, 'zh-CN');
       });
+  }
+
+  /**
+   * 计算设备效率汇总（按产品型号/设备号分组）
+   */
+  calculateDeviceEfficiency() {
+    // 按 产品型号/设备号 汇总
+    const aggregates = new Map<string, { 
+      deviceKey: string; 
+      deviceLabel: string; 
+      standard: number; 
+      actual: number; 
+      taskIds: Set<number>;
+      completedPhaseKeys: Set<string>; // 已完成的阶段键（格式：taskId_phase）
+    }>();
+
+    // 解析日期区间（按阶段结束时间的"日期部分"来比较）
+    let rangeStart: Date | null = null;
+    let rangeEnd: Date | null = null;
+
+    if (this.monthlyStartDate) {
+      const d = new Date(this.monthlyStartDate);
+      if (isNaN(d.getTime())) {
+        this.presentToast('开始日期格式无效');
+        return;
+      }
+      rangeStart = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    }
+
+    if (this.monthlyEndDate) {
+      const d = new Date(this.monthlyEndDate);
+      if (isNaN(d.getTime())) {
+        this.presentToast('结束日期格式无效');
+        return;
+      }
+      rangeEnd = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    }
+
+    if (rangeStart && rangeEnd && rangeStart > rangeEnd) {
+      this.presentToast('开始日期不能晚于结束日期');
+      return;
+    }
+
+    this.efficiencyData.forEach(entry => {
+      if (!entry.phaseEndTime) return;
+      const phaseEnd = new Date(entry.phaseEndTime);
+      if (isNaN(phaseEnd.getTime())) return;
+
+      // 只取结束时间的日期部分
+      const phaseEndDateOnly = new Date(
+        phaseEnd.getFullYear(),
+        phaseEnd.getMonth(),
+        phaseEnd.getDate()
+      );
+
+      // 日期区间过滤（含首尾）
+      if (rangeStart && phaseEndDateOnly < rangeStart) {
+        return;
+      }
+      if (rangeEnd && phaseEndDateOnly > rangeEnd) {
+        return;
+      }
+
+      // 获取设备标识（优先使用设备号进行分组）
+      const deviceNumber = entry.task.device_number?.trim() || '';
+      const productModel = entry.task.product_model?.trim() || '';
+      
+      // 如果没有设备号，跳过（设备效率统计只统计有设备号的任务）
+      if (!deviceNumber) {
+        return; // 跳过没有设备号的任务
+      }
+
+      // 使用设备号作为主键（同一个设备号的所有阶段都会累加）
+      const deviceKey = deviceNumber;
+      // 显示标签：如果有产品型号则显示"型号-设备号"，否则只显示设备号
+      const deviceLabel = productModel 
+        ? `${productModel}-${deviceNumber}` 
+        : deviceNumber;
+
+      let agg = aggregates.get(deviceKey);
+      if (!agg) {
+        agg = { 
+          deviceKey, 
+          deviceLabel, 
+          standard: 0, 
+          actual: 0, 
+          taskIds: new Set<number>(),
+          completedPhaseKeys: new Set<string>()
+        };
+        aggregates.set(deviceKey, agg);
+      }
+
+      // 累加该设备号所有阶段的标准工时
+      agg.standard += Number(entry.standardHours || 0);
+      
+      // 计算该阶段的有效工时 = 实际工时 - 异常时间 - 协助时间
+      const effectiveHours = (entry.actualWorkHours || 0) - (entry.exceptionHours || 0) - (entry.assistHours || 0);
+      
+      // 累加该设备号所有阶段的有效工时（只累加有效值）
+      agg.actual += effectiveHours > 0 ? effectiveHours : 0;
+      
+      // 记录该设备号涉及的任务ID（用于统计任务数）
+      agg.taskIds.add(entry.task.id);
+      
+      // 记录已完成的阶段（该阶段有phaseEndTime，说明已完成）
+      const phaseKey = `${entry.task.id}_${entry.phase}`;
+      agg.completedPhaseKeys.add(phaseKey);
+    });
+
+    if (aggregates.size === 0) {
+      this.deviceEfficiencyResults = [];
+      const rangeHint =
+        this.monthlyStartDate || this.monthlyEndDate
+          ? `${this.monthlyStartDate || '最早'} 至 ${this.monthlyEndDate || '最晚'}`
+          : '全部日期';
+      this.presentToast(`在${rangeHint}没有完成的阶段任务`);
+      return;
+    }
+
+    // 检查每个设备号的所有任务的所有阶段是否都已完成
+    const deviceTaskPhases = new Map<string, Set<string>>(); // deviceKey -> Set<taskId_phase>
+    
+    // 收集该设备号所有任务的所有阶段（包括未完成的）
+    this.tasks.forEach(task => {
+      const deviceNumber = task.device_number?.trim() || '';
+      if (!deviceNumber) return;
+      
+      const phases = ['machining', 'electrical', 'pre_assembly', 'post_assembly', 'debugging'];
+      phases.forEach(phase => {
+        // 检查该阶段是否已开始（有开始时间）
+        const phaseStartField = `${phase}_start_time`;
+        const phaseStart = (task as any)[phaseStartField];
+        if (phaseStart) {
+          // 该阶段已开始，需要检查是否完成
+          if (!deviceTaskPhases.has(deviceNumber)) {
+            deviceTaskPhases.set(deviceNumber, new Set<string>());
+          }
+          const phaseKey = `${task.id}_${phase}`;
+          deviceTaskPhases.get(deviceNumber)!.add(phaseKey);
+        }
+      });
+    });
+
+    this.deviceEfficiencyResults = Array.from(aggregates.values())
+      .map(item => {
+        // 获取该设备号的所有阶段（包括未完成的）
+        const allPhases = deviceTaskPhases.get(item.deviceKey) || new Set<string>();
+        // 判断是否所有阶段都已完成
+        const isCompleted = allPhases.size > 0 && 
+          Array.from(allPhases).every(phaseKey => item.completedPhaseKeys.has(phaseKey));
+        
+        return {
+          deviceKey: item.deviceKey,
+          deviceLabel: item.deviceLabel,
+          standardHours: Number(item.standard.toFixed(2)),
+          actualHours: Number(item.actual.toFixed(2)),
+          // 效率 = (标准工时之和 / 有效工时之和) × 100%
+          efficiency:
+            item.actual > 0
+              ? Number(((item.standard / item.actual) * 100).toFixed(2))
+              : 0,
+          taskCount: item.taskIds.size,
+          isCompleted: isCompleted
+        };
+      })
+      .sort((a, b) => {
+        // 按设备标识排序
+        return a.deviceKey.localeCompare(b.deviceKey);
+      });
+  }
+
+  /**
+   * 获取经过表头筛选/排序后的设备效率结果
+   */
+  getFilteredDeviceResults() {
+    if (!this.deviceEfficiencyResults) {
+      return [];
+    }
+
+    let list = [...this.deviceEfficiencyResults];
+
+    // 型号/设备号筛选（表头第二行）
+    if (this.deviceTableModelFilter && this.deviceTableModelFilter.trim() !== '') {
+      const keyword = this.deviceTableModelFilter.trim().toLowerCase();
+      list = list.filter(item => 
+        item.deviceKey.toLowerCase().includes(keyword) || 
+        item.deviceLabel.toLowerCase().includes(keyword)
+      );
+    }
+
+    // 完成状态筛选
+    if (this.deviceTableCompletionFilter === 'completed') {
+      list = list.filter(item => item.isCompleted === true);
+    } else if (this.deviceTableCompletionFilter === 'incomplete') {
+      list = list.filter(item => item.isCompleted === false);
+    }
+
+    // 效率排序
+    if (this.deviceTableEfficiencySort === 'asc') {
+      list = list.sort((a, b) => (a.efficiency || 0) - (b.efficiency || 0));
+    } else if (this.deviceTableEfficiencySort === 'desc') {
+      list = list.sort((a, b) => (b.efficiency || 0) - (a.efficiency || 0));
+    }
+
+    return list;
+  }
+
+  /**
+   * 计算当前设备效率结果的整体合计
+   */
+  getDeviceTotal() {
+    const list = this.getFilteredDeviceResults();
+    if (!list || list.length === 0) {
+      return { standardHours: 0, actualHours: 0, efficiency: 0, taskCount: 0 };
+    }
+
+    let totalStandard = 0;
+    let totalActual = 0;
+
+    list.forEach(item => {
+      totalStandard += item.standardHours || 0;
+      totalActual += item.actualHours || 0;
+    });
+
+    const efficiency =
+      totalActual > 0 ? Number(((totalStandard / totalActual) * 100).toFixed(2)) : 0;
+
+    return {
+      standardHours: Number(totalStandard.toFixed(2)),
+      actualHours: Number(totalActual.toFixed(2)),
+      efficiency,
+      taskCount: list.length // 设备数量
+    };
   }
 }

@@ -5,7 +5,10 @@ import { provideHttpClient } from '@angular/common/http'; // 关键导入
 import { HashLocationStrategy, LocationStrategy } from '@angular/common';
 import { routes } from './app/app.routes';
 import { AppComponent } from './app/app.component';
+import { registerIcons } from './app/icons';
 
+// 注册所有图标
+registerIcons();
 
 bootstrapApplication(AppComponent, {
   providers: [

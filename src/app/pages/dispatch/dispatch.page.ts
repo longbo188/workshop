@@ -64,6 +64,30 @@ export class DispatchPage implements OnInit {
   selectedStdFile: File | null = null;
   isImportingStd = false;
   importStdResult: any = null;
+  
+  // 标准工时列表相关属性
+  isStandardHoursListModalOpen = false;
+  standardHoursList: any[] = [];
+  isLoadingStandardHours = false;
+  
+  // 编辑标准工时相关属性
+  isEditStandardHoursModalOpen = false;
+  editingStandardHoursItem: any = null;
+  newProductModel: string = '';
+  editingStandardHours: {
+    machining: number;
+    electrical: number;
+    preAssembly: number;
+    postAssembly: number;
+    debugging: number;
+  } = {
+    machining: 0,
+    electrical: 0,
+    preAssembly: 0,
+    postAssembly: 0,
+    debugging: 0
+  };
+  isSavingStandardHours = false;
 
   // 派工任务可视化相关属性
   isVizModalOpen = false;
@@ -239,9 +263,8 @@ export class DispatchPage implements OnInit {
       // #endregion
       this.users = users || [];
       this.managerUsers = this.users.filter(u => u.role === 'manager');
-      // 仅展示未完成的任务
+      // 加载所有任务（包括已完成的），在筛选时再决定是否显示已完成任务
       this.tasks = (tasks || [])
-        .filter(t => t.status !== 'completed')
         .map(task => this.decorateTask(task));
       
       // 清除所有缓存，因为任务数据已更新
@@ -463,10 +486,16 @@ export class DispatchPage implements OnInit {
 
   // 获取筛选后的任务
   getFilteredTasks() {
-    let filtered = (this.tasks || []).filter(t => 
-      t.status !== 'completed' && 
-      !this.isTaskCompleted(t)
-    );
+    // 在"全部任务"视图中显示所有任务（包括已完成的），其他视图过滤已完成任务
+    let filtered = (this.tasks || []);
+    
+    if (this.selectedView !== 'all') {
+      // 非"全部任务"视图时，过滤已完成的任务
+      filtered = filtered.filter(t => 
+        t.status !== 'completed' && 
+        !this.isTaskCompleted(t)
+      );
+    }
 
     // 视图筛选
     if (this.selectedView === 'unassigned') {
@@ -900,6 +929,118 @@ export class DispatchPage implements OnInit {
       window.open(url, '_blank');
     } catch {
       window.location.href = url;
+    }
+  }
+
+  // 打开标准工时列表模态框
+  async openStandardHoursListModal() {
+    this.isStandardHoursListModalOpen = true;
+    await this.loadStandardHoursList();
+  }
+
+  // 关闭标准工时列表模态框
+  closeStandardHoursListModal() {
+    this.isStandardHoursListModalOpen = false;
+    this.standardHoursList = [];
+  }
+
+  // 判断当前用户是否是工程部
+  isEngineeringDepartment(): boolean {
+    if (!this.currentUser) return false;
+    return this.currentUser.department === '工程部';
+  }
+
+  // 加载标准工时列表
+  async loadStandardHoursList() {
+    this.isLoadingStandardHours = true;
+    try {
+      const response: any = await this.http.get<any[]>(`${environment.apiBase}/api/product-standard-hours`).toPromise();
+      this.standardHoursList = response || [];
+    } catch (error: any) {
+      console.error('加载标准工时列表失败:', error);
+      this.presentToast('加载标准工时列表失败: ' + (error.error?.error || error.message));
+      this.standardHoursList = [];
+    } finally {
+      this.isLoadingStandardHours = false;
+    }
+  }
+
+  // 打开新增标准工时模态框
+  openAddStandardHoursModal() {
+    this.editingStandardHoursItem = null;
+    this.newProductModel = '';
+    this.editingStandardHours = {
+      machining: 0,
+      electrical: 0,
+      preAssembly: 0,
+      postAssembly: 0,
+      debugging: 0
+    };
+    this.isEditStandardHoursModalOpen = true;
+  }
+
+  // 打开编辑标准工时模态框
+  openEditStandardHoursModal(item: any) {
+    this.editingStandardHoursItem = item;
+    this.editingStandardHours = {
+      machining: item.machining_hours || 0,
+      electrical: item.electrical_hours || 0,
+      preAssembly: item.pre_assembly_hours || 0,
+      postAssembly: item.post_assembly_hours || 0,
+      debugging: item.debugging_hours || 0
+    };
+    this.isEditStandardHoursModalOpen = true;
+  }
+
+  // 关闭编辑标准工时模态框
+  closeEditStandardHoursModal() {
+    this.isEditStandardHoursModalOpen = false;
+    this.editingStandardHoursItem = null;
+    this.newProductModel = '';
+    this.editingStandardHours = {
+      machining: 0,
+      electrical: 0,
+      preAssembly: 0,
+      postAssembly: 0,
+      debugging: 0
+    };
+  }
+
+  // 保存标准工时
+  async saveStandardHours() {
+    // 如果是新增，需要验证产品型号
+    if (!this.editingStandardHoursItem) {
+      if (!this.newProductModel || this.newProductModel.trim() === '') {
+        this.presentToast('请输入产品型号');
+        return;
+      }
+    }
+
+    this.isSavingStandardHours = true;
+    try {
+      const productModel = this.editingStandardHoursItem 
+        ? this.editingStandardHoursItem.product_model 
+        : this.newProductModel.trim();
+      
+      await this.http.post(`${environment.apiBase}/api/product-standard-hours`, {
+        productModel: productModel,
+        machiningHours: this.editingStandardHours.machining || 0,
+        electricalHours: this.editingStandardHours.electrical || 0,
+        preAssemblyHours: this.editingStandardHours.preAssembly || 0,
+        postAssemblyHours: this.editingStandardHours.postAssembly || 0,
+        debuggingHours: this.editingStandardHours.debugging || 0
+      }).toPromise();
+
+      this.presentToast(this.editingStandardHoursItem ? '标准工时更新成功' : '标准工时新增成功');
+      this.closeEditStandardHoursModal();
+      
+      // 重新加载标准工时列表
+      await this.loadStandardHoursList();
+    } catch (error: any) {
+      console.error('保存标准工时失败:', error);
+      this.presentToast('保存标准工时失败: ' + (error.error?.error || error.message));
+    } finally {
+      this.isSavingStandardHours = false;
     }
   }
 

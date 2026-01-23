@@ -18,7 +18,7 @@ const dbConfig = {
 // 备份配置
 const backupConfig = {
   backupDir: path.join(__dirname, 'backups'), // 备份文件存储目录
-  maxBackups: 30, // 保留最近30个备份文件
+  maxBackups: 60, // 保留最近60个备份文件（约60天）
   compress: false // 是否压缩备份文件（Windows 默认不压缩，需要额外工具）
 };
 

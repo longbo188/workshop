@@ -39,6 +39,23 @@ export class AttendanceAdminPage implements OnInit {
   selectedGroupFilter: string = '';
   availableGroupsFilter: string[] = [];
   
+  // 视图模式
+  viewMode: 'list' | 'calendar' = 'list';
+  
+  // 日历相关
+  currentMonth: Date = new Date();
+  calendarWeeks: any[] = [];
+  currentMonthYear: string = '';
+  calendarAttendanceData: any[] = []; // 用于日历显示的所有考勤数据
+  calendarDataLoading: boolean = false;
+  
+  // 月份年份选择器
+  isMonthYearPickerOpen: boolean = false;
+  selectedYear: number = new Date().getFullYear();
+  selectedMonth: number = new Date().getMonth() + 1;
+  availableYears: number[] = [];
+  availableMonths: string[] = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
+  
   // 统计相关
   showStats = false;
   statsData: any = null;
@@ -95,12 +112,16 @@ export class AttendanceAdminPage implements OnInit {
   selectedDepartment: string = '';
   availableDepartments: string[] = [];
 
-  // 批量考勤管理相关属性
+  // 排班管理相关属性
   isBatchAttendanceModalOpen = false;
   batchAttendanceDate: string = '';
+  batchAttendanceDateMode: 'single' | 'range' = 'range'; // 日期选择模式：单个日期或日期区间，默认日期区间
+  batchAttendanceStartDate: string = '';
+  batchAttendanceEndDate: string = '';
+  batchAttendanceType: 'holiday' | 'normal' | 'overtime' = 'normal'; // 考勤类型：放假、不加班、加班
   batchAttendanceHours: number | null = null;
-  batchAttendanceNote: string = '';
   filteredWorkers: any[] = [];
+  batchSelectedGroup: string = ''; // 批量考勤选择的组
   batchOvertimeStartHour: number | null = null;
   batchOvertimeStartMinute: number | null = null;
   batchOvertimeEndHour: number | null = null;
@@ -136,6 +157,18 @@ export class AttendanceAdminPage implements OnInit {
     // 先加载节假日数据，再加载考勤数据，确保节假日数据已准备好
     await this.loadHolidays();
     this.load(); // 加载节假日数据后再加载考勤数据
+    
+    // 初始化年份列表（当前年份前后各10年）
+    this.initializeAvailableYears();
+  }
+
+  // 初始化可用年份列表
+  initializeAvailableYears() {
+    const currentYear = new Date().getFullYear();
+    this.availableYears = [];
+    for (let i = currentYear - 10; i <= currentYear + 10; i++) {
+      this.availableYears.push(i);
+    }
   }
 
   private getApiBase(): string {
@@ -272,6 +305,336 @@ export class AttendanceAdminPage implements OnInit {
     return (endMinutes - startMinutes) / 60; // 转换为小时
   }
 
+  // 获取考勤类型（根据标准工作时长和加班时长判断）
+  getAttendanceType(record: any): 'holiday' | 'normal' | 'overtime' | null {
+    const standardHours = record.standard_attendance_hours || 0;
+    const overtimeHours = record.overtime_hours || 0;
+    
+    if (standardHours === 0 && overtimeHours === 0) {
+      return 'holiday'; // 放假
+    } else if (standardHours > 0 && overtimeHours === 0) {
+      return 'normal'; // 不加班
+    } else if (standardHours > 0 && overtimeHours > 0) {
+      return 'overtime'; // 加班
+    }
+    
+    return null;
+  }
+
+  // 获取考勤类型显示文本
+  getAttendanceTypeText(record: any): string {
+    const type = this.getAttendanceType(record);
+    switch (type) {
+      case 'holiday':
+        return '放假';
+      case 'normal':
+        return '不加班';
+      case 'overtime':
+        return '加班';
+      default:
+        return '';
+    }
+  }
+
+  // 获取考勤类型显示文本（用于日历）
+  getAttendanceTypeTextForDay(type: string): string {
+    switch (type) {
+      case 'holiday':
+        return '放假';
+      case 'normal':
+        return '不加班';
+      case 'overtime':
+        return '加班';
+      default:
+        return '';
+    }
+  }
+
+  // 切换视图模式
+  async toggleViewMode() {
+    this.viewMode = this.viewMode === 'list' ? 'calendar' : 'list';
+    if (this.viewMode === 'calendar') {
+      await this.loadCalendarData();
+      this.generateCalendar();
+    }
+  }
+
+  // 加载日历所需的所有考勤数据
+  async loadCalendarData() {
+    this.calendarDataLoading = true;
+    try {
+      const base = this.getApiBase();
+      // 加载当前月份前后各6个月的数据，确保日历显示完整
+      const currentMonth = this.currentMonth || new Date();
+      const startDate = new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 6, 1);
+      const endDate = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 7, 0);
+      
+      const formatDate = (d: Date): string => {
+        const year = d.getFullYear();
+        const month = d.getMonth() + 1;
+        const day = d.getDate();
+        const monthStr = month < 10 ? '0' + month : '' + month;
+        const dayStr = day < 10 ? '0' + day : '' + day;
+        return `${year}-${monthStr}-${dayStr}`;
+      };
+      
+      const startStr = formatDate(startDate);
+      const endStr = formatDate(endDate);
+      
+      // 加载所有考勤数据（不限制分页，不应用筛选，显示所有已设置的考勤）
+      const params = new URLSearchParams();
+      params.set('start', startStr);
+      params.set('end', endStr);
+      params.set('page', '1');
+      params.set('pageSize', '10000'); // 设置一个很大的值以获取所有数据
+      
+      // 注意：日历视图显示所有考勤数据，不应用员工、部门、组筛选
+      // 如果用户需要筛选，可以在列表视图中进行
+      
+      const url = `${base}/api/daily-attendance?${params.toString()}`;
+      const response: any = await this.http.get(url).toPromise();
+      
+      if (response && response.list) {
+        // 数值化关键字段
+        this.calendarAttendanceData = response.list.map((record: any) => ({
+          ...record,
+          standard_attendance_hours: Number(record.standard_attendance_hours) || 0,
+          overtime_hours: parseFloat(record.overtime_hours) || 0,
+          leave_hours: parseFloat(record.leave_hours) || 0,
+          actual_hours: Number(record.actual_hours) || 0
+        }));
+      } else {
+        this.calendarAttendanceData = [];
+      }
+    } catch (error) {
+      console.error('加载日历考勤数据失败:', error);
+      this.calendarAttendanceData = [];
+    } finally {
+      this.calendarDataLoading = false;
+    }
+  }
+
+  // 生成日历数据
+  generateCalendar() {
+    const year = this.currentMonth.getFullYear();
+    const month = this.currentMonth.getMonth();
+    
+    // 设置月份年份显示文本
+    this.currentMonthYear = `${year}年${month + 1}月`;
+    
+    // 获取当月第一天和最后一天
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    
+    // 获取第一天是星期几（0=周日，1=周一...）
+    const firstDayWeek = firstDay.getDay();
+    
+    // 创建考勤类型映射（按日期字符串）
+    // 使用日历专用数据，如果没有则使用列表数据
+    const dataSource = this.calendarAttendanceData.length > 0 ? this.calendarAttendanceData : this.list;
+    const attendanceMap = new Map<string, 'holiday' | 'normal' | 'overtime'>();
+    
+    // 对于同一天可能有多个员工的考勤记录，取最常见的类型
+    const dateTypeCounts = new Map<string, Map<'holiday' | 'normal' | 'overtime', number>>();
+    
+    dataSource.forEach(record => {
+      const recordDate = new Date(record.date);
+      const year = recordDate.getFullYear();
+      const month = recordDate.getMonth() + 1;
+      const day = recordDate.getDate();
+      const monthStr = month < 10 ? '0' + month : '' + month;
+      const dayStr = day < 10 ? '0' + day : '' + day;
+      const dateKey = `${year}-${monthStr}-${dayStr}`;
+      const type = this.getAttendanceType(record);
+      if (type) {
+        if (!dateTypeCounts.has(dateKey)) {
+          dateTypeCounts.set(dateKey, new Map());
+        }
+        const typeCounts = dateTypeCounts.get(dateKey)!;
+        typeCounts.set(type, (typeCounts.get(type) || 0) + 1);
+      }
+    });
+    
+    // 对于每个日期，选择出现次数最多的类型
+    dateTypeCounts.forEach((typeCounts, dateKey) => {
+      let maxCount = 0;
+      let mostCommonType: 'holiday' | 'normal' | 'overtime' | null = null;
+      typeCounts.forEach((count, type) => {
+        if (count > maxCount) {
+          maxCount = count;
+          mostCommonType = type;
+        }
+      });
+      if (mostCommonType) {
+        attendanceMap.set(dateKey, mostCommonType);
+      }
+    });
+    
+    // 生成日历周
+    const weeks: any[] = [];
+    let currentWeek: any[] = [];
+    
+    // 辅助函数：格式化日期字符串
+    const formatDateKey = (y: number, m: number, d: number): string => {
+      const monthStr = m < 10 ? '0' + m : '' + m;
+      const dayStr = d < 10 ? '0' + d : '' + d;
+      return `${y}-${monthStr}-${dayStr}`;
+    };
+    
+    // 填充上个月的日期
+    const prevMonthLastDay = new Date(year, month, 0).getDate();
+    for (let i = firstDayWeek - 1; i >= 0; i--) {
+      const date = prevMonthLastDay - i;
+      const dateKey = formatDateKey(year, month, date);
+      const fullDate = new Date(year, month - 1, date);
+      currentWeek.push({
+        date: date,
+        fullDate: fullDate,
+        dateKey: dateKey,
+        isOtherMonth: true,
+        isToday: false,
+        type: attendanceMap.get(dateKey) || null
+      });
+    }
+    
+    // 填充当月的日期
+    for (let date = 1; date <= lastDay.getDate(); date++) {
+      const dateKey = formatDateKey(year, month + 1, date);
+      const fullDate = new Date(year, month, date);
+      const today = new Date();
+      const isToday = fullDate.getFullYear() === today.getFullYear() &&
+                     fullDate.getMonth() === today.getMonth() &&
+                     fullDate.getDate() === today.getDate();
+      
+      currentWeek.push({
+        date: date,
+        fullDate: fullDate,
+        dateKey: dateKey,
+        isOtherMonth: false,
+        isToday: isToday,
+        type: attendanceMap.get(dateKey) || null
+      });
+      
+      // 如果一周满了，开始新的一周
+      if (currentWeek.length === 7) {
+        weeks.push(currentWeek);
+        currentWeek = [];
+      }
+    }
+    
+    // 填充下个月的日期
+    let nextMonthDate = 1;
+    while (currentWeek.length < 7) {
+      const dateKey = formatDateKey(year, month + 2, nextMonthDate);
+      const fullDate = new Date(year, month + 1, nextMonthDate);
+      currentWeek.push({
+        date: nextMonthDate,
+        fullDate: fullDate,
+        dateKey: dateKey,
+        isOtherMonth: true,
+        isToday: false,
+        type: attendanceMap.get(dateKey) || null
+      });
+      nextMonthDate++;
+    }
+    
+    if (currentWeek.length > 0) {
+      weeks.push(currentWeek);
+    }
+    
+    this.calendarWeeks = weeks;
+  }
+
+  // 上一个月
+  async previousMonth() {
+    this.currentMonth = new Date(this.currentMonth.getFullYear(), this.currentMonth.getMonth() - 1, 1);
+    // 如果切换到新月份，检查是否需要加载更多数据
+    await this.ensureCalendarDataLoaded();
+    this.generateCalendar();
+  }
+
+  // 下一个月
+  async nextMonth() {
+    this.currentMonth = new Date(this.currentMonth.getFullYear(), this.currentMonth.getMonth() + 1, 1);
+    // 如果切换到新月份，检查是否需要加载更多数据
+    await this.ensureCalendarDataLoaded();
+    this.generateCalendar();
+  }
+
+  // 确保当前月份的数据已加载
+  async ensureCalendarDataLoaded() {
+    // 检查已加载的数据范围
+    if (this.calendarAttendanceData.length === 0) {
+      // 如果没有数据，重新加载
+      await this.loadCalendarData();
+      return;
+    }
+    
+    // 获取已加载数据的日期范围
+    const dates = this.calendarAttendanceData.map(r => new Date(r.date));
+    if (dates.length === 0) {
+      await this.loadCalendarData();
+      return;
+    }
+    
+    const minDate = new Date(Math.min(...dates.map(d => d.getTime())));
+    const maxDate = new Date(Math.max(...dates.map(d => d.getTime())));
+    
+    // 计算当前月份是否在已加载范围内
+    const currentMonthStart = new Date(this.currentMonth.getFullYear(), this.currentMonth.getMonth(), 1);
+    const currentMonthEnd = new Date(this.currentMonth.getFullYear(), this.currentMonth.getMonth() + 1, 0);
+    
+    // 如果当前月份超出已加载范围（前后6个月），重新加载数据
+    if (currentMonthStart < minDate || currentMonthEnd > maxDate) {
+      await this.loadCalendarData();
+    }
+  }
+
+  // 日历日期点击事件
+  onCalendarDayClick(day: any) {
+    // 可以在这里添加点击日期的处理逻辑，比如跳转到该日期的详细列表
+    if (!day.isOtherMonth) {
+      // 设置筛选日期并切换到列表视图
+      const dateStr = day.dateKey;
+      this.start = dateStr;
+      this.end = dateStr;
+      this.viewMode = 'list';
+      this.load(true);
+    }
+  }
+
+  // 打开月份年份选择器
+  openMonthYearPicker() {
+    this.selectedYear = this.currentMonth.getFullYear();
+    this.selectedMonth = this.currentMonth.getMonth() + 1;
+    this.isMonthYearPickerOpen = true;
+  }
+
+  // 关闭月份年份选择器
+  closeMonthYearPicker() {
+    this.isMonthYearPickerOpen = false;
+  }
+
+  // 确认月份年份选择
+  async confirmMonthYearSelection() {
+    this.currentMonth = new Date(this.selectedYear, this.selectedMonth - 1, 1);
+    this.closeMonthYearPicker();
+    await this.ensureCalendarDataLoaded();
+    this.generateCalendar();
+  }
+
+  // 跳转到今天
+  async goToToday() {
+    this.currentMonth = new Date();
+    this.selectedYear = this.currentMonth.getFullYear();
+    this.selectedMonth = this.currentMonth.getMonth() + 1;
+    if (this.isMonthYearPickerOpen) {
+      this.closeMonthYearPicker();
+    }
+    await this.ensureCalendarDataLoaded();
+    this.generateCalendar();
+  }
+
   load(resetPage = false) {
     console.log('=== load方法开始执行 ===');
     if (resetPage) this.page = 1;
@@ -386,6 +749,10 @@ export class AttendanceAdminPage implements OnInit {
             });
           });
           console.groupEnd();
+        }
+        // 如果当前是日历视图，更新日历
+        if (this.viewMode === 'calendar') {
+          this.generateCalendar();
         }
         // 撤回：不在前端保存用户ID集合用于统计
         this.isLoading = false;
@@ -552,34 +919,13 @@ export class AttendanceAdminPage implements OnInit {
       this.overtimeStartTime = this.formatTimeString(this.overtimeStartHour, this.overtimeStartMinute);
       this.overtimeEndTime = this.formatTimeString(this.overtimeEndHour, this.overtimeEndMinute);
     } else {
-      // 如果没有加班时间，检查是否有初始加班时间设置
-      if (this.workTimeSettings && this.workTimeSettings.defaultOvertimeStartTime) {
-        // 使用初始加班时间作为默认值
-        this.overtimeStartTime = this.workTimeSettings.defaultOvertimeStartTime;
-        const startTime = this.parseTimeString(this.workTimeSettings.defaultOvertimeStartTime);
-        if (startTime) {
-          this.overtimeStartHour = startTime.hour;
-          this.overtimeStartMinute = startTime.minute;
-        }
-      } else {
-        this.overtimeStartHour = null;
-        this.overtimeStartMinute = 0;
-        this.overtimeStartTime = '';
-      }
-      
-      // 使用默认结束加班时间
-      if (this.workTimeSettings && this.workTimeSettings.defaultOvertimeEndTime) {
-        this.overtimeEndTime = this.workTimeSettings.defaultOvertimeEndTime;
-        const endTime = this.parseTimeString(this.workTimeSettings.defaultOvertimeEndTime);
-        if (endTime) {
-          this.overtimeEndHour = endTime.hour;
-          this.overtimeEndMinute = endTime.minute;
-        }
-      } else {
-        this.overtimeEndHour = null;
-        this.overtimeEndMinute = 0;
-        this.overtimeEndTime = '';
-      }
+      // 如果没有加班时间，不设置默认值
+      this.overtimeStartHour = null;
+      this.overtimeStartMinute = 0;
+      this.overtimeStartTime = '';
+      this.overtimeEndHour = null;
+      this.overtimeEndMinute = 0;
+      this.overtimeEndTime = '';
     }
     
     // 从现有记录中加载请假时间信息
@@ -653,7 +999,6 @@ export class AttendanceAdminPage implements OnInit {
       }).toPromise();
       
       if (response && (response as any).success) {
-        alert('考勤确认成功！');
         // 重新加载数据
         this.load(true);
         if (this.showStats) {
@@ -677,7 +1022,6 @@ export class AttendanceAdminPage implements OnInit {
       const response = await this.http.post(`${base}/api/daily-attendance/${record.id}/unconfirm`, {}).toPromise();
       
       if (response && (response as any).success) {
-        alert('取消确认成功！');
         // 重新加载数据
         this.load(true);
         if (this.showStats) {
@@ -689,6 +1033,108 @@ export class AttendanceAdminPage implements OnInit {
     } catch (error) {
       console.error('取消确认失败:', error);
       alert('取消确认失败：' + (error as any).message);
+    }
+  }
+
+  // 获取待确认记录数量
+  getUnconfirmedCount(): number {
+    return this.list.filter(r => !r.is_confirmed).length;
+  }
+
+  // 全部确认考勤记录
+  async confirmAllAttendance() {
+    if (!this.currentUser) {
+      await this.presentToast('请先登录');
+      return;
+    }
+
+    const unconfirmedRecords = this.list.filter(r => !r.is_confirmed);
+    
+    if (unconfirmedRecords.length === 0) {
+      await this.presentToast('没有待确认的考勤记录');
+      return;
+    }
+
+    // 显示确认对话框
+    const alert = await this.alertController.create({
+      header: '确认批量操作',
+      message: `确定要确认 ${unconfirmedRecords.length} 条待确认的考勤记录吗？`,
+      buttons: [
+        {
+          text: '取消',
+          role: 'cancel'
+        },
+        {
+          text: '确认',
+          handler: async () => {
+            await this.performBatchConfirm(unconfirmedRecords);
+          }
+        }
+      ]
+    });
+
+    await alert.present();
+  }
+
+  // 执行批量确认
+  private async performBatchConfirm(records: any[]) {
+    if (!this.currentUser) return;
+
+    const base = this.getApiBase();
+    let successCount = 0;
+    let failCount = 0;
+
+    // 显示加载提示
+    const loadingToast = await this.toastController.create({
+      message: `正在确认 ${records.length} 条记录...`,
+      duration: 0,
+      position: 'middle'
+    });
+    await loadingToast.present();
+
+    try {
+      // 批量确认所有记录
+      const confirmPromises = records.map(async (record) => {
+        try {
+          const response = await this.http.post(`${base}/api/daily-attendance/${record.id}/confirm`, {
+            confirmedBy: this.currentUser.id
+          }).toPromise();
+          
+          if (response && (response as any).success) {
+            successCount++;
+            return true;
+          } else {
+            failCount++;
+            return false;
+          }
+        } catch (error) {
+          console.error(`确认记录 ${record.id} 失败:`, error);
+          failCount++;
+          return false;
+        }
+      });
+
+      await Promise.all(confirmPromises);
+
+      // 关闭加载提示
+      await loadingToast.dismiss();
+
+      // 显示结果
+      if (successCount > 0) {
+        await this.presentToast(`成功确认 ${successCount} 条记录${failCount > 0 ? `，失败 ${failCount} 条` : ''}`);
+      } else {
+        await this.presentToast('批量确认失败');
+      }
+
+      // 重新加载数据
+      this.load(true);
+      if (this.showStats) {
+        this.loadStats();
+      }
+    } catch (error) {
+      await loadingToast.dismiss();
+      console.error('批量确认失败:', error);
+      await this.presentToast('批量确认失败：' + (error as any).message);
     }
   }
   
@@ -1489,26 +1935,25 @@ export class AttendanceAdminPage implements OnInit {
     return !this.isHoliday(date);
   }
 
-  // 打开批量考勤管理模态框
+  // 打开排班管理模态框
   async openBatchAttendanceModal() {
     // 设置初始值
     this.batchAttendanceDate = this.getLocalDateString(); // YYYY-MM-DD格式
+    this.batchAttendanceDateMode = 'range'; // 默认使用日期区间模式
+    this.batchAttendanceStartDate = this.getLocalDateString();
+    this.batchAttendanceEndDate = this.getLocalDateString();
     
-    // 根据工作时间设置自动计算考勤时长
-    if (this.workTimeSettings && this.workTimeSettings.standardHours) {
-      this.batchAttendanceHours = this.workTimeSettings.standardHours;
-    } else {
-      this.batchAttendanceHours = null;
-    }
-    
-    this.batchAttendanceNote = '';
+    // 默认选择"不加班"
+    this.batchAttendanceType = 'normal';
+    this.batchAttendanceHours = this.calculateBatchAttendanceHours();
+    this.batchSelectedGroup = '';
     
     // 打开模态框
     this.isBatchAttendanceModalOpen = true;
     
-    // 加载工人列表
+    // 加载工人列表以获取可用的组
     try {
-      await this.loadWorkers();
+      await this.loadWorkersForBatch();
     } catch (error) {
       console.error('加载工人列表失败:', error);
     }
@@ -1590,26 +2035,183 @@ export class AttendanceAdminPage implements OnInit {
     return this.batchAttendanceDate || this.getLocalDateString();
   }
 
-  // 关闭批量考勤管理模态框
+  // 日期模式改变时的处理
+  onDateModeChange() {
+    if (this.batchAttendanceDateMode === 'single') {
+      // 切换到单个日期模式时，使用当前选择的日期
+      if (!this.batchAttendanceDate) {
+        this.batchAttendanceDate = this.getLocalDateString();
+      }
+    } else {
+      // 切换到日期区间模式时，初始化开始和结束日期
+      if (!this.batchAttendanceStartDate) {
+        this.batchAttendanceStartDate = this.getLocalDateString();
+      }
+      if (!this.batchAttendanceEndDate) {
+        this.batchAttendanceEndDate = this.getLocalDateString();
+      }
+    }
+  }
+
+  // 获取日期区间的天数
+  getDateRangeCount(): number {
+    if (!this.batchAttendanceStartDate || !this.batchAttendanceEndDate) {
+      return 0;
+    }
+    const dates = this.getDateRange(this.batchAttendanceStartDate, this.batchAttendanceEndDate);
+    return dates.length;
+  }
+
+  // 计算默认加班时长（根据默认加班开始和结束时间，考虑与作息窗口重叠时减去休息时间）
+  calculateDefaultOvertimeHours(): number {
+    if (!this.workTimeSettings) {
+      return 0;
+    }
+
+    // 如果没有设置默认加班时间，返回0
+    if (!this.workTimeSettings.defaultOvertimeStartTime || !this.workTimeSettings.defaultOvertimeEndTime) {
+      return 0;
+    }
+
+    const startTime = this.parseTimeString(this.workTimeSettings.defaultOvertimeStartTime);
+    const endTime = this.parseTimeString(this.workTimeSettings.defaultOvertimeEndTime);
+
+    if (!startTime || !endTime) {
+      return 0;
+    }
+
+    const startMinutes = startTime.hour * 60 + startTime.minute;
+    const endMinutes = endTime.hour * 60 + endTime.minute;
+
+    if (startMinutes >= endMinutes) {
+      return 0;
+    }
+
+    // 基础加班时长
+    const totalOvertimeMinutes = endMinutes - startMinutes;
+    
+    // 检查是否与作息窗口重叠，如果重叠则需要减去休息时间
+    const workStart = this.timeToMinutes(this.workTimeSettings.startTime);
+    const workEnd = this.timeToMinutes(this.workTimeSettings.endTime);
+    
+    // 检查加班时间是否与工作时间重叠
+    if (startMinutes < workEnd && endMinutes > workStart) {
+      // 有重叠，需要减去休息时间
+      const lunchStart = this.timeToMinutes(this.workTimeSettings.lunchStartTime);
+      const lunchEnd = this.timeToMinutes(this.workTimeSettings.lunchEndTime);
+      
+      // 计算与午休时间的重叠
+      let lunchOverlapMinutes = 0;
+      if (lunchStart && lunchEnd && startMinutes < lunchEnd && endMinutes > lunchStart) {
+        const overlapStart = Math.max(startMinutes, lunchStart);
+        const overlapEnd = Math.min(endMinutes, lunchEnd);
+        lunchOverlapMinutes = Math.max(0, overlapEnd - overlapStart);
+      }
+      
+      // 计算与其他休息时间的重叠
+      let otherBreakOverlapMinutes = 0;
+      if (this.workTimeSettings.otherBreakStartTime && this.workTimeSettings.otherBreakEndTime) {
+        const otherStart = this.timeToMinutes(this.workTimeSettings.otherBreakStartTime);
+        const otherEnd = this.timeToMinutes(this.workTimeSettings.otherBreakEndTime);
+        
+        if (startMinutes < otherEnd && endMinutes > otherStart) {
+          const overlapStart = Math.max(startMinutes, otherStart);
+          const overlapEnd = Math.min(endMinutes, otherEnd);
+          otherBreakOverlapMinutes = Math.max(0, overlapEnd - overlapStart);
+        }
+      }
+      
+      // 从加班时间中减去休息时间重叠
+      const effectiveOvertimeMinutes = totalOvertimeMinutes - lunchOverlapMinutes - otherBreakOverlapMinutes;
+      const result = Math.max(0, effectiveOvertimeMinutes) / 60; // 转换为小时
+      // 保留两位小数
+      return Math.round(result * 100) / 100;
+    }
+    
+    // 没有与作息窗口重叠，直接返回总时长
+    const overtimeHours = totalOvertimeMinutes / 60;
+    // 保留两位小数
+    return Math.round(overtimeHours * 100) / 100;
+  }
+
+  // 根据考勤类型计算考勤时长
+  calculateBatchAttendanceHours(): number {
+    if (!this.workTimeSettings) {
+      return 0;
+    }
+
+    switch (this.batchAttendanceType) {
+      case 'holiday':
+        // 放假：标准工作时间为0
+        return 0;
+      
+      case 'normal':
+        // 不加班：使用标准工作时长
+        // 确保返回数字类型
+        return Number(this.workTimeSettings.standardHours) || 0;
+      
+      case 'overtime':
+        // 加班：标准工作时长 + 加班时长
+        // 确保 standardHours 是数字类型
+        const standardHours = Number(this.workTimeSettings.standardHours) || 0;
+        const overtimeHours = this.calculateDefaultOvertimeHours();
+        const total = standardHours + overtimeHours;
+        // 保留两位小数，确保精度
+        const result = Math.round(total * 100) / 100;
+        console.log('计算加班总时长:', {
+          standardHours,
+          overtimeHours,
+          total,
+          result
+        });
+        return result;
+      
+      default:
+        return 0;
+    }
+  }
+
+  // 获取标准工作时长（数字类型）
+  getStandardHours(): number {
+    return Number(this.workTimeSettings?.standardHours) || 0;
+  }
+
+  // 获取加班总时长（用于显示）
+  getOvertimeTotalHours(): number {
+    return this.getStandardHours() + this.calculateDefaultOvertimeHours();
+  }
+
+  // 获取选择组内的工人数量
+  getSelectedGroupWorkerCount(): number {
+    if (!this.batchSelectedGroup || this.batchSelectedGroup === '') {
+      // 全部组：返回所有工人数量
+      return this.filteredWorkers.length;
+    }
+    return this.filteredWorkers.filter(u => u.user_group === this.batchSelectedGroup).length;
+  }
+
+  // 考勤类型改变时的处理
+  onBatchAttendanceTypeChange() {
+    this.batchAttendanceHours = this.calculateBatchAttendanceHours();
+  }
+
+  // 关闭排班管理模态框
   closeBatchAttendanceModal() {
     this.isBatchAttendanceModalOpen = false;
     this.filteredWorkers = [];
-    this.searchKeyword = '';
-    this.selectedGroup = '';
+    this.batchSelectedGroup = '';
   }
 
-  // 加载工人列表
-  async loadWorkers() {
+  // 加载工人列表（用于批量考勤，获取可用的组）
+  async loadWorkersForBatch() {
     try {
       const base = this.getApiBase();
       const response = await this.http.get(`${base}/api/users`).toPromise();
       const users = (response as any[]).filter(user => user.role === 'worker');
       
-      this.filteredWorkers = users.map(user => ({
-        ...user,
-        selected: false
-      }));
+      this.filteredWorkers = users;
       
+      // 获取所有可用的组
       this.availableGroups = [...new Set(users.map(user => user.user_group))].filter(group => group);
       this.availableGroups.sort();
     } catch (error) {
@@ -1653,32 +2255,102 @@ export class AttendanceAdminPage implements OnInit {
   }
 
   // 确认批量考勤设置
+  // 获取日期范围内的所有日期
+  private getDateRange(startDate: string, endDate: string): string[] {
+    const dates: string[] = [];
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    
+    if (start > end) {
+      return [];
+    }
+    
+    const current = new Date(start);
+    while (current <= end) {
+      dates.push(this.getLocalDateString(current));
+      current.setDate(current.getDate() + 1);
+    }
+    
+    return dates;
+  }
+
   async confirmBatchAttendance() {
     // 验证日期
-    if (!this.batchAttendanceDate) {
-      this.presentToast('请选择日期');
+    let dates: string[] = [];
+    
+    if (this.batchAttendanceDateMode === 'single') {
+      // 单个日期模式
+      if (!this.batchAttendanceDate) {
+        this.presentToast('请选择日期');
+        return;
+      }
+
+      if (!this.isValidDate(this.batchAttendanceDate)) {
+        this.presentToast('请输入有效的日期格式');
+        return;
+      }
+      
+      dates = [this.batchAttendanceDate];
+    } else {
+      // 日期区间模式
+      if (!this.batchAttendanceStartDate || !this.batchAttendanceEndDate) {
+        this.presentToast('请选择开始日期和结束日期');
+        return;
+      }
+
+      if (!this.isValidDate(this.batchAttendanceStartDate) || !this.isValidDate(this.batchAttendanceEndDate)) {
+        this.presentToast('请输入有效的日期格式');
+        return;
+      }
+
+      const start = new Date(this.batchAttendanceStartDate);
+      const end = new Date(this.batchAttendanceEndDate);
+      
+      if (start > end) {
+        this.presentToast('开始日期不能晚于结束日期');
+        return;
+      }
+      
+      dates = this.getDateRange(this.batchAttendanceStartDate, this.batchAttendanceEndDate);
+      
+      if (dates.length === 0) {
+        this.presentToast('日期范围无效');
+        return;
+      }
+    }
+
+    if (!this.batchAttendanceType) {
+      this.presentToast('请选择考勤类型');
       return;
     }
 
-    if (!this.isValidDate(this.batchAttendanceDate)) {
-      this.presentToast('请输入有效的日期格式');
-      return;
+    // 重新计算考勤时长
+    this.batchAttendanceHours = this.calculateBatchAttendanceHours();
+    
+    // 根据选择的组获取工人（如果选择了"全部组"，则获取所有工人）
+    let selectedWorkers: any[];
+    if (!this.batchSelectedGroup || this.batchSelectedGroup === '') {
+      // 全部组：获取所有工人
+      selectedWorkers = this.filteredWorkers;
+    } else {
+      // 特定组：获取该组的工人
+      selectedWorkers = this.filteredWorkers.filter(user => user.user_group === this.batchSelectedGroup);
     }
-
-    if (this.selectedWorkersCount === 0) {
-      this.presentToast('请选择至少一名工人');
+    
+    if (selectedWorkers.length === 0) {
+      this.presentToast('没有找到工人');
       return;
     }
     
-    if (this.batchAttendanceHours === null || this.batchAttendanceHours === undefined) {
-      this.presentToast('请输入考勤时长');
-      return;
-    }
+    const totalRecords = selectedWorkers.length * dates.length;
+    const dateRangeText = this.batchAttendanceDateMode === 'single' 
+      ? this.batchAttendanceDate 
+      : `${this.batchAttendanceStartDate} 至 ${this.batchAttendanceEndDate} (共${dates.length}天)`;
     
-    const selectedWorkers = this.filteredWorkers.filter(user => user.selected);
+    const groupText = this.batchSelectedGroup ? `组"${this.batchSelectedGroup}"的` : '';
     const confirmed = await this.alertController.create({
       header: '确认批量设置考勤',
-      message: `确定要为 ${selectedWorkers.length} 名工人设置 ${this.batchAttendanceHours} 小时的考勤吗？`,
+      message: `确定要为${groupText} ${selectedWorkers.length} 名工人在 ${dateRangeText} 设置 ${this.batchAttendanceHours} 小时的考勤吗？\n\n将创建 ${totalRecords} 条考勤记录。`,
       buttons: [
         {
           text: '取消',
@@ -1690,25 +2362,78 @@ export class AttendanceAdminPage implements OnInit {
             try {
               const base = this.getApiBase();
               
-              // 为每个选中的工人设置考勤
+              // 为每个选中的工人在每个日期设置考勤
               let successCount = 0;
-              for (const worker of selectedWorkers) {
-                const response = await this.http.post(`${base}/api/daily-attendance`, {
-                  userId: worker.id,
-                  date: this.batchAttendanceDate,
-                  standardAttendanceHours: this.batchAttendanceHours,
-                  overtimeHours: 0,
-                  leaveHours: 0,
-                  note: this.batchAttendanceNote || '批量考勤管理',
-                  adjustedBy: 1
-                }).toPromise();
-                
-                if (response && (response as any).success) {
-                  successCount++;
+              let failCount = 0;
+              
+              // 显示进度提示
+              const loadingToast = await this.toastController.create({
+                message: `正在设置 ${totalRecords} 条考勤记录...`,
+                duration: 0,
+                position: 'middle'
+              });
+              await loadingToast.present();
+              
+              // 根据考勤类型计算标准工作时长和加班时长
+              let standardHours = 0;
+              let overtimeHours = 0;
+              let overtimeStartTime: string | null = null;
+              let overtimeEndTime: string | null = null;
+              
+              if (this.batchAttendanceType === 'holiday') {
+                // 放假：标准工作时长为0，加班时长为0
+                standardHours = 0;
+                overtimeHours = 0;
+              } else if (this.batchAttendanceType === 'normal') {
+                // 不加班：标准工作时长为标准工作时长，加班时长为0
+                standardHours = this.getStandardHours();
+                overtimeHours = 0;
+              } else if (this.batchAttendanceType === 'overtime') {
+                // 加班：标准工作时长为标准工作时长，加班时长为加班时长
+                standardHours = this.getStandardHours();
+                overtimeHours = this.calculateDefaultOvertimeHours();
+                // 保存默认的加班时间段
+                if (this.workTimeSettings && this.workTimeSettings.defaultOvertimeStartTime && this.workTimeSettings.defaultOvertimeEndTime) {
+                  overtimeStartTime = this.workTimeSettings.defaultOvertimeStartTime;
+                  overtimeEndTime = this.workTimeSettings.defaultOvertimeEndTime;
                 }
               }
               
-              this.presentToast(`成功设置 ${successCount} 名工人的考勤`);
+              for (const worker of selectedWorkers) {
+                for (const date of dates) {
+                  try {
+                    const response = await this.http.post(`${base}/api/daily-attendance`, {
+                      userId: worker.id,
+                      date: date,
+                      standardAttendanceHours: standardHours,
+                      overtimeHours: overtimeHours,
+                      overtimeStartTime: overtimeStartTime,
+                      overtimeEndTime: overtimeEndTime,
+                      leaveHours: 0,
+                      note: '排班管理',
+                      adjustedBy: 1
+                    }).toPromise();
+                    
+                    if (response && (response as any).success) {
+                      successCount++;
+                    } else {
+                      failCount++;
+                    }
+                  } catch (error) {
+                    console.error(`设置工人 ${worker.name} 在 ${date} 的考勤失败:`, error);
+                    failCount++;
+                  }
+                }
+              }
+              
+              await loadingToast.dismiss();
+              
+              if (successCount > 0) {
+                this.presentToast(`成功设置 ${successCount} 条考勤记录${failCount > 0 ? `，失败 ${failCount} 条` : ''}`);
+              } else {
+                this.presentToast('批量设置考勤失败');
+              }
+              
               this.closeBatchAttendanceModal();
               this.load(true); // 重新加载数据
             } catch (error) {

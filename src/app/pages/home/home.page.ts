@@ -72,11 +72,13 @@ import { Capacitor } from '@capacitor/core';
     IonTextarea,
     IonSegment,
     IonSegmentButton,
-  IonSelect,
+    IonSelect,
   IonSelectOption,
   IonDatetime,
   IonNote,
   IonChip,
+  IonList,
+  IonItem,
   CommonModule,
     FormsModule,
     RouterLink
@@ -148,12 +150,44 @@ export class HomePage implements OnInit, OnDestroy {
   // 员工信息查询
   isUserListModalOpen: boolean = false;
   userSearchKeyword: string = '';
+  // 用户管理模态框（用于导入员工）
+  isUserModalOpen: boolean = false;
   
   // 导入标准工时相关属性
   isStdHoursModalOpen: boolean = false;
   selectedStdFile: File | null = null;
   isImportingStd: boolean = false;
   importStdResult: any = null;
+  
+  // 标准工时列表相关属性
+  isStandardHoursListModalOpen: boolean = false;
+  standardHoursList: any[] = [];
+  isLoadingStandardHours: boolean = false;
+  
+  // 完工撤回相关属性
+  isRollbackModalOpen: boolean = false;
+  rollbackList: any[] = [];
+  isLoadingRollback: boolean = false;
+  isRollingBack: boolean = false;
+  
+  // 编辑标准工时相关属性
+  isEditStandardHoursModalOpen: boolean = false;
+  editingStandardHoursItem: any = null;
+  newProductModel: string = '';
+  editingStandardHours: {
+    machining: number;
+    electrical: number;
+    preAssembly: number;
+    postAssembly: number;
+    debugging: number;
+  } = {
+    machining: 0,
+    electrical: 0,
+    preAssembly: 0,
+    postAssembly: 0,
+    debugging: 0
+  };
+  isSavingStandardHours: boolean = false;
   // IonDatetime 辅助范围（防止空白）
   minDateISO: string = '2000-01-01T00:00';
   maxDateISO: string = '2100-12-31T23:59';
@@ -167,11 +201,12 @@ export class HomePage implements OnInit, OnDestroy {
     }
     await this.loadUsersAndDepartments();
     
-    // Staff角色加载责任部门确认的异常报告，其他角色加载任务
+    // 所有角色都加载任务列表，确保首页始终有任务数据
+    this.loadTasks();
+
+    // Staff 角色额外加载责任部门确认的异常报告（用于后续扩展的视图或提醒）
     if (this.currentUser?.role === 'staff') {
       this.loadStaffExceptionReports();
-    } else {
-      this.loadTasks();
     }
     
     this.loadPendingApprovalsIfNeeded();
@@ -210,6 +245,17 @@ export class HomePage implements OnInit, OnDestroy {
   closeUserListModal() {
     this.isUserListModalOpen = false;
     this.userSearchKeyword = '';
+  }
+
+  // 用户管理模态框（导入员工）
+  openUserModal() {
+    this.isUserModalOpen = true;
+  }
+
+  closeUserModal() {
+    this.isUserModalOpen = false;
+    this.selectedUserFile = null;
+    this.importUserResult = null;
   }
 
   get filteredUsersForModal() {
@@ -301,10 +347,11 @@ export class HomePage implements OnInit, OnDestroy {
   }
 
   doRefresh(event: any) {
+    // 刷新时同样优先保证任务列表刷新
+    this.loadTasks();
+    // Staff 角色同时刷新责任部门异常报告
     if (this.currentUser?.role === 'staff') {
       this.loadStaffExceptionReports();
-    } else {
-      this.loadTasks();
     }
     this.loadPendingApprovalsIfNeeded();
     this.loadPendingExceptionReportsIfNeeded();
@@ -368,7 +415,8 @@ export class HomePage implements OnInit, OnDestroy {
   // 任务视图模式切换
   onTaskViewModeChange() {
     if (this.currentUser?.role === 'staff') {
-      this.loadStaffExceptionReports();
+      // 切换视图时不显示提醒框，避免重复弹窗
+      this.loadStaffExceptionReports(false);
     } else {
       this.loadTasks();
     }
@@ -467,6 +515,30 @@ export class HomePage implements OnInit, OnDestroy {
     await alert.present();
   }
 
+  // 显示责任部门待确认任务提醒
+  async showPendingStaffConfirmationAlert(count: number) {
+    const alert = await this.alertController.create({
+      header: '有待确认的任务',
+      message: `您有 ${count} 个待确认的异常报告需要处理，请及时查看并确认。`,
+      buttons: [
+        {
+          text: '稍后提醒',
+          role: 'cancel'
+        },
+        {
+          text: '立即查看',
+          handler: () => {
+            // 切换到待确认视图
+            this.taskViewMode = 'active';
+            this.onTaskViewModeChange();
+          }
+        }
+      ]
+    });
+    
+    await alert.present();
+  }
+
 
   approve(report: any) {
     const isNative = Capacitor.isNativePlatform();
@@ -532,6 +604,10 @@ export class HomePage implements OnInit, OnDestroy {
       'cancelled': '已取消'
     };
     return statusMap[status] || status;
+  }
+
+  getStatusLabel(status: string): string {
+    return this.getStatusText(status);
   }
 
   private normalizePriorityValue(priority: any): 'urgent' | 'normal' {
@@ -2007,7 +2083,7 @@ export class HomePage implements OnInit, OnDestroy {
   }
 
   // 加载责任部门确认的异常报告
-  async loadStaffExceptionReports() {
+  async loadStaffExceptionReports(showAlert: boolean = true) {
     this.isLoading = true;
     this.errorMsg = '';
     
@@ -2025,6 +2101,17 @@ export class HomePage implements OnInit, OnDestroy {
       const response: any = await this.http.get(`${base}/api/exception-reports/all?approverId=${approverId}`).toPromise();
       this.staffExceptionReports = response || [];
       
+      // 检查是否有待确认的任务，且责任部门属于当前用户的部门
+      const currentUserDepartment = this.currentUser?.department;
+      const pendingReports = this.staffExceptionReports.filter((r: any) => {
+        // 必须是待确认状态
+        if (r.status !== 'pending_staff_confirmation') {
+          return false;
+        }
+        // 责任部门必须等于当前用户的部门
+        return r.assigned_staff_department === currentUserDepartment;
+      });
+      
       // 根据taskViewMode过滤：active=待确认，completed=已确认
       if (this.taskViewMode === 'active') {
         this.staffExceptionReports = this.staffExceptionReports.filter((r: any) => r.status === 'pending_staff_confirmation');
@@ -2033,6 +2120,14 @@ export class HomePage implements OnInit, OnDestroy {
       }
       
       this.applyFilters();
+      
+      // 如果有待确认的任务（且属于自己部门），且允许显示提醒框，则显示提醒框
+      if (showAlert && pendingReports.length > 0) {
+        // 延迟一下，确保页面已加载完成
+        setTimeout(() => {
+          this.showPendingStaffConfirmationAlert(pendingReports.length);
+        }, 500);
+      }
     } catch (error: any) {
       this.errorMsg = '加载异常报告失败：' + (error.error?.error || error.message);
       console.error('加载异常报告失败:', error);
@@ -2055,6 +2150,30 @@ export class HomePage implements OnInit, OnDestroy {
       });
     } catch {
       return dateTimeStr;
+    }
+  }
+
+  // 获取当前可操作阶段的开始时间（用于员工查看）
+  getCurrentPhaseStartTime(task: any): string {
+    if (!task) return '-';
+    const phase = this.getTaskOperatePhase(task);
+    if (!phase) return '-';
+    const value = task[`${phase}_start_time`];
+    if (!value) return '-';
+    try {
+      const date = new Date(value);
+      if (isNaN(date.getTime())) {
+        return String(value);
+      }
+      return date.toLocaleString('zh-CN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch {
+      return String(value);
     }
   }
 
@@ -2101,7 +2220,8 @@ export class HomePage implements OnInit, OnDestroy {
                        (action === 'confirm' ? '异常报告已确认' : '异常报告已处理');
         await this.presentToast(message);
         this.closeExceptionModal();
-        this.loadStaffExceptionReports();
+        // 确认/拒绝后刷新列表，不显示提醒框
+        this.loadStaffExceptionReports(false);
       } else {
         throw new Error((response as any).error || '操作失败');
       }
@@ -2187,6 +2307,239 @@ export class HomePage implements OnInit, OnDestroy {
       window.open(url, '_blank');
     } catch {
       window.location.href = url;
+    }
+  }
+
+  // 判断当前用户是否是工程部
+  isEngineeringDepartment(): boolean {
+    if (!this.currentUser) return false;
+    return this.currentUser.department === '工程部';
+  }
+
+  // 判断是否可以查看标准工时（工程部、管理员、经理）
+  canViewStandardHours(): boolean {
+    if (!this.currentUser) return false;
+    return (this.currentUser.role === 'staff' && this.currentUser.department === '工程部') ||
+           this.currentUser.role === 'admin' ||
+           this.currentUser.role === 'manager';
+  }
+
+  // 打开标准工时列表模态框
+  async openStandardHoursListModal() {
+    this.isStandardHoursListModalOpen = true;
+    await this.loadStandardHoursList();
+  }
+
+  // 关闭标准工时列表模态框
+  closeStandardHoursListModal() {
+    this.isStandardHoursListModalOpen = false;
+    this.standardHoursList = [];
+  }
+
+  // 完工撤回相关方法
+  async openRollbackModal() {
+    this.isRollbackModalOpen = true;
+    await this.loadRollbackList();
+  }
+
+  closeRollbackModal() {
+    this.isRollbackModalOpen = false;
+    this.rollbackList = [];
+  }
+
+  async loadRollbackList() {
+    this.isLoadingRollback = true;
+    try {
+      const isNative = Capacitor.isNativePlatform();
+      const base = isNative ? (environment.apiBase.replace('localhost', '10.0.2.2')) : environment.apiBase;
+      
+      const response: any = await this.http.get(`${base}/api/admin/work-completions?limit=100`).toPromise();
+      this.rollbackList = response || [];
+    } catch (error: any) {
+      console.error('加载完工记录失败:', error);
+      await this.presentToast('加载完工记录失败：' + (error.error?.error || error.message));
+      this.rollbackList = [];
+    } finally {
+      this.isLoadingRollback = false;
+    }
+  }
+
+  async rollbackCompletion(record: any) {
+    const alert = await this.alertController.create({
+      header: '确认撤回',
+      message: `确定要撤回任务"${record.task_name}"的完工记录吗？\n员工：${record.user_name}\n完成时间：${new Date(record.created_at).toLocaleString('zh-CN')}\n\n撤回后，该阶段的完成状态将被取消，如果任务已完成，将恢复为进行中状态。`,
+      buttons: [
+        {
+          text: '取消',
+          role: 'cancel'
+        },
+        {
+          text: '确认撤回',
+          handler: async () => {
+            await this.executeRollback(record);
+          }
+        }
+      ]
+    });
+    
+    await alert.present();
+  }
+
+  async executeRollback(record: any) {
+    this.isRollingBack = true;
+    try {
+      const isNative = Capacitor.isNativePlatform();
+      const base = isNative ? (environment.apiBase.replace('localhost', '10.0.2.2')) : environment.apiBase;
+      
+      const response: any = await this.http.post(
+        `${base}/api/admin/work-completions/${record.id}/rollback`,
+        {
+          userId: this.currentUser?.id
+        }
+      ).toPromise();
+      
+      if (response.success) {
+        await this.presentToast('已成功撤回完工记录');
+        await this.loadRollbackList();
+        // 刷新任务列表
+        this.loadTasks();
+      } else {
+        await this.presentToast(response.error || '撤回失败');
+      }
+    } catch (error: any) {
+      console.error('撤回完工记录失败:', error);
+      await this.presentToast('撤回失败：' + (error.error?.error || error.message));
+    } finally {
+      this.isRollingBack = false;
+    }
+  }
+
+  // 获取阶段名称（用于显示）
+  getPhaseNameFromRecord(record: any): string {
+    if (!record.start_time) return '未知阶段';
+    
+    const startTime = new Date(record.start_time).getTime();
+    
+    if (record.machining_start_time) {
+      const machiningTime = new Date(record.machining_start_time).getTime();
+      if (Math.abs(startTime - machiningTime) < 60000) return '机加';
+    }
+    if (record.electrical_start_time) {
+      const electricalTime = new Date(record.electrical_start_time).getTime();
+      if (Math.abs(startTime - electricalTime) < 60000) return '电控';
+    }
+    if (record.pre_assembly_start_time) {
+      const preAssemblyTime = new Date(record.pre_assembly_start_time).getTime();
+      if (Math.abs(startTime - preAssemblyTime) < 60000) return '总装前段';
+    }
+    if (record.post_assembly_start_time) {
+      const postAssemblyTime = new Date(record.post_assembly_start_time).getTime();
+      if (Math.abs(startTime - postAssemblyTime) < 60000) return '总装后段';
+    }
+    if (record.debugging_start_time) {
+      const debuggingTime = new Date(record.debugging_start_time).getTime();
+      if (Math.abs(startTime - debuggingTime) < 60000) return '调试';
+    }
+    
+    return '未知阶段';
+  }
+
+  // 加载标准工时列表
+  async loadStandardHoursList() {
+    this.isLoadingStandardHours = true;
+    try {
+      const isNative = Capacitor.isNativePlatform();
+      const base = isNative ? environment.apiBase.replace('localhost', '10.0.2.2') : environment.apiBase;
+      const response: any = await this.http.get<any[]>(`${base}/api/product-standard-hours`).toPromise();
+      this.standardHoursList = response || [];
+    } catch (error: any) {
+      console.error('加载标准工时列表失败:', error);
+      await this.presentToast('加载标准工时列表失败: ' + (error.error?.error || error.message));
+      this.standardHoursList = [];
+    } finally {
+      this.isLoadingStandardHours = false;
+    }
+  }
+
+  // 打开编辑标准工时模态框
+  openEditStandardHoursModal(item: any) {
+    this.editingStandardHoursItem = item;
+    this.editingStandardHours = {
+      machining: item.machining_hours || 0,
+      electrical: item.electrical_hours || 0,
+      preAssembly: item.pre_assembly_hours || 0,
+      postAssembly: item.post_assembly_hours || 0,
+      debugging: item.debugging_hours || 0
+    };
+    this.isEditStandardHoursModalOpen = true;
+  }
+
+  // 打开新增标准工时模态框
+  openAddStandardHoursModal() {
+    this.editingStandardHoursItem = null;
+    this.newProductModel = '';
+    this.editingStandardHours = {
+      machining: 0,
+      electrical: 0,
+      preAssembly: 0,
+      postAssembly: 0,
+      debugging: 0
+    };
+    this.isEditStandardHoursModalOpen = true;
+  }
+
+  // 关闭编辑标准工时模态框
+  closeEditStandardHoursModal() {
+    this.isEditStandardHoursModalOpen = false;
+    this.editingStandardHoursItem = null;
+    this.newProductModel = '';
+    this.editingStandardHours = {
+      machining: 0,
+      electrical: 0,
+      preAssembly: 0,
+      postAssembly: 0,
+      debugging: 0
+    };
+  }
+
+  // 保存标准工时
+  async saveStandardHours() {
+    // 如果是新增，需要验证产品型号
+    if (!this.editingStandardHoursItem) {
+      if (!this.newProductModel || this.newProductModel.trim() === '') {
+        await this.presentToast('请输入产品型号');
+        return;
+      }
+    }
+
+    this.isSavingStandardHours = true;
+    try {
+      const isNative = Capacitor.isNativePlatform();
+      const base = isNative ? environment.apiBase.replace('localhost', '10.0.2.2') : environment.apiBase;
+      
+      const productModel = this.editingStandardHoursItem 
+        ? this.editingStandardHoursItem.product_model 
+        : this.newProductModel.trim();
+      
+      await this.http.post(`${base}/api/product-standard-hours`, {
+        productModel: productModel,
+        machiningHours: this.editingStandardHours.machining || 0,
+        electricalHours: this.editingStandardHours.electrical || 0,
+        preAssemblyHours: this.editingStandardHours.preAssembly || 0,
+        postAssemblyHours: this.editingStandardHours.postAssembly || 0,
+        debuggingHours: this.editingStandardHours.debugging || 0
+      }).toPromise();
+
+      await this.presentToast(this.editingStandardHoursItem ? '标准工时更新成功' : '标准工时新增成功');
+      this.closeEditStandardHoursModal();
+      
+      // 重新加载标准工时列表
+      await this.loadStandardHoursList();
+    } catch (error: any) {
+      console.error('保存标准工时失败:', error);
+      await this.presentToast('保存标准工时失败: ' + (error.error?.error || error.message));
+    } finally {
+      this.isSavingStandardHours = false;
     }
   }
 }

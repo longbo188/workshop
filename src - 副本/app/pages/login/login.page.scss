@@ -1,0 +1,265 @@
+// 登录容器
+.login-container {
+  --background: transparent;
+  position: relative;
+  min-height: 100vh;
+}
+
+/* 背景层：渐变 + 网格 */
+.login-bg {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  z-index: 0;
+
+  .bg-gradient {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at top left, #3f51b5 0, transparent 55%),
+                radial-gradient(circle at bottom right, #2196f3 0, transparent 55%),
+                linear-gradient(135deg, #0f172a, #020617);
+    opacity: 0.9;
+  }
+
+  .bg-grid {
+    position: absolute;
+    inset: 0;
+    background-image: linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+                      linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
+    background-size: 40px 40px;
+    mix-blend-mode: soft-light;
+  }
+}
+
+/* 居中布局：电脑 / 平板通用 */
+.login-wrapper {
+  position: relative;
+  z-index: 1;
+  min-height: calc(100vh - 56px); // 减去头部高度
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+/* 登录卡片：自适应宽度 */
+.login-card {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  background: rgba(15, 23, 42, 0.92);
+  border-radius: 16px;
+  padding: 24px 24px 18px;
+  box-shadow:
+    0 18px 45px rgba(0,0,0,0.6),
+    0 0 0 1px rgba(148, 163, 184, 0.2);
+  backdrop-filter: blur(14px);
+  color: #e5e7eb;
+}
+
+/* 角落装饰线条 */
+.corner-decor {
+  position: absolute;
+  width: 46px;
+  height: 46px;
+  border: 2px solid rgba(96, 165, 250, 0.7);
+  border-radius: 10px;
+  pointer-events: none;
+
+  &--tl {
+    top: 10px;
+    left: 10px;
+    border-right: none;
+    border-bottom: none;
+  }
+
+  &--br {
+    right: 10px;
+    bottom: 10px;
+    border-left: none;
+    border-top: none;
+  }
+}
+
+/* 标题区 */
+.login-header {
+  text-align: center;
+  margin-bottom: 22px;
+
+  h1 {
+    margin: 0 0 6px 0;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: #f9fafb;
+  }
+
+  p {
+    margin: 0;
+    font-size: 13px;
+    color: #9ca3af;
+  }
+}
+
+/* 表单区 */
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* 输入组 */
+.input-group {
+  display: flex;
+  align-items: center;
+  background: rgba(15, 23, 42, 0.9);
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.8);
+  padding: 2px 10px 2px 6px;
+  transition: all 0.2s ease;
+
+  &:focus-within {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.7);
+    background: rgba(15, 23, 42, 0.96);
+  }
+}
+
+.input-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  color: #9ca3af;
+
+  ion-icon {
+    font-size: 18px;
+  }
+}
+
+.input-field {
+  --background: transparent;
+  --color: #e5e7eb;
+  --placeholder-color: #6b7280;
+  --padding-start: 8px;
+  font-size: 14px;
+}
+
+/* 记住密码 + 修改密码 */
+.remember-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  color: #9ca3af;
+
+  .remember-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    ion-checkbox {
+      --size: 18px;
+    }
+
+    label {
+      cursor: pointer;
+    }
+  }
+
+  .remember-right {
+    button {
+      background: none;
+      border: none;
+      color: #ffffff;
+      font-size: 12px;
+      padding: 0;
+      cursor: pointer;
+    }
+
+    button[disabled] {
+      opacity: 0.5;
+      cursor: default;
+    }
+  }
+}
+
+/* 错误信息（登录失败保持原有红色样式） */
+.error-message {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #fecaca;
+  background: rgba(220, 38, 38, 0.2);
+  border-radius: 8px;
+  padding: 6px 8px;
+
+  ion-icon {
+    color: #fca5a5;
+    font-size: 16px;
+  }
+}
+
+
+/* 登录按钮 */
+.login-button {
+  margin-top: 4px;
+  --background: linear-gradient(135deg, #3b82f6, #06b6d4);
+  --background-focused: linear-gradient(135deg, #2563eb, #0891b2);
+  --background-hover: linear-gradient(135deg, #60a5fa, #22d3ee);
+  --border-radius: 999px;
+  --box-shadow: 0 12px 30px rgba(59, 130, 246, 0.45);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  height: 44px;
+
+  ion-spinner {
+    --color: #ffffff;
+  }
+}
+
+/* 页脚提示 */
+.login-footer {
+  margin-top: 16px;
+  text-align: center;
+
+  p {
+    margin: 0;
+    font-size: 11px;
+    color: #6b7280;
+  }
+}
+
+/* 响应式优化：平板 / 电脑 */
+@media (min-width: 768px) {
+  .login-wrapper {
+    padding: 24px;
+  }
+
+  .login-card {
+    max-width: 440px;
+    padding: 28px 28px 22px;
+  }
+
+  .login-header h1 {
+    font-size: 24px;
+  }
+}
+
+/* 响应式优化：较小屏幕（手机） */
+@media (max-width: 480px) {
+  .login-card {
+    padding: 20px 18px 16px;
+    border-radius: 14px;
+  }
+
+  .login-header h1 {
+    font-size: 20px;
+  }
+
+  .input-group {
+    padding-right: 8px;
+  }
+}

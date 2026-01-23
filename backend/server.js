@@ -267,6 +267,23 @@ function normalizePriority(value) {
     `);
     console.log('法定节假日数据初始化完成');
     
+    // 创建产品标准工时表
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS product_standard_hours (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        product_model VARCHAR(100) NOT NULL UNIQUE,
+        machining_hours DECIMAL(5,2) NOT NULL DEFAULT 0.00 COMMENT '机加阶段标准工时',
+        electrical_hours DECIMAL(5,2) NOT NULL DEFAULT 0.00 COMMENT '电控阶段标准工时',
+        pre_assembly_hours DECIMAL(5,2) NOT NULL DEFAULT 0.00 COMMENT '总装前段标准工时',
+        post_assembly_hours DECIMAL(5,2) NOT NULL DEFAULT 0.00 COMMENT '总装后段标准工时',
+        debugging_hours DECIMAL(5,2) NOT NULL DEFAULT 0.00 COMMENT '调试阶段标准工时',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_product_model (product_model)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    console.log('产品标准工时表校验完成');
+    
     await connection.end();
   } catch (e) {
     console.error('数据库初始化失败：', e.message);
@@ -325,6 +342,54 @@ app.post('/api/users/change-password', async (req, res) => {
         targetUserId = rows[0].id;
       }
     }
+
+    // 创建任务阶段效率结果表（用于缓存/落库效率计算结果，保留历史实现）
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS task_phase_efficiency (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        task_id INT NOT NULL,
+        phase VARCHAR(50) NOT NULL,
+        assignee_id INT NULL,
+        standard_hours DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        actual_work_hours DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        exception_hours DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        assist_hours DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        efficiency DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        phase_start_time DATETIME NULL,
+        phase_end_time DATETIME NULL,
+        calculated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_task_phase (task_id, phase),
+        FOREIGN KEY (task_id) REFERENCES tasks(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    console.log('任务阶段效率结果表校验完成');
+
+    // 创建任务效率快照表（前端/后端计算结果统一落库，区分已确认与未确认）
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS task_efficiency (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        task_id INT NOT NULL,
+        phase VARCHAR(50) NOT NULL,
+        assignee_id INT NULL,
+        standard_hours DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        actual_work_hours DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        exception_hours DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        assist_hours DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        efficiency DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        phase_start_time DATETIME NULL,
+        phase_end_time DATETIME NULL,
+        is_confirmed TINYINT(1) NOT NULL DEFAULT 0,
+        confirmed_by INT NULL,
+        confirmed_at DATETIME NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_task_phase_confirm (task_id, phase),
+        FOREIGN KEY (task_id) REFERENCES tasks(id),
+        FOREIGN KEY (assignee_id) REFERENCES users(id),
+        FOREIGN KEY (confirmed_by) REFERENCES users(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    console.log('任务效率快照表(task_efficiency)校验完成');
 
     if (rows.length === 0) {
       await connection.end();
@@ -471,24 +536,65 @@ app.get('/api/tasks/:id', async (req, res) => {
 
 // 5.1 创建任务
 app.post('/api/tasks', async (req, res) => {
+  let connection;
   try {
-    const { name, description, status, priority, device_number, product_model, order_status, production_time, promised_completion_time, created_by } = req.body;
+    const { name, description, status, priority, device_number, product_model, order_status, production_time, promised_completion_time, is_non_standard, created_by } = req.body;
     const normalizedPriority = normalizePriority(priority);
     
     if (!name) {
       return res.status(400).json({ success: false, message: '任务名称必填' });
     }
     
-    const connection = await mysql.createConnection(dbConfig);
+    connection = await mysql.createConnection(dbConfig);
     const [result] = await connection.execute(
-      `INSERT INTO tasks (name, description, status, priority, device_number, product_model, order_status, production_time, promised_completion_time, created_by) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [name, description || null, status || 'pending', normalizedPriority, device_number || null, product_model || null, order_status || null, production_time || null, promised_completion_time || null, created_by || null]
+      `INSERT INTO tasks (name, description, status, priority, device_number, product_model, order_status, production_time, promised_completion_time, is_non_standard, created_by) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [name, description || null, status || 'pending', normalizedPriority, device_number || null, product_model || null, order_status || null, production_time || null, promised_completion_time || null, is_non_standard || 0, created_by || null]
     );
-    await connection.end();
     
-    res.json({ success: true, message: '任务创建成功', id: result.insertId });
+    const taskId = result.insertId;
+    
+    // 如果任务有产品型号，且不是非标产品，尝试从标准工时表同步标准工时
+    if (product_model && product_model.trim() && (!is_non_standard || is_non_standard === 0)) {
+      try {
+        const [standardHoursRows] = await connection.execute(
+          `SELECT machining_hours, electrical_hours, pre_assembly_hours, post_assembly_hours, debugging_hours 
+           FROM product_standard_hours 
+           WHERE UPPER(TRIM(product_model)) = UPPER(TRIM(?))`,
+          [product_model]
+        );
+        
+        if (standardHoursRows.length > 0) {
+          const standardHours = standardHoursRows[0];
+          // 更新任务的标准工时字段
+          await connection.execute(
+            `UPDATE tasks SET 
+               machining_hours_est = ?,
+               electrical_hours_est = ?,
+               pre_assembly_hours_est = ?,
+               post_assembly_hours_est = ?,
+               debugging_hours_est = ?
+             WHERE id = ?`,
+            [
+              standardHours.machining_hours || null,
+              standardHours.electrical_hours || null,
+              standardHours.pre_assembly_hours || null,
+              standardHours.post_assembly_hours || null,
+              standardHours.debugging_hours || null,
+              taskId
+            ]
+          );
+        }
+      } catch (syncError) {
+        // 同步标准工时失败不影响任务创建，只记录错误
+        console.error(`同步任务 ${taskId} 的标准工时失败:`, syncError.message);
+      }
+    }
+    
+    await connection.end();
+    res.json({ success: true, message: '任务创建成功', id: taskId });
   } catch (error) {
+    if (connection) await connection.end();
     console.error('创建任务失败:', error);
     res.status(500).json({ success: false, message: '创建任务失败: ' + error.message });
   }
@@ -531,6 +637,74 @@ app.put('/api/tasks/:id', async (req, res) => {
     
     const connection = await mysql.createConnection(dbConfig);
     await connection.execute(sql, [...values, taskId]);
+    
+    // 如果更新了产品型号，且任务的标准工时字段为空，且不是非标产品，尝试从标准工时表同步
+    if (updateData.product_model && updateData.product_model.trim()) {
+      try {
+        // 先检查任务是否为非标产品
+        const [taskCheckRows] = await connection.execute(
+          `SELECT is_non_standard FROM tasks WHERE id = ?`,
+          [taskId]
+        );
+        
+        // 如果是非标产品，不自动匹配标准工时
+        if (taskCheckRows.length > 0 && taskCheckRows[0].is_non_standard === 1) {
+          // 非标产品不自动匹配标准工时
+        } else {
+          // 先检查任务当前的标准工时是否都为空
+        const [taskRows] = await connection.execute(
+          `SELECT machining_hours_est, electrical_hours_est, pre_assembly_hours_est, 
+                  post_assembly_hours_est, debugging_hours_est 
+           FROM tasks WHERE id = ?`,
+          [taskId]
+        );
+        
+        if (taskRows.length > 0) {
+          const task = taskRows[0];
+          // 如果所有标准工时字段都为空或为0，才同步
+          const allEmpty = !task.machining_hours_est && !task.electrical_hours_est && 
+                          !task.pre_assembly_hours_est && !task.post_assembly_hours_est && 
+                          !task.debugging_hours_est;
+          
+          if (allEmpty) {
+            const [standardHoursRows] = await connection.execute(
+              `SELECT machining_hours, electrical_hours, pre_assembly_hours, 
+                      post_assembly_hours, debugging_hours 
+               FROM product_standard_hours 
+               WHERE UPPER(TRIM(product_model)) = UPPER(TRIM(?))`,
+              [updateData.product_model]
+            );
+            
+            if (standardHoursRows.length > 0) {
+              const standardHours = standardHoursRows[0];
+              // 更新任务的标准工时字段
+              await connection.execute(
+                `UPDATE tasks SET 
+                   machining_hours_est = ?,
+                   electrical_hours_est = ?,
+                   pre_assembly_hours_est = ?,
+                   post_assembly_hours_est = ?,
+                   debugging_hours_est = ?
+                 WHERE id = ?`,
+                [
+                  standardHours.machining_hours || null,
+                  standardHours.electrical_hours || null,
+                  standardHours.pre_assembly_hours || null,
+                  standardHours.post_assembly_hours || null,
+                  standardHours.debugging_hours || null,
+                  taskId
+                ]
+              );
+            }
+          }
+        }
+        }
+      } catch (syncError) {
+        // 同步标准工时失败不影响任务更新，只记录错误
+        console.error(`同步任务 ${taskId} 的标准工时失败:`, syncError.message);
+      }
+    }
+    
     await connection.end();
     
     res.json({ success: true, message: '任务更新成功' });
@@ -945,6 +1119,7 @@ app.post('/api/standard-hours/import', upload.single('file'), async (req, res) =
         continue;
       }
 
+      // 1. 更新 tasks 表中的标准工时（保持现有逻辑）
       // 使用不区分大小写且去空格的匹配方式
       // 只匹配标准任务（is_non_standard = 0 或 NULL），跳过非标任务（is_non_standard = 1）
       const [result] = await connection.execute(
@@ -958,6 +1133,36 @@ app.post('/api/standard-hours/import', upload.single('file'), async (req, res) =
            AND (is_non_standard = 0 OR is_non_standard IS NULL)`,
         [machining, electrical, preAsm, postAsm, debugging, productModel]
       );
+
+      // 2. 同时保存/更新到 product_standard_hours 表中（新增逻辑）
+      try {
+        await connection.execute(
+          `INSERT INTO product_standard_hours (
+            product_model, machining_hours, electrical_hours,
+            pre_assembly_hours, post_assembly_hours, debugging_hours
+          )
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON DUPLICATE KEY UPDATE
+            machining_hours = VALUES(machining_hours),
+            electrical_hours = VALUES(electrical_hours),
+            pre_assembly_hours = VALUES(pre_assembly_hours),
+            post_assembly_hours = VALUES(post_assembly_hours),
+            debugging_hours = VALUES(debugging_hours),
+            updated_at = NOW()`,
+          [
+            productModel.trim(),
+            machining || 0,
+            electrical || 0,
+            preAsm || 0,
+            postAsm || 0,
+            debugging || 0
+          ]
+        );
+      } catch (dbError) {
+        // 如果表不存在或其他数据库错误，记录但不中断导入流程
+        console.error(`保存产品型号 ${productModel} 到 product_standard_hours 表失败:`, dbError.message);
+        errors.push(`第${i + 1}行：保存到标准工时表失败 - ${dbError.message}`);
+      }
 
       if (!seenModels.has(productModel)) {
         matchedModels += (result.affectedRows || 0) > 0 ? 1 : 0;
@@ -1725,33 +1930,85 @@ app.post('/api/tasks/import', upload.single('file'), async (req, res) => {
     }
 
     // 批量插入任务
-    const insertPromises = tasks.map(task => {
-      return connection.execute(
-        `INSERT INTO tasks (name, description, status, priority, device_number, product_model, order_status, production_time, promised_completion_time, is_non_standard, created_by) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          task.name,
-          task.description,
-          task.status,
-          task.priority,
-          task.device_number,
-          task.product_model,
-          task.order_status,
-          task.production_time,
-          task.promised_completion_time,
-          task.is_non_standard,
-          task.created_by
-        ]
-      );
-    });
+    const insertResults = await Promise.all(
+      tasks.map(task => {
+        return connection.execute(
+          `INSERT INTO tasks (name, description, status, priority, device_number, product_model, order_status, production_time, promised_completion_time, is_non_standard, created_by) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            task.name,
+            task.description,
+            task.status,
+            task.priority,
+            task.device_number,
+            task.product_model,
+            task.order_status,
+            task.production_time,
+            task.promised_completion_time,
+            task.is_non_standard,
+            task.created_by
+          ]
+        );
+      })
+    );
 
-    await Promise.all(insertPromises);
+    // 为导入的任务自动匹配标准工时（仅限标准产品）
+    let matchedCount = 0;
+    for (let i = 0; i < insertResults.length; i++) {
+      const task = tasks[i];
+      const taskId = insertResults[i][0].insertId;
+      
+      // 如果是非标产品，跳过自动匹配
+      if (task.is_non_standard === 1) {
+        continue;
+      }
+      
+      // 如果任务有产品型号，尝试从标准工时表同步标准工时
+      if (task.product_model && task.product_model.trim()) {
+        try {
+          const [standardHoursRows] = await connection.execute(
+            `SELECT machining_hours, electrical_hours, pre_assembly_hours, post_assembly_hours, debugging_hours 
+             FROM product_standard_hours 
+             WHERE UPPER(TRIM(product_model)) = UPPER(TRIM(?))`,
+            [task.product_model]
+          );
+          
+          if (standardHoursRows.length > 0) {
+            const standardHours = standardHoursRows[0];
+            // 更新任务的标准工时字段
+            await connection.execute(
+              `UPDATE tasks SET 
+                 machining_hours_est = ?,
+                 electrical_hours_est = ?,
+                 pre_assembly_hours_est = ?,
+                 post_assembly_hours_est = ?,
+                 debugging_hours_est = ?
+               WHERE id = ?`,
+              [
+                standardHours.machining_hours || null,
+                standardHours.electrical_hours || null,
+                standardHours.pre_assembly_hours || null,
+                standardHours.post_assembly_hours || null,
+                standardHours.debugging_hours || null,
+                taskId
+              ]
+            );
+            matchedCount++;
+          }
+        } catch (syncError) {
+          // 同步标准工时失败不影响导入，只记录错误
+          console.error(`同步任务 ${taskId} 的标准工时失败:`, syncError.message);
+        }
+      }
+    }
+
     await connection.end();
 
     res.json({ 
       success: true, 
-      message: `成功导入${tasks.length}个任务`,
+      message: `成功导入${tasks.length}个任务${matchedCount > 0 ? `，其中${matchedCount}个任务已自动匹配标准工时` : ''}`,
       importedCount: tasks.length,
+      matchedStandardHoursCount: matchedCount,
       errors: errors.length > 0 ? errors : null
     });
 
@@ -2312,7 +2569,43 @@ app.post('/api/daily-attendance', async (req, res) => {
     } else {
       // 记录不存在，创建新记录
       // 如果 standardAttendanceHours 没有传递，使用默认值8
-      const finalSah = standardAttendanceHours !== undefined ? Number(standardAttendanceHours) : 8;
+      //const finalSah = standardAttendanceHours !== undefined ? Number(standardAttendanceHours) : 8;
+       let finalSah;
+      if (standardAttendanceHours !== undefined) {
+        // 如果传递了 standardAttendanceHours，使用传递的值
+        finalSah = Number(standardAttendanceHours);
+      } else {
+        // 如果没有传递，根据日期和节假日数据计算标准工时（与查询接口逻辑一致）
+        const workTimeSettings = await getStandardWorkHours(connection);
+        const standardWorkHours = workTimeSettings.standardHours;
+        const workTimeUpdatedAt = workTimeSettings.updatedAt;
+        
+        const dateObj = new Date(date);
+        const year = dateObj.getFullYear();
+        
+        // 获取节假日数据
+        let isHoliday = false;
+        try {
+          const holidayData = await getHolidaysFromGitHub(year);
+          isHoliday = holidayData.holidays.has(date);
+        } catch (error) {
+          console.warn(`获取${year}年节假日数据失败，使用默认判断:`, error);
+        }
+        
+        // 根据节假日数据计算标准工时
+        if (isHoliday) {
+          // 节假日，标准考勤时长为0
+          finalSah = 0.00;
+        } else {
+          // 工作日
+          if (workTimeUpdatedAt && dateObj >= new Date(workTimeUpdatedAt)) {
+            finalSah = standardWorkHours || 0.00;
+          } else {
+            // 如果日期早于工作时间设置更新时间，使用0
+            finalSah = 0.00;
+          }
+        }
+      }
       console.log(`记录不存在，用户ID: ${userId}, 日期: ${date}, 使用标准工时: ${finalSah}`);
       await connection.execute(`
         INSERT INTO daily_attendance (user_id, date, standard_attendance_hours, overtime_hours, leave_hours, 
@@ -2960,6 +3253,509 @@ app.get('/api/task-time/summary/:taskId', async (req, res) => {
   }
 });
 
+// ========= 效率计算后端接口（简化版） =========
+// GET /api/efficiency?start=2026-01-01&end=2026-01-31&phase=machining&userId=175
+app.get('/api/efficiency', async (req, res) => {
+  const { start, end, phase, userId } = req.query || {};
+  // phase 必填，start/end 可选（不传则不过滤日期）
+  if (!phase) {
+    return res.status(400).json({ error: 'phase 为必填参数' });
+  }
+
+  let connection;
+  try {
+    connection = await mysql.createConnection(dbConfig);
+
+    const phaseCompleteField = `${phase}_complete_time`;
+    const phaseAssigneeField = `${phase}_assignee`;
+    const phaseHoursEstField = `${phase}_hours_est`;
+
+    const params = [];
+    let whereSql = `WHERE ${phaseCompleteField} IS NOT NULL`;
+
+    // 可选的日期过滤
+    if (start && end) {
+      whereSql += ` AND ${phaseCompleteField} >= ? AND ${phaseCompleteField} <= ?`;
+      params.push(start + ' 00:00:00', end + ' 23:59:59');
+    }
+
+    // 可选的负责人过滤
+    if (userId) {
+      whereSql += ` AND ${phaseAssigneeField} = ?`;
+      params.push(Number(userId));
+    }
+
+    // 1. 找出在该阶段（可选按时间范围/负责人过滤）完成的任务
+    const [tasks] = await connection.execute(
+      `
+      SELECT 
+        id, name, product_model, device_number,
+        ${phaseAssigneeField} AS assignee_id,
+        ${phaseHoursEstField} AS standard_hours,
+        ${phase}_start_time   AS phase_start_time,
+        ${phase}_complete_time AS phase_end_time
+      FROM tasks
+      ${whereSql}
+      `,
+      params
+    );
+
+    if (!tasks || tasks.length === 0) {
+      await connection.end();
+      return res.json([]);
+    }
+
+    const taskIds = tasks.map(t => t.id);
+
+    // 2. 报工记录（按任务批量查询）
+    const [workRows] = await connection.execute(
+      `
+      SELECT wr.*, u.name AS user_name, t.name AS task_name
+      FROM work_reports wr
+      LEFT JOIN users u ON u.id = wr.user_id
+      LEFT JOIN tasks t ON t.id = wr.task_id
+      WHERE wr.task_id IN (${taskIds.map(() => '?').join(',')})
+      `,
+      taskIds
+    );
+
+    // 3. 异常记录（按任务批量查询）
+    const [exceptionRows] = await connection.execute(
+      `
+      SELECT er.*, u.name AS user_name, t.name AS task_name
+      FROM exception_reports er
+      LEFT JOIN users u ON u.id = er.user_id
+      LEFT JOIN tasks t ON t.id = er.task_id
+      WHERE er.task_id IN (${taskIds.map(() => '?').join(',')})
+      `,
+      taskIds
+    );
+
+    // 4. 按任务分组
+    const workByTask = new Map();
+    const exByTask = new Map();
+
+    for (const row of workRows || []) {
+      const list = workByTask.get(row.task_id) || [];
+      list.push(row);
+      workByTask.set(row.task_id, list);
+    }
+
+    for (const row of exceptionRows || []) {
+      const list = exByTask.get(row.task_id) || [];
+      list.push(row);
+      exByTask.set(row.task_id, list);
+    }
+
+    const results = [];
+
+    // 5. 对每个任务计算效率
+    for (const task of tasks) {
+      const {
+        id: taskId,
+        name,
+        product_model,
+        device_number,
+        assignee_id,
+        standard_hours,
+        phase_start_time,
+        phase_end_time
+      } = task;
+
+      if (!phase_start_time || !phase_end_time) {
+        continue;
+      }
+
+      const taskWorkReports = workByTask.get(taskId) || [];
+
+      // 只保留当前阶段的异常，且相信后端记录的 phase
+      const taskExceptionsRaw = exByTask.get(taskId) || [];
+      const taskExceptions = taskExceptionsRaw.filter(ex => (ex.phase || '') === phase);
+
+      const eff = await computeEfficiencyForTaskPhase({
+        task,
+        phase,
+        assigneeId: assignee_id,
+        standardHours: standard_hours,
+        phaseStartTime: phase_start_time,
+        phaseEndTime: phase_end_time,
+        workReports: taskWorkReports,
+        exceptionReports: taskExceptions
+      });
+
+      results.push({
+        task_id: taskId,
+        task_name: name,
+        product_model,
+        device_number,
+        phase,
+        assignee_id,
+        standard_hours: eff.standardHours,
+        actual_work_hours: eff.actualWorkHours,
+        exception_hours: eff.exceptionHours,
+        assist_hours: eff.assistHours,
+        efficiency: eff.efficiency,
+        phase_start_time,
+        phase_end_time,
+        work_reports: eff.workReports,
+        exception_reports: eff.exceptionReports,
+        daily_calculations: eff.dailyCalculations
+      });
+
+      // 将计算结果落库（插入或更新缓存表）
+      try {
+        await connection.execute(
+          `
+          INSERT INTO task_phase_efficiency (
+            task_id, phase, assignee_id,
+            standard_hours, actual_work_hours, exception_hours, assist_hours, efficiency,
+            phase_start_time, phase_end_time, calculated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+          ON DUPLICATE KEY UPDATE
+            assignee_id = VALUES(assignee_id),
+            standard_hours = VALUES(standard_hours),
+            actual_work_hours = VALUES(actual_work_hours),
+            exception_hours = VALUES(exception_hours),
+            assist_hours = VALUES(assist_hours),
+            efficiency = VALUES(efficiency),
+            phase_start_time = VALUES(phase_start_time),
+            phase_end_time = VALUES(phase_end_time),
+            calculated_at = NOW()
+          `,
+          [
+            taskId,
+            phase,
+            assignee_id,
+            eff.standardHours,
+            eff.actualWorkHours,
+            eff.exceptionHours,
+            eff.assistHours,
+            eff.efficiency,
+            phase_start_time,
+            phase_end_time
+          ]
+        );
+      } catch (saveError) {
+        console.error('保存任务阶段效率结果失败:', saveError);
+      }
+    }
+
+    await connection.end();
+    return res.json(results);
+  } catch (error) {
+    if (connection) await connection.end();
+    console.error('计算效率失败(后端):', error);
+    return res.status(500).json({ error: '计算效率失败: ' + error.message });
+  }
+});
+
+// 保存任务阶段效率结果到 task_efficiency 表
+// 前端/后端计算完成后调用：
+// - isConfirmed=false: 未确认快照，可被后续重新计算覆盖
+// - isConfirmed=true: 已确认快照，一旦确认后后续不再更新数值
+app.post('/api/task-efficiency', async (req, res) => {
+  const {
+    taskId,
+    phase,
+    assigneeId,
+    standardHours,
+    actualWorkHours,
+    exceptionHours,
+    assistHours,
+    efficiency,
+    phaseStartTime,
+    phaseEndTime,
+    isConfirmed,
+    confirmedBy
+  } = req.body || {};
+
+  if (!taskId || !phase) {
+    return res.status(400).json({ error: 'taskId 和 phase 为必填参数' });
+  }
+
+  // 将 ISO 8601 格式时间转换为 MySQL DATETIME 格式 (YYYY-MM-DD HH:mm:ss)
+  const convertToMySQLDateTime = (isoTimeStr) => {
+    if (!isoTimeStr) return null;
+    try {
+      const date = new Date(isoTimeStr);
+      if (isNaN(date.getTime())) return null;
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      const seconds = String(date.getSeconds()).padStart(2, '0');
+      return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+    } catch (error) {
+      console.error('时间格式转换失败:', isoTimeStr, error);
+      return null;
+    }
+  };
+
+  const mysqlPhaseStartTime = convertToMySQLDateTime(phaseStartTime);
+  const mysqlPhaseEndTime = convertToMySQLDateTime(phaseEndTime);
+
+  let connection;
+  try {
+    connection = await mysql.createConnection(dbConfig);
+
+    const [rows] = await connection.execute(
+      'SELECT id, is_confirmed FROM task_efficiency WHERE task_id = ? AND phase = ?',
+      [taskId, phase]
+    );
+
+    const confirmedFlag = isConfirmed ? 1 : 0;
+
+    if (!rows || rows.length === 0) {
+      // 不存在记录：直接插入
+      await connection.execute(
+        `
+        INSERT INTO task_efficiency (
+          task_id, phase, assignee_id,
+          standard_hours, actual_work_hours, exception_hours, assist_hours, efficiency,
+          phase_start_time, phase_end_time,
+          is_confirmed, confirmed_by, confirmed_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          taskId,
+          phase,
+          assigneeId || null,
+          standardHours != null ? standardHours : 0,
+          actualWorkHours != null ? actualWorkHours : 0,
+          exceptionHours != null ? exceptionHours : 0,
+          assistHours != null ? assistHours : 0,
+          efficiency != null ? efficiency : 0,
+          mysqlPhaseStartTime,
+          mysqlPhaseEndTime,
+          confirmedFlag,
+          confirmedFlag ? confirmedBy || null : null,
+          confirmedFlag ? new Date() : null
+        ]
+      );
+    } else {
+      const row = rows[0];
+      // 如果已经确认过，并且这次不是从未确认变成确认，则不再更新数据
+      if (row.is_confirmed && !confirmedFlag) {
+        await connection.end();
+        return res.json({ success: true, skipped: true, reason: 'already_confirmed' });
+      }
+
+      // 未确认，或者这次要把它标记为已确认：允许更新数值
+      await connection.execute(
+        `
+        UPDATE task_efficiency
+        SET
+          assignee_id = ?,
+          standard_hours = ?,
+          actual_work_hours = ?,
+          exception_hours = ?,
+          assist_hours = ?,
+          efficiency = ?,
+          phase_start_time = ?,
+          phase_end_time = ?,
+          is_confirmed = CASE WHEN ? = 1 THEN 1 ELSE is_confirmed END,
+          confirmed_by = CASE WHEN ? = 1 THEN COALESCE(confirmed_by, ?) ELSE confirmed_by END,
+          confirmed_at = CASE WHEN ? = 1 THEN COALESCE(confirmed_at, NOW()) ELSE confirmed_at END,
+          updated_at = NOW()
+        WHERE id = ?
+        `,
+        [
+          assigneeId || null,
+          standardHours != null ? standardHours : 0,
+          actualWorkHours != null ? actualWorkHours : 0,
+          exceptionHours != null ? exceptionHours : 0,
+          assistHours != null ? assistHours : 0,
+          efficiency != null ? efficiency : 0,
+          mysqlPhaseStartTime,
+          mysqlPhaseEndTime,
+          confirmedFlag,
+          confirmedFlag,
+          confirmedBy || null,
+          confirmedFlag,
+          row.id
+        ]
+      );
+    }
+
+    await connection.end();
+    return res.json({ success: true });
+  } catch (error) {
+    if (connection) await connection.end();
+    console.error('保存任务效率快照失败:', error);
+    return res.status(500).json({ error: '保存任务效率快照失败: ' + error.message });
+  }
+});
+
+// 查询任务阶段效率结果（含是否已确认）
+// GET /api/task-efficiency?isConfirmed=1&phase=machining
+app.get('/api/task-efficiency', async (req, res) => {
+  const { isConfirmed, phase } = req.query || {};
+
+  let connection;
+  try {
+    connection = await mysql.createConnection(dbConfig);
+
+    const conditions = [];
+    const params = [];
+
+    if (typeof isConfirmed !== 'undefined') {
+      const flag = String(isConfirmed) === '1' || String(isConfirmed).toLowerCase() === 'true';
+      conditions.push('is_confirmed = ?');
+      params.push(flag ? 1 : 0);
+    }
+
+    if (phase) {
+      conditions.push('phase = ?');
+      params.push(String(phase));
+    }
+
+    const whereSql = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+
+    const [rows] = await connection.execute(
+      `
+      SELECT
+        id,
+        task_id,
+        phase,
+        assignee_id,
+        standard_hours,
+        actual_work_hours,
+        exception_hours,
+        assist_hours,
+        efficiency,
+        phase_start_time,
+        phase_end_time,
+        is_confirmed,
+        confirmed_by,
+        confirmed_at,
+        created_at,
+        updated_at
+      FROM task_efficiency
+      ${whereSql}
+      `,
+      params
+    );
+
+    await connection.end();
+    return res.json(rows || []);
+  } catch (error) {
+    if (connection) await connection.end();
+    console.error('查询任务效率快照失败:', error);
+    return res.status(500).json({ error: '查询任务效率快照失败: ' + error.message });
+  }
+});
+
+// 获取产品标准工时（根据产品型号查询）
+app.get('/api/product-standard-hours', async (req, res) => {
+  const { productModel } = req.query;
+  let connection;
+  try {
+    connection = await mysql.createConnection(dbConfig);
+    
+    if (productModel) {
+      // 查询指定产品型号的标准工时
+      const [rows] = await connection.execute(
+        `SELECT * FROM product_standard_hours 
+         WHERE UPPER(TRIM(product_model)) = UPPER(TRIM(?))`,
+        [productModel]
+      );
+      await connection.end();
+      
+      if (rows.length === 0) {
+        return res.json(null); // 未找到返回null
+      }
+      return res.json(rows[0]);
+    } else {
+      // 查询所有标准工时
+      const [rows] = await connection.execute(
+        `SELECT * FROM product_standard_hours ORDER BY product_model`
+      );
+      await connection.end();
+      return res.json(rows);
+    }
+  } catch (error) {
+    if (connection) await connection.end();
+    console.error('获取产品标准工时失败:', error);
+    return res.status(500).json({ error: '获取产品标准工时失败: ' + error.message });
+  }
+});
+
+// 创建或更新产品标准工时
+app.post('/api/product-standard-hours', async (req, res) => {
+  const {
+    productModel,
+    machiningHours,
+    electricalHours,
+    preAssemblyHours,
+    postAssemblyHours,
+    debuggingHours
+  } = req.body;
+  
+  if (!productModel) {
+    return res.status(400).json({ error: '产品型号为必填参数' });
+  }
+  
+  // 权限验证：只允许admin和工程部的staff新增/修改标准工时
+  const userId = req.session?.userId;
+  if (!userId) {
+    return res.status(401).json({ error: '未登录' });
+  }
+  
+  let connection;
+  try {
+    connection = await mysql.createConnection(dbConfig);
+    
+    // 查询用户角色和部门
+    const [userRows] = await connection.execute('SELECT role, department FROM users WHERE id = ?', [userId]);
+    if (userRows.length === 0) {
+      await connection.end();
+      return res.status(401).json({ error: '用户不存在' });
+    }
+    
+    const role = userRows[0].role;
+    const department = userRows[0].department;
+    
+    // 只允许admin和工程部的staff新增/修改标准工时
+    if (role !== 'admin' && !(role === 'staff' && department === '工程部')) {
+      await connection.end();
+      return res.status(403).json({ error: '权限不足，只有管理员和工程部可以新增/修改标准工时' });
+    }
+    
+    await connection.execute(
+      `INSERT INTO product_standard_hours (
+        product_model, machining_hours, electrical_hours,
+        pre_assembly_hours, post_assembly_hours, debugging_hours
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        machining_hours = VALUES(machining_hours),
+        electrical_hours = VALUES(electrical_hours),
+        pre_assembly_hours = VALUES(pre_assembly_hours),
+        post_assembly_hours = VALUES(post_assembly_hours),
+        debugging_hours = VALUES(debugging_hours),
+        updated_at = NOW()`,
+      [
+        productModel.trim(),
+        machiningHours || 0,
+        electricalHours || 0,
+        preAssemblyHours || 0,
+        postAssemblyHours || 0,
+        debuggingHours || 0
+      ]
+    );
+    
+    await connection.end();
+    return res.json({ success: true, message: '标准工时保存成功' });
+  } catch (error) {
+    if (connection) await connection.end();
+    console.error('保存产品标准工时失败:', error);
+    return res.status(500).json({ error: '保存产品标准工时失败: ' + error.message });
+  }
+});
+
 // 管理员/主管：可视化工人报工记录（合并完成记录与任务计时）
 // GET /api/work-records?start=2025-10-01&end=2025-10-31&userId=3&taskId=12
 app.get('/api/work-records', async (req, res) => {
@@ -3157,7 +3953,7 @@ function canStartPhase(task, phaseKey, isAssign = false) {
   // 调试阶段
   if (phaseKey === 'debugging') {
     if (isAssign) {
-      // 分配时：只需要总装后段已分配
+      // 分配时：需要总装后段已分配
       const postAssemblyAssignee = task.post_assembly_assignee;
       const postAssemblyAssigned = postAssemblyAssignee != null && 
                                    postAssemblyAssignee !== '' && 
@@ -3168,11 +3964,9 @@ function canStartPhase(task, phaseKey, isAssign = false) {
       const postAssemblyCompleted = task.post_assembly_phase === 1 || task.post_assembly_phase === '1';
       return postAssemblyAssigned || postAssemblyCompleted;
     } else {
-      // 开始时：需要总装后段已开始或已完成
-      const postAssemblyStarted = task.post_assembly_start_time != null && 
-                                  task.post_assembly_start_time !== '';
+      // 开始时：必须总装后段已完成
       const postAssemblyCompleted = task.post_assembly_phase === 1 || task.post_assembly_phase === '1';
-      return postAssemblyStarted || postAssemblyCompleted;
+      return postAssemblyCompleted;
     }
   }
   
@@ -3257,18 +4051,21 @@ app.post('/api/tasks/:taskId/phases/:phaseKey/start', async (req, res) => {
           AND pre_assembly_assignee != '0'
       `, [phaseKey, taskId]);
     } else if (phaseKey === 'debugging') {
-      // 调试阶段：需要总装后段已派工
-      await connection.execute(`
+      // 调试阶段：必须总装后段已完成
+      const [updateResult] = await connection.execute(`
         UPDATE tasks 
         SET 
           current_phase = ?,
           ${phaseKey}_start_time = NOW()
         WHERE id = ? 
-          AND post_assembly_assignee IS NOT NULL 
-          AND post_assembly_assignee != '' 
-          AND post_assembly_assignee != 0 
-          AND post_assembly_assignee != '0'
+          AND post_assembly_phase = 1
       `, [phaseKey, taskId]);
+      
+      // 检查是否更新成功（如果总装后段未完成，affectedRows为0）
+      if (updateResult.affectedRows === 0) {
+        await connection.end();
+        return res.status(400).json({ error: '无法开始调试阶段，请先完成总装后段' });
+      }
     } else {
       // 其他阶段
       await connection.execute(`
@@ -3642,6 +4439,264 @@ app.post('/api/tasks/:taskId/phases/:phaseKey/complete', async (req, res) => {
     
   } catch (error) {
     res.status(500).json({ error: '完成阶段失败：' + error.message });
+  }
+});
+
+// 管理员：获取完工记录列表（用于撤回）
+app.get('/api/admin/work-completions', async (req, res) => {
+  try {
+    const { userId, start, end, taskId, limit = 100 } = req.query;
+    const connection = await mysql.createConnection(dbConfig);
+    
+    const conditions = ['wr.work_type = ?'];
+    const params = ['complete'];
+    
+    if (userId) {
+      conditions.push('wr.user_id = ?');
+      params.push(Number(userId));
+    }
+    if (start) {
+      conditions.push('wr.created_at >= ?');
+      params.push(start + ' 00:00:00');
+    }
+    if (end) {
+      conditions.push('wr.created_at <= ?');
+      params.push(end + ' 23:59:59');
+    }
+    if (taskId) {
+      conditions.push('wr.task_id = ?');
+      params.push(Number(taskId));
+    }
+    
+    const whereSql = 'WHERE ' + conditions.join(' AND ');
+    const limitNum = Math.min(parseInt(limit) || 100, 200);
+    
+    // LIMIT 不能使用参数占位符，需要直接拼接
+    const [rows] = await connection.execute(`
+      SELECT 
+        wr.id,
+        wr.task_id,
+        wr.user_id,
+        wr.created_at,
+        wr.quantity_completed,
+        wr.quality_notes,
+        wr.issues,
+        wr.start_time,
+        wr.end_time,
+        wr.hours_worked,
+        t.name AS task_name,
+        t.status AS task_status,
+        t.machining_phase,
+        t.electrical_phase,
+        t.pre_assembly_phase,
+        t.post_assembly_phase,
+        t.debugging_phase,
+        t.machining_start_time,
+        t.electrical_start_time,
+        t.pre_assembly_start_time,
+        t.post_assembly_start_time,
+        t.debugging_start_time,
+        u.name AS user_name
+      FROM work_reports wr
+      JOIN tasks t ON wr.task_id = t.id
+      JOIN users u ON wr.user_id = u.id
+      ${whereSql}
+      ORDER BY wr.created_at DESC
+      LIMIT ${limitNum}
+    `, params);
+    
+    await connection.end();
+    res.json(rows || []);
+  } catch (error) {
+    console.error('获取完工记录失败:', error);
+    res.status(500).json({ error: '获取完工记录失败：' + error.message });
+  }
+});
+
+// 管理员：撤回完工记录
+app.post('/api/admin/work-completions/:id/rollback', async (req, res) => {
+  const { id } = req.params;
+  const { userId } = req.body || {};
+  const connection = await mysql.createConnection(dbConfig);
+  
+  try {
+    // 权限校验：只有管理员可以撤回完工记录
+    if (!userId) {
+      await connection.end();
+      return res.status(400).json({ error: '缺少用户ID，无法校验权限' });
+    }
+
+    const [userRows] = await connection.execute(
+      'SELECT role FROM users WHERE id = ?',
+      [userId]
+    );
+
+    if (!userRows || userRows.length === 0) {
+      await connection.end();
+      return res.status(404).json({ error: '用户不存在，无法撤回完工记录' });
+    }
+
+    if (userRows[0].role !== 'admin') {
+      await connection.end();
+      return res.status(403).json({ error: '只有管理员可以撤回完工记录' });
+    }
+
+    await connection.beginTransaction();
+    
+    // 1. 获取完工记录
+    const [[wr]] = await connection.execute(
+      'SELECT * FROM work_reports WHERE id = ? AND work_type = ?',
+      [id, 'complete']
+    );
+    
+    if (!wr) {
+      await connection.rollback();
+      await connection.end();
+      return res.status(404).json({ error: '完工记录不存在' });
+    }
+    
+    // 2. 获取任务信息
+    const [[task]] = await connection.execute(
+      'SELECT * FROM tasks WHERE id = ?',
+      [wr.task_id]
+    );
+    
+    if (!task) {
+      await connection.rollback();
+      await connection.end();
+      return res.status(404).json({ error: '任务不存在' });
+    }
+    
+    // 3. 根据 start_time 判断是哪个阶段
+    let phaseKey = null;
+    const wrStartTime = wr.start_time ? new Date(wr.start_time).getTime() : null;
+    
+    if (wrStartTime && task.machining_start_time) {
+      const machiningTime = new Date(task.machining_start_time).getTime();
+      if (Math.abs(wrStartTime - machiningTime) < 60000) { // 允许1分钟误差
+        phaseKey = 'machining';
+      }
+    }
+    if (!phaseKey && wrStartTime && task.electrical_start_time) {
+      const electricalTime = new Date(task.electrical_start_time).getTime();
+      if (Math.abs(wrStartTime - electricalTime) < 60000) {
+        phaseKey = 'electrical';
+      }
+    }
+    if (!phaseKey && wrStartTime && task.pre_assembly_start_time) {
+      const preAssemblyTime = new Date(task.pre_assembly_start_time).getTime();
+      if (Math.abs(wrStartTime - preAssemblyTime) < 60000) {
+        phaseKey = 'pre_assembly';
+      }
+    }
+    if (!phaseKey && wrStartTime && task.post_assembly_start_time) {
+      const postAssemblyTime = new Date(task.post_assembly_start_time).getTime();
+      if (Math.abs(wrStartTime - postAssemblyTime) < 60000) {
+        phaseKey = 'post_assembly';
+      }
+    }
+    if (!phaseKey && wrStartTime && task.debugging_start_time) {
+      const debuggingTime = new Date(task.debugging_start_time).getTime();
+      if (Math.abs(wrStartTime - debuggingTime) < 60000) {
+        phaseKey = 'debugging';
+      }
+    }
+    
+    if (!phaseKey) {
+      await connection.rollback();
+      await connection.end();
+      return res.status(400).json({ error: '无法识别完工所属阶段，无法自动撤回' });
+    }
+    
+    // 4. 检查该阶段是否已完成（必须已完成才能撤回）
+    if (task[`${phaseKey}_phase`] !== 1) {
+      await connection.rollback();
+      await connection.end();
+      return res.status(400).json({ error: '该阶段未完成，无需撤回' });
+    }
+    
+    // 5. 撤回阶段完成状态
+    //    需求：撤回后视为“从未开始过”，不保留开始/暂停/完成时间，但保留负责人，方便同一人重新开始
+    await connection.execute(
+      `UPDATE tasks 
+       SET ${phaseKey}_phase = 0,
+           ${phaseKey}_start_time = NULL,
+           ${phaseKey}_paused_at = NULL,
+           ${phaseKey}_complete_time = NULL
+       WHERE id = ?`,
+      [task.id]
+    );
+    
+    // 6. 检查任务是否应该恢复为未完成状态
+    const updatedTask = { ...task, [`${phaseKey}_phase`]: 0 };
+    const allPhasesCompleted = updatedTask.machining_phase === 1 &&
+                                updatedTask.electrical_phase === 1 &&
+                                updatedTask.pre_assembly_phase === 1 &&
+                                updatedTask.post_assembly_phase === 1 &&
+                                updatedTask.debugging_phase === 1;
+    
+    if (!allPhasesCompleted && task.status === 'completed') {
+      // 判断任务池状态
+      const hasAnyPhaseAssigned = updatedTask.machining_assignee ||
+                                  updatedTask.electrical_assignee ||
+                                  updatedTask.pre_assembly_assignee ||
+                                  updatedTask.post_assembly_assignee ||
+                                  updatedTask.debugging_assignee;
+      
+      const taskPoolStatus = hasAnyPhaseAssigned ? 'in_progress' : 'unassigned';
+      
+      // 某些旧库可能没有 task_pool_status 字段，这里做兼容处理
+      try {
+        await connection.execute(
+          `UPDATE tasks 
+           SET status = 'pending',
+               end_time = NULL,
+               task_pool_status = ?
+           WHERE id = ?`,
+          [taskPoolStatus, task.id]
+        );
+      } catch (e) {
+        // 如果字段不存在，退化为仅更新 status 与 end_time
+        await connection.execute(
+          `UPDATE tasks 
+           SET status = 'pending',
+               end_time = NULL
+           WHERE id = ?`,
+          [task.id]
+        );
+      }
+    }
+    
+    // 7. 删除完工记录
+    const [deleteResult] = await connection.execute(
+      'DELETE FROM work_reports WHERE id = ? AND work_type = ?',
+      [id, 'complete']
+    );
+    
+    console.log(`[撤回完工] 删除记录 ID=${id}, 影响行数: ${deleteResult.affectedRows}`);
+    
+    if (deleteResult.affectedRows === 0) {
+      await connection.rollback();
+      await connection.end();
+      return res.status(404).json({ error: '未找到要删除的完工记录' });
+    }
+    
+    await connection.commit();
+    console.log(`[撤回完工] 事务已提交，记录 ID=${id} 已删除`);
+    await connection.end();
+    
+    res.json({ 
+      success: true, 
+      message: '已成功撤回完工记录',
+      phaseKey: phaseKey,
+      deletedRows: deleteResult.affectedRows
+    });
+    
+  } catch (error) {
+    await connection.rollback();
+    await connection.end();
+    console.error('撤回完工记录失败:', error);
+    res.status(500).json({ error: '撤回完工记录失败：' + error.message });
   }
 });
 
@@ -4345,11 +5400,12 @@ app.post('/api/exception-reports', upload.any(), async (req, res) => {
       }
     }
     
-    // 检查任务是否存在且分配给该用户
+    // 检查任务是否存在且分配给该用户，并确定异常所属阶段
+    let phase = null;
     try {
       // 尝试使用新字段查询
       const [taskRows] = await connection.execute(`
-        SELECT id, name, machining_assignee, electrical_assignee, pre_assembly_assignee, post_assembly_assignee, debugging_assignee, current_phase_assignee FROM tasks WHERE id = ?
+        SELECT id, name, machining_assignee, electrical_assignee, pre_assembly_assignee, post_assembly_assignee, debugging_assignee, current_phase_assignee, current_phase FROM tasks WHERE id = ?
       `, [taskId]);
       
       if (taskRows.length === 0) {
@@ -4360,6 +5416,22 @@ app.post('/api/exception-reports', upload.any(), async (req, res) => {
       const task = taskRows[0];
       const hasPermission = task.machining_assignee == userId || task.electrical_assignee == userId || task.pre_assembly_assignee == userId || task.post_assembly_assignee == userId || task.debugging_assignee == userId || 
                             (task.current_phase_assignee && task.current_phase_assignee === parseInt(userId));
+
+      // 根据用户与任务的关系推断所属阶段
+      if (task.machining_assignee == userId) {
+        phase = 'machining';
+      } else if (task.electrical_assignee == userId) {
+        phase = 'electrical';
+      } else if (task.pre_assembly_assignee == userId) {
+        phase = 'pre_assembly';
+      } else if (task.post_assembly_assignee == userId) {
+        phase = 'post_assembly';
+      } else if (task.debugging_assignee == userId) {
+        phase = 'debugging';
+      } else if (task.current_phase_assignee && task.current_phase_assignee === parseInt(userId) && task.current_phase) {
+        // 兼容当前阶段负责人
+        phase = task.current_phase;
+      }
       
       if (!hasPermission) {
         await connection.end();
@@ -4378,6 +5450,21 @@ app.post('/api/exception-reports', upload.any(), async (req, res) => {
       
       const task = taskRows[0];
       const hasPermission = task.machining_assignee == userId || task.electrical_assignee == userId || task.pre_assembly_assignee == userId || task.post_assembly_assignee == userId || task.debugging_assignee == userId;
+
+      // 旧字段回退情况下的阶段推断（没有 current_phase 字段）
+      if (!phase) {
+        if (task.machining_assignee == userId) {
+          phase = 'machining';
+        } else if (task.electrical_assignee == userId) {
+          phase = 'electrical';
+        } else if (task.pre_assembly_assignee == userId) {
+          phase = 'pre_assembly';
+        } else if (task.post_assembly_assignee == userId) {
+          phase = 'post_assembly';
+        } else if (task.debugging_assignee == userId) {
+          phase = 'debugging';
+        }
+      }
       
       if (!hasPermission) {
         await connection.end();
@@ -4419,12 +5506,14 @@ app.post('/api/exception-reports', upload.any(), async (req, res) => {
       title = `${exceptionType}异常报告`;
     }
     
-    // 插入异常报告
+    // 插入异常报告（写入所属阶段 phase）
     const [result] = await connection.execute(`
       INSERT INTO exception_reports (
-        task_id, user_id, exception_type, title, description, exception_start_datetime, exception_end_datetime, approved_by, status, image_path
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
-    `, [taskId, userId, exceptionType, title, description, startDateTime, endDateTime, approverId, imagePath]);
+        task_id, user_id, exception_type, title, description,
+        exception_start_datetime, exception_end_datetime,
+        approved_by, status, image_path, phase
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+    `, [taskId, userId, exceptionType, title, description, startDateTime, endDateTime, approverId, imagePath, phase]);
     
     await connection.end();
     
@@ -5270,6 +6359,38 @@ app.get('/api/database/backups/:filename', (req, res) => {
   }
 });
 
+// 自动备份调度：每天17:30执行一次备份
+function scheduleDailyBackupAt1730() {
+  try {
+    const now = new Date();
+    const next = new Date();
+    next.setHours(17, 30, 0, 0); // 当天17:30
+    if (next <= now) {
+      // 如果今天已经过了17:30，就排到明天
+      next.setDate(next.getDate() + 1);
+    }
+
+    const delay = next.getTime() - now.getTime();
+    console.log(`[自动备份] 下一次备份时间: ${next.toLocaleString('zh-CN')}`);
+
+    setTimeout(async function runDailyBackup() {
+      try {
+        console.log('[自动备份] 开始执行数据库备份...');
+        const backupFile = await backupModule.backupDatabase();
+        backupModule.cleanOldBackups();
+        console.log('[自动备份] 备份成功，文件:', backupFile);
+      } catch (err) {
+        console.error('[自动备份] 备份失败:', err.message || err);
+      } finally {
+        // 当前这次跑完后，再排下一次
+        scheduleDailyBackupAt1730();
+      }
+    }, delay);
+  } catch (e) {
+    console.error('[自动备份] 调度初始化失败:', e.message || e);
+  }
+}
+
 // 5. 启动后端服务（端口用 3000，避免和前端冲突）
 const PORT = 3000;
 const HOST = '0.0.0.0'; // 监听所有网卡，允许局域网访问
@@ -5294,6 +6415,9 @@ app.listen(PORT, HOST, () => {
     console.log(`后端服务已启动，端口: ${PORT}`);
   }
 });
+
+// 启动自动备份调度（每天17:30备份一次，保留最近60个备份）
+scheduleDailyBackupAt1730();
 
 // ============= 工作时间设置API =============
 
@@ -5590,6 +6714,62 @@ async function isHolidayFromGitHub(date, year) {
     console.error('[后端] 判断节假日失败:', error);
     return false;
   }
+}
+
+// 计算单个任务某阶段的效率（后端版，简化实现）
+async function computeEfficiencyForTaskPhase({
+  task,
+  phase,
+  assigneeId,
+  standardHours,
+  phaseStartTime,
+  phaseEndTime,
+  workReports,
+  exceptionReports
+}) {
+  // 标准工时
+  const stdHours = standardHours ? Number(standardHours) : 0;
+
+  // 实际工时：先用报工里的 hours_worked 累加（与你前端早期实现一致）
+  const actualWorkHours = (workReports || []).reduce((sum, wr) => {
+    const h = wr.hours_worked != null ? parseFloat(wr.hours_worked) : 0;
+    return sum + (isNaN(h) ? 0 : h);
+  }, 0);
+
+  // 异常时间：优先用 duration_hours，没有则用 0（不做时间段交集，先保证落地）
+  const exceptionHours = (exceptionReports || []).reduce((sum, ex) => {
+    let h = 0;
+    if (typeof ex.duration_hours === 'number') {
+      h = ex.duration_hours;
+    } else if (ex.duration_hours != null) {
+      const parsed = parseFloat(ex.duration_hours);
+      h = isNaN(parsed) ? 0 : parsed;
+    }
+    return sum + (isNaN(h) ? 0 : h);
+  }, 0);
+
+  const assistHours = 0; // 协助时间暂不在后端计算，后续可根据需要迁移
+
+  const effectiveHours = actualWorkHours - exceptionHours - assistHours;
+  let eff = 0;
+  if (effectiveHours > 0 && stdHours > 0) {
+    eff = (stdHours / effectiveHours) * 100;
+  }
+
+  return {
+    taskId: task.id,
+    phase,
+    standardHours: stdHours,
+    actualWorkHours,
+    exceptionHours,
+    assistHours,
+    efficiency: eff,
+    workReports,
+    exceptionReports,
+    phaseStartTime,
+    phaseEndTime,
+    dailyCalculations: {}
+  };
 }
 
 // 获取标准工作时长的函数
