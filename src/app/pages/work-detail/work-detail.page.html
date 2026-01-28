@@ -74,11 +74,13 @@
           </div>
           
           <!-- 阶段操作按钮 -->
+          <!-- 只有当前阶段、未完成、且还没有开始时间时，才显示“开始”按钮 -->
           <div class="phase-actions" *ngIf="phase.isCurrent && !phase.isCompleted">
             <ion-button 
               size="small" 
               fill="outline" 
               color="primary"
+              *ngIf="!phase.startTime"
               (click)="startPhase(phase.key)"
               [disabled]="isSubmitting">
               <ion-icon name="play-circle"></ion-icon>

@@ -33,7 +33,8 @@
           <ion-input 
             type="date"
             [(ngModel)]="monthlyStartDate"
-            placeholder="选择开始日期">
+            placeholder="选择开始日期"
+            (ionBlur)="validateDateInput($event, 'monthlyStartDate')">
           </ion-input>
         </div>
 
@@ -42,7 +43,8 @@
           <ion-input 
             type="date"
             [(ngModel)]="monthlyEndDate"
-            placeholder="选择结束日期">
+            placeholder="选择结束日期"
+            (ionBlur)="validateDateInput($event, 'monthlyEndDate')">
           </ion-input>
         </div>
         
@@ -93,6 +95,7 @@
               <ion-select [(ngModel)]="exportType" interface="popover">
                 <ion-select-option value="detail">效率明细数据</ion-select-option>
                 <ion-select-option value="monthly">月度汇总数据</ion-select-option>
+                <ion-select-option value="device">设备效率汇总</ion-select-option>
               </ion-select>
             </ion-item>
 
@@ -100,7 +103,8 @@
               <ion-label position="stacked">开始日期（按阶段结束时间）</ion-label>
               <ion-input
                 type="date"
-                [(ngModel)]="exportStartDate">
+                [(ngModel)]="exportStartDate"
+                (ionBlur)="validateDateInput($event, 'exportStartDate')">
               </ion-input>
             </ion-item>
 
@@ -108,7 +112,8 @@
               <ion-label position="stacked">结束日期（按阶段结束时间）</ion-label>
               <ion-input
                 type="date"
-                [(ngModel)]="exportEndDate">
+                [(ngModel)]="exportEndDate"
+                (ionBlur)="validateDateInput($event, 'exportEndDate')">
               </ion-input>
             </ion-item>
 
@@ -410,13 +415,15 @@
                   type="date"
                   placeholder="开始日期"
                   [(ngModel)]="startDate"
-                  (ngModelChange)="applyTableFilters()">
+                  (ngModelChange)="applyTableFilters()"
+                  (blur)="validateDateInput($event, 'startDate')">
                 <input 
                   class="table-filter-input"
                   type="date"
                   placeholder="结束日期"
                   [(ngModel)]="endDate"
                   (ngModelChange)="applyTableFilters()"
+                  (blur)="validateDateInput($event, 'endDate')"
                   style="margin-top: 4px;">
               </th>
               <th>
@@ -500,6 +507,7 @@
                   <ion-icon name="calculator-outline" slot="start"></ion-icon>
                   {{ getCalculationDetailsVisible(data.task.id, data.phase) ? '隐藏' : '详情' }}
                 </ion-button>
+               
               </td>
             </tr>
             <tr *ngIf="filteredEfficiencyData.length === 0">
@@ -604,18 +612,30 @@
         <div class="calculation-details">
         <div class="calculation-details-header">
           <h4>📊 效率计算过程</h4>
-          <ion-button 
-            fill="outline" 
-            size="small" 
-            (click)="toggleCalculationDetails(data.task.id, data.phase)"
-            class="calculation-toggle-btn">
-            <ion-icon name="chevron-up-outline" slot="start"></ion-icon>
-            隐藏详情
-          </ion-button>
+          <div style="display: flex; gap: 8px;">
+            <ion-button 
+              fill="solid" 
+              color="primary"
+              size="small" 
+              (click)="toggleCalculationSteps(data.task.id, data.phase)"
+              class="calculation-steps-toggle-btn">
+              <ion-icon [name]="getCalculationStepsExpanded(data.task.id, data.phase) ? 'chevron-up-outline' : 'chevron-down-outline'" slot="start"></ion-icon>
+              {{ getCalculationStepsExpanded(data.task.id, data.phase) ? '收起' : '展开' }}
+            </ion-button>
+            <ion-button 
+              fill="solid" 
+              color="medium"
+              size="small" 
+              (click)="toggleCalculationDetails(data.task.id, data.phase)"
+              class="calculation-toggle-btn">
+              <ion-icon name="chevron-up-outline" slot="start"></ion-icon>
+              隐藏详情
+            </ion-button>
+          </div>
         </div>
         
         <!-- 计算步骤列表 -->
-        <ion-list>
+        <ion-list *ngIf="getCalculationStepsExpanded(data.task.id, data.phase)">
           <ion-item class="calculation-step-item">
             <ion-label>
               <h3>1️⃣ 基础数据</h3>
@@ -659,7 +679,7 @@
               </p>
               
               <!-- 逐日计算详情 -->
-              <div class="day-calculation-details">
+              <div class="day-calculation-details" *ngIf="getDayCalculationDetails(data.task.id, data.phase).length > 0">
                 <h6>📅 逐日计算详情:</h6>
                 <div *ngFor="let dayDetail of getDayCalculationDetails(data.task.id, data.phase)" class="day-detail-item">
                   <div class="day-detail-header">
@@ -691,8 +711,14 @@
               <div *ngIf="data.exceptionReports.length > 0" class="exception-breakdown">
                 <div class="exception-breakdown-item" *ngFor="let exception of data.exceptionReports">
                   <ion-chip color="danger" size="small">
-                    {{ exception.user_name }}: {{ (exception.duration_hours || 0).toFixed(2) }}h ({{ exception.exception_type }})
+                    {{ exception.user_name }}: {{ getExceptionCalculatedHours(exception, data.task.id, data.phase).toFixed(2) }}h ({{ exception.exception_type }})
                   </ion-chip>
+                  <p class="exception-time-range">
+                    <ion-icon name="time-outline"></ion-icon>
+                    {{ formatTime(exception.start_time || exception.exception_start_datetime || null) }} 
+                    → 
+                    {{ formatTime(exception.end_time || exception.exception_end_datetime || null) }}
+                  </p>
                 </div>
               </div>
             </ion-label>
@@ -750,50 +776,6 @@
           </p>
         </div>
       </div>
-      
-      
-      <!-- 异常时间段摘要 -->
-      <div class="exception-summary" *ngIf="data.exceptionReports.length > 0 && getExceptionDetailsVisible(data.task.id, data.phase)">
-        <div class="exception-summary-header">
-          <h4>⚠️ 异常时间段详情 ({{ data.exceptionReports.length }}条)</h4>
-          <ion-button 
-            fill="outline" 
-            size="small" 
-            (click)="toggleExceptionDetails(data.task.id, data.phase)"
-            class="exception-toggle-btn">
-            <ion-icon name="chevron-up-outline" slot="start"></ion-icon>
-            隐藏详情
-          </ion-button>
-        </div>
-        
-        <!-- 异常时间段列表 -->
-        <ion-list>
-          <ion-item *ngFor="let exception of data.exceptionReports" class="exception-summary-item">
-            <ion-label>
-              <div class="exception-header">
-                <h3>{{ exception.user_name }} - {{ exception.exception_type }}</h3>
-                <p class="exception-time">
-                  <ion-icon name="time-outline"></ion-icon>
-                  {{ formatTime(exception.start_time || exception.exception_start_datetime || null) }} 
-                  → 
-                  {{ formatTime(exception.end_time || exception.exception_end_datetime || null) }}
-                </p>
-                <p class="exception-total">
-                  <ion-icon name="warning-outline"></ion-icon>
-                  总异常时长: <strong>{{ (data.exceptionHours || 0).toFixed(2) }}小时</strong>
-                </p>
-              </div>
-              <p class="exception-description" *ngIf="exception.description">{{ exception.description }}</p>
-              <div class="exception-status" *ngIf="exception.approval_note">
-                <ion-badge color="light" size="small" class="approval-note">
-                  备注: {{ exception.approval_note }}
-                </ion-badge>
-              </div>
-            </ion-label>
-          </ion-item>
-        </ion-list>
-      </div>
-      
       <!-- 报工记录 -->
       <div class="work-reports" *ngIf="data.workReports.length > 0 && getWorkReportsDetailsVisible(data.task.id, data.phase)">
         <div class="work-reports-header">

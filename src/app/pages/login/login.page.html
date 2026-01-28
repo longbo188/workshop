@@ -31,14 +31,20 @@
           <div class="input-icon">
             <ion-icon name="person-outline"></ion-icon>
           </div>
-          <ion-input
+          <input
             type="text"
             [(ngModel)]="username"
             [disabled]="isLoading"
             placeholder="用户名"
             name="username"
-            class="input-field">
-          </ion-input>
+            class="input-field"
+            [attr.list]="savedUsernames.length > 0 ? 'username-list' : null"
+            autocomplete="username">
+          
+          <!-- 用户名下拉列表（使用 datalist） -->
+          <datalist id="username-list" *ngIf="savedUsernames.length > 0">
+            <option *ngFor="let uname of savedUsernames" [value]="uname"></option>
+          </datalist>
         </div>
 
         <!-- 密码 -->

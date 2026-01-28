@@ -781,7 +781,8 @@ export class HomePage implements OnInit, OnDestroy {
   logout() {
     localStorage.removeItem('currentUser');
     sessionStorage.removeItem('currentUser');
-    window.location.href = '/login';
+    // 使用 Angular Router 导航到登录页，避免 404 错误
+    this.router.navigate(['/login'], { replaceUrl: true });
   }
 
   goDispatch() {
@@ -2367,7 +2368,23 @@ export class HomePage implements OnInit, OnDestroy {
   async rollbackCompletion(record: any) {
     const alert = await this.alertController.create({
       header: '确认撤回',
-      message: `确定要撤回任务"${record.task_name}"的完工记录吗？\n员工：${record.user_name}\n完成时间：${new Date(record.created_at).toLocaleString('zh-CN')}\n\n撤回后，该阶段的完成状态将被取消，如果任务已完成，将恢复为进行中状态。`,
+      message: `确定要撤回任务"${record.task_name}"的完工记录吗？\n员工：${record.user_name}\n完成时间：${new Date(record.created_at).toLocaleString('zh-CN')}\n\n请选择撤回方式：`,
+      inputs: [
+        {
+          name: 'rollbackType',
+          type: 'radio',
+          label: '清除任务开始时间（完全撤回，视为从未开始）',
+          value: 'clear',
+          checked: false
+        },
+        {
+          name: 'rollbackType',
+          type: 'radio',
+          label: '不清除任务开始时间（保留开始时间和负责人）',
+          value: 'keep',
+          checked: true  // 默认选择不清除
+        }
+      ],
       buttons: [
         {
           text: '取消',
@@ -2375,8 +2392,9 @@ export class HomePage implements OnInit, OnDestroy {
         },
         {
           text: '确认撤回',
-          handler: async () => {
-            await this.executeRollback(record);
+          handler: async (data) => {
+            const clearStartTime = data === 'clear';
+            await this.executeRollback(record, clearStartTime);
           }
         }
       ]
@@ -2385,7 +2403,7 @@ export class HomePage implements OnInit, OnDestroy {
     await alert.present();
   }
 
-  async executeRollback(record: any) {
+  async executeRollback(record: any, clearStartTime: boolean = false) {
     this.isRollingBack = true;
     try {
       const isNative = Capacitor.isNativePlatform();
@@ -2394,7 +2412,8 @@ export class HomePage implements OnInit, OnDestroy {
       const response: any = await this.http.post(
         `${base}/api/admin/work-completions/${record.id}/rollback`,
         {
-          userId: this.currentUser?.id
+          userId: this.currentUser?.id,
+          clearStartTime: clearStartTime  // 传递参数
         }
       ).toPromise();
       

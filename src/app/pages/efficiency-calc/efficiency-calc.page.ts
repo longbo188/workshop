@@ -53,6 +53,7 @@ interface Task {
   priority: string;
   created_at: string;
   updated_at: string;
+  device_efficiency?: number | null; // 设备效率快照(%)，来自后台tasks表
   // 阶段开始时间
   machining_start_time: string | null;
   electrical_start_time: string | null;
@@ -129,6 +130,8 @@ interface ExceptionReport {
   approved_by?: number;
   approved_at?: string;
   approval_note?: string;
+  // 计算后的实际异常时间（用于显示）
+  calculated_hours?: number;
 }
 
 interface EfficiencyData {
@@ -146,7 +149,16 @@ interface EfficiencyData {
   phaseStartTime: string;
   phaseEndTime: string;
   totalCalendarHours: number; // 日历总时间
-  dailyCalculations?: { [date: string]: { totalHours: number; effectiveHours: number; } }; // 单日计算详情
+  dailyCalculations?: { [date: string]: { 
+    totalHours: number; 
+    effectiveHours: number; 
+    workWindowOverlap?: number;
+    overtimeOverlap?: number;
+    leaveDeduction?: number;
+    exceptionDeduction?: number;
+    attendanceLimit?: number;
+    finalHours?: number;
+  } }; // 单日计算详情
 }
 
 interface WorkTimeSettings {
@@ -338,10 +350,6 @@ class TimeUtils {
   ]
 })
 export class EfficiencyCalcPage implements OnInit {
-  // 全局调试开关：false 时本页面的 console.log 调试输出全部禁用
-  private static readonly DEBUG = false;
-  // 如需保留全局 console.log，可在调试时临时改为 true
-  private originalConsoleLog = console.log;
   private http = inject(HttpClient);
   private toastController = inject(ToastController);
   private alertController = inject(AlertController);
@@ -383,7 +391,7 @@ export class EfficiencyCalcPage implements OnInit {
 
   // 导出相关状态
   isExportModalOpen = false;
-  exportType: 'detail' | 'monthly' = 'detail';
+  exportType: 'detail' | 'monthly' | 'device' = 'detail';
   exportStartDate: string = '';
   exportEndDate: string = '';
   
@@ -442,6 +450,11 @@ export class EfficiencyCalcPage implements OnInit {
   
   // 计算过程详情显示控制
   private calculationDetailsVisible = new Map<string, boolean>();
+  
+  // 计算步骤列表展开状态控制
+  private calculationStepsExpanded = new Map<string, boolean>();
+  
+  // 逐日计算详情缓存
   private dayCalculationDetails = new Map<string, any[]>();
   
   // 异常时间段详情显示控制
@@ -467,11 +480,6 @@ export class EfficiencyCalcPage implements OnInit {
   }
 
   ngOnInit() {
-    // 当 DEBUG 为 false 时，关闭 console.log 调试输出以提升性能
-    if (!EfficiencyCalcPage.DEBUG) {
-      console.log = (..._args: any[]) => {};
-    }
-
     this.loadCurrentUser();
     // 如果是员工角色，自动设置为查看自己的效率
     if (this.currentUser?.role === 'worker' && this.currentUser?.name) {
@@ -524,61 +532,10 @@ export class EfficiencyCalcPage implements OnInit {
     return isAdmin;
   }
 
-  // 加载节假日数据（优先使用GitHub数据源，失败时从考勤日历读取）
+  // 加载节假日数据（直接从考勤日历读取）
   private async loadHolidays(): Promise<void> {
     try {
-      // 方案4：优先从GitHub获取节假日数据（NateScarlet/holiday-cn项目）
-      const year = new Date().getFullYear();
-      try {
-        const githubResponse: any = await this.http.get(
-          `https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/${year}.json`
-        ).pipe(
-          timeout(5000), // 5秒超时
-          catchError(() => {
-            throw new Error('GitHub请求超时或失败');
-          })
-        ).toPromise();
-        
-        if (githubResponse?.days) {
-          // GitHub返回的days是数组格式，不是对象
-          const daysArray = Array.isArray(githubResponse.days) 
-            ? githubResponse.days 
-            : Object.values(githubResponse.days);
-          
-          // 分别处理节假日和调休日
-          const holidayDates = new Set<string>();
-          const workingDayDates = new Set<string>();
-          
-          daysArray.forEach((item: any) => {
-            if (item && typeof item === 'object' && item.date) {
-              const dateStr = item.date || '';
-              if (dateStr && dateStr.length > 0) {
-                // 存储非工作日（节假日/放假）
-                if (item.isOffDay === true) {
-                  holidayDates.add(dateStr);
-                }
-                // 存储调休日（周末但需要上班）
-                if (item.isWorkingDay === true) {
-                  workingDayDates.add(dateStr);
-                }
-              }
-            }
-          });
-          
-          this.holidays = holidayDates;
-          this.workingDays = workingDayDates;
-          
-          console.log(`已加载 ${this.holidays.size} 个节假日，${this.workingDays.size} 个调休日（来自GitHub，${year}年）`);
-          return; // 成功获取，直接返回
-        } else {
-          console.warn('GitHub返回的数据格式不正确，缺少days字段');
-          console.warn('返回的数据:', githubResponse);
-        }
-      } catch (githubError) {
-        console.warn('从GitHub获取节假日数据失败，尝试从考勤日历读取:', githubError);
-      }
-      
-      // 备用方案：从考勤日历读取放假日期
+      // 直接从考勤日历读取放假日期
       await this.loadHolidaysFromBackend();
     } catch (error) {
       console.error('加载节假日失败:', error);
@@ -648,7 +605,6 @@ export class EfficiencyCalcPage implements OnInit {
               return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
             } else {
               // 如果是数字或其他类型，尝试转换
-              console.warn(`警告：日期格式异常 - ${holiday.name}:`, h);
               return null;
             }
           })
@@ -668,60 +624,90 @@ export class EfficiencyCalcPage implements OnInit {
     // 原有的节假日列表调试日志已关闭
   }
 
-  // 从考勤日历加载放假日期（备用方案）
+  // 从考勤日历加载放假日期（只加载最近若干天，保证有足够的工作日用于计算“7个工作日前”）
   // 除开放假全是工作日
   private async loadHolidaysFromBackend(): Promise<void> {
     try {
       const base = this.getApiBase();
-      
-      // 从考勤日历读取放假日期
-      // 获取当前年份及前后各一年的考勤数据，确保覆盖足够的时间范围
-      const currentYear = new Date().getFullYear();
-      const startDate = `${currentYear - 1}-01-01`;
-      const endDate = `${currentYear + 1}-12-31`;
-      
-      try {
-        const attendanceResponse: any = await this.http.get(`${base}/api/daily-attendance`, {
-          params: {
-            start: startDate,
-            end: endDate,
-            pageSize: 10000 // 获取足够多的数据
-          }
-        }).toPromise();
+
+      // 向前回溯的自然日天数，用来覆盖「7个工作日」的计算区间
+      // 60 天是一个比较保守的值：即使有连续长假也足够
+      const daysBack = 30;
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const startDateObj = new Date(today);
+      startDateObj.setDate(startDateObj.getDate() - daysBack);
+
+      const startDate = startDateObj.toISOString().slice(0, 10); // YYYY-MM-DD
+      const endDate = today.toISOString().slice(0, 10);          // YYYY-MM-DD
+
+      const holidayDates = new Set<string>();
+
+      // 只请求这段时间的日考勤
+      const attendanceResponse: any = await this.http.get(`${base}/api/daily-attendance`, {
+        params: {
+          start: startDate,
+          end: endDate,
+          pageSize: daysBack + 10 // 预留一点富余
+        }
+      }).toPromise();
+
+      if (attendanceResponse?.list && Array.isArray(attendanceResponse.list)) {
+        // 从考勤记录中提取放假日期
+        // 数据结构：后端返回的是所有工人的考勤记录，每条记录是 (日期 × 工人)
+        // 优化：只遍历一次，用Map记录每个日期的考勤情况
         
-        if (attendanceResponse?.list && Array.isArray(attendanceResponse.list)) {
-          // 从考勤记录中提取放假日期
-          // 放假条件：standard_attendance_hours === 0 且 overtime_hours === 0
-          const holidayDates = new Set<string>();
+        // Map<日期, { hasWork: boolean, checked: boolean }>
+        // hasWork: 该日期是否有任何工人有考勤
+        // checked: 该日期是否已检查过所有记录（用于判断是否所有工人都没有考勤）
+        const dateStatus = new Map<string, { hasWork: boolean; recordCount: number }>();
+        
+        // 只遍历一次，记录每个日期的考勤情况
+        attendanceResponse.list.forEach((record: any) => {
+          if (!record.date) return;
           
-          attendanceResponse.list.forEach((record: any) => {
+          const dateStr = record.date instanceof Date
+            ? record.date.toISOString().slice(0, 10)
+            : record.date;
+          if (dateStr && dateStr.length >= 10) {
+            const normalizedDate = dateStr.substring(0, 10); // YYYY-MM-DD
+            
+            // 初始化或获取该日期的状态
+            if (!dateStatus.has(normalizedDate)) {
+              dateStatus.set(normalizedDate, { hasWork: false, recordCount: 0 });
+            }
+            const status = dateStatus.get(normalizedDate)!;
+            status.recordCount++;
+            
+            // 如果该日期已经标记为有考勤，跳过（避免重复检查）
+            if (status.hasWork) {
+              return;
+            }
+            
+            // 检查该记录是否有考勤（standard_attendance_hours > 0 或 overtime_hours > 0）
             const standardHours = record.standard_attendance_hours || 0;
             const overtimeHours = record.overtime_hours || 0;
             
-            // 如果标准工作时长为0且没有加班，则认为是放假
-            if (standardHours === 0 && overtimeHours === 0 && record.date) {
-              const dateStr = record.date instanceof Date 
-                ? record.date.toISOString().slice(0, 10) 
-                : record.date;
-              if (dateStr && dateStr.length >= 10) {
-                holidayDates.add(dateStr.substring(0, 10)); // 确保格式为 YYYY-MM-DD
-              }
+            if (standardHours > 0 || overtimeHours > 0) {
+              // 该日期有工人有考勤，标记为工作日
+              status.hasWork = true;
             }
-          });
-          
-          this.holidays = holidayDates;
-          this.workingDays = new Set(); // 考勤日历不提供调休日信息
-          console.log(`已加载 ${this.holidays.size} 个放假日期（来自考勤日历）`);
-        } else {
-          console.warn('未获取到考勤日历数据，将只排除周末');
-          this.holidays = new Set();
-          this.workingDays = new Set();
-        }
-      } catch (attendanceError) {
-        console.error('从考勤日历加载放假日期失败:', attendanceError);
-        this.holidays = new Set(); // 失败时使用空集合
-        this.workingDays = new Set();
+          }
+        });
+        
+        // 对于有考勤记录的日期，如果所有工人都没有考勤，则认为是放假
+        dateStatus.forEach((status, dateStr) => {
+          // 如果该日期有考勤记录，但所有工人都没有考勤，则认为是放假
+          if (!status.hasWork && status.recordCount > 0) {
+            holidayDates.add(dateStr);
+          }
+        });
       }
+
+      this.holidays = holidayDates;
+      this.workingDays = new Set(); // 考勤日历不提供调休日信息
     } catch (error) {
       console.error('加载节假日数据失败:', error);
       this.holidays = new Set(); // 失败时使用空集合
@@ -788,7 +774,6 @@ export class EfficiencyCalcPage implements OnInit {
             this.confirmedTasks.add(key);
           });
           this.confirmedTasksCount = this.confirmedTasks.size;
-          console.log(`从后端加载已确认任务: ${this.confirmedTasksCount} 个阶段`);
 
           // 可选：同步一份到 localStorage，仅作缓存，不作为真相源
           try {
@@ -831,7 +816,6 @@ export class EfficiencyCalcPage implements OnInit {
           savedCount++;
         }
       });
-      console.log(`保存已确认任务数据: ${Object.keys(confirmedData).length} 个任务，${savedCount} 条数据`);
       localStorage.setItem('confirmedEfficiencyTasksData', JSON.stringify(confirmedData));
     } catch (error) {
       console.error('保存已确认任务数据失败:', error);
@@ -849,6 +833,86 @@ export class EfficiencyCalcPage implements OnInit {
       console.error('加载已确认任务数据失败:', error);
     }
     return {};
+  }
+
+  // 从数据库加载已确认任务的数据
+  private async loadConfirmedTasksDataFromDatabase(): Promise<Map<string, EfficiencyData[]>> {
+    const confirmedDataMap = new Map<string, EfficiencyData[]>();
+    try {
+      const base = this.getApiBase();
+      const response = await this.http.get<any[]>(`${base}/api/task-efficiency`, { 
+        params: { isConfirmed: '1' } 
+      }).toPromise();
+      
+      if (!response || response.length === 0) {
+        return confirmedDataMap;
+      }
+
+      // 获取所有任务信息（用于构建 EfficiencyData）
+      const tasksResponse = await this.http.get<any>(`${base}/api/tasks`).toPromise();
+      const allTasks: Task[] = tasksResponse || [];
+      const tasksMap = new Map<number, Task>();
+      allTasks.forEach(task => {
+        tasksMap.set(task.id, task);
+      });
+      
+
+      let skippedCount = 0;
+      const skippedTasks: number[] = [];
+      let duplicateKeyCount = 0;
+      const duplicateKeys: string[] = [];
+
+      // 将数据库中的数据转换为 EfficiencyData 格式
+      for (const row of response) {
+        const task = tasksMap.get(row.task_id);
+        if (!task) {
+          skippedCount++;
+          skippedTasks.push(row.task_id);
+          continue;
+        }
+
+        const key = this.getTaskConfirmKey(row.task_id, row.phase);
+        if (!confirmedDataMap.has(key)) {
+          confirmedDataMap.set(key, []);
+        } else {
+          duplicateKeyCount++;
+          if (!duplicateKeys.includes(key)) {
+            duplicateKeys.push(key);
+          }
+        }
+
+        // 构建 EfficiencyData 对象
+        const efficiencyData: EfficiencyData = {
+          task: task,
+          phase: row.phase,
+          standardHours: parseFloat(row.standard_hours) || 0,
+          actualWorkHours: parseFloat(row.actual_work_hours) || 0,
+          exceptionHours: parseFloat(row.exception_hours) || 0,
+          assistHours: parseFloat(row.assist_hours) || 0,
+          hasAssistTasks: false,
+          efficiency: parseFloat(row.efficiency) || 0,
+          workReports: [],
+          exceptionReports: [],
+          attendanceRecords: [],
+          phaseStartTime: row.phase_start_time || '',
+          phaseEndTime: row.phase_end_time || '',
+          totalCalendarHours: 0,
+          dailyCalculations: {}
+        };
+
+        confirmedDataMap.get(key)!.push(efficiencyData);
+      }
+
+      // 计算总数据条数
+      let totalDataCount = 0;
+      confirmedDataMap.forEach((dataArray) => {
+        totalDataCount += dataArray.length;
+      });
+
+    } catch (error) {
+      console.error('从数据库加载已确认任务数据失败:', error);
+    }
+    return confirmedDataMap;
   }
 
   // 将当前内存中的效率结果保存到后端 task_efficiency 表
@@ -1089,7 +1153,6 @@ export class EfficiencyCalcPage implements OnInit {
   private async autoConfirmOldTasks(silent: boolean = true): Promise<void> {
     // 防止重复调用导致的无限循环
     if (this.isAutoConfirming) {
-      console.log('[自动确认] 正在确认中，跳过重复调用');
       return;
     }
     
@@ -1158,16 +1221,12 @@ export class EfficiencyCalcPage implements OnInit {
         });
         
         // 计算所有任务（包括即将确认的任务）
-        console.log(`[自动确认] 准备计算 ${tasksToConfirm.length} 个待确认任务的数据`);
         await this.calculateAllCompletedPhases();
-        console.log(`[自动确认] 计算完成，当前 efficiencyData 数量: ${this.efficiencyData.length}`);
         
         // 恢复临时移除的确认标记
         tempRemovedKeys.forEach(key => {
           this.confirmedTasks.add(key);
         });
-      } else {
-        console.log(`[自动确认] 使用现有效率数据，当前 efficiencyData 数量: ${this.efficiencyData.length}`);
       }
       
       // 添加新确认的任务
@@ -1182,13 +1241,14 @@ export class EfficiencyCalcPage implements OnInit {
       // 保存已确认任务的数据到 localStorage
       this.saveConfirmedTasksData();
       
+      // 将确认状态保存到数据库
+      await this.saveEfficiencySnapshotsToBackend();
+      
       // 更新已确认任务数量
       this.confirmedTasksCount = this.confirmedTasks.size;
       
       if (!silent) {
         this.presentToast(`已自动确认 ${tasksToConfirm.length} 个7个工作日前的任务`);
-      } else {
-        console.log(`[自动确认] 已确认 ${tasksToConfirm.length} 个7个工作日前的任务`);
       }
     } catch (error) {
       console.error('自动确认任务失败:', error);
@@ -1372,46 +1432,81 @@ export class EfficiencyCalcPage implements OnInit {
     
     // 逐日计算异常时间段与工作时间的重叠
     const endOfLastDay = TimeUtils.createEndOfDay(phaseEnd);
+    const exceptionStartDate = TimeUtils.getLocalDateString(exceptionStartTime);
+    const exceptionEndDate = TimeUtils.getLocalDateString(exceptionEndTime);
     
     for (let d = new Date(phaseStart); d <= endOfLastDay; d.setDate(d.getDate() + 1)) {
       const currentDay = TimeUtils.getLocalDateString(d);
       
-      // 检查异常是否在这一天
-      const exceptionDate = TimeUtils.getLocalDateString(exceptionStartTime);
-      if (exceptionDate !== currentDay) continue;
+      // 检查异常时间段是否与当前日期有重叠
+      // 如果异常开始日期 > 当前日期，或者异常结束日期 < 当前日期，则跳过
+      if (exceptionStartDate > currentDay || exceptionEndDate < currentDay) {
+        continue;
+      }
+      
+      // 将异常时间段限缩到阶段时间内
+      const exceptionInPhaseStart = new Date(Math.max(exceptionStartTime.getTime(), phaseStart.getTime()));
+      const exceptionInPhaseEnd = new Date(Math.min(exceptionEndTime.getTime(), phaseEnd.getTime()));
+      
+      // 如果限缩后的时间段无效，跳过
+      if (exceptionInPhaseEnd <= exceptionInPhaseStart) {
+        continue;
+      }
       
       // 获取该日的工作窗口
       const workWindows = this.getWorkWindowsForDay(workTimeSettings, currentDay);
       
-      // 计算异常时间段与作息时间的重叠
+      // 计算异常时间段与作息时间的重叠（限缩到阶段时间内）
       workWindows.forEach(window => {
         const windowStart = TimeUtils.createLocalDateTime(currentDay, window.start);
         const windowEnd = TimeUtils.createLocalDateTime(currentDay, window.end);
         
+        // 将工作窗口限缩到阶段时间内
+        const limitedWindowStart = new Date(Math.max(windowStart.getTime(), phaseStart.getTime()));
+        const limitedWindowEnd = new Date(Math.min(windowEnd.getTime(), phaseEnd.getTime()));
+        
+        // 如果限缩后的窗口无效，跳过
+        if (limitedWindowEnd <= limitedWindowStart) {
+          return;
+        }
+        
+        // 计算限缩后的异常时间段与限缩后的工作窗口的重叠
         const overlap = TimeUtils.calculateOverlapHours(
-          exceptionStartTime,
-          exceptionEndTime,
-          windowStart,
-          windowEnd
+          exceptionInPhaseStart,
+          exceptionInPhaseEnd,
+          limitedWindowStart,
+          limitedWindowEnd
         );
         totalOverlapHours += overlap;
+        
       });
       
       // 获取该日的加班时段
       const overtimePeriods = this.getOvertimePeriodsForDay(attendanceRecords, currentDay);
       
-      // 计算异常时间段与加班时间的重叠
+      // 计算异常时间段与加班时间的重叠（限缩到阶段时间内）
       overtimePeriods.forEach(overtime => {
         const overtimeStart = TimeUtils.createLocalDateTime(currentDay, overtime.start);
         const overtimeEnd = TimeUtils.createLocalDateTime(currentDay, overtime.end);
         
+        // 将加班时段限缩到阶段时间内
+        const limitedOvertimeStart = new Date(Math.max(overtimeStart.getTime(), phaseStart.getTime()));
+        const limitedOvertimeEnd = new Date(Math.min(overtimeEnd.getTime(), phaseEnd.getTime()));
+        
+        // 如果限缩后的时段无效，跳过
+        if (limitedOvertimeEnd <= limitedOvertimeStart) {
+          return;
+        }
+        
+        // 计算限缩后的异常时间段与限缩后的加班时段的重叠
         const overlap = TimeUtils.calculateOverlapHours(
-          exceptionStartTime,
-          exceptionEndTime,
-          overtimeStart,
-          overtimeEnd
+          exceptionInPhaseStart,
+          exceptionInPhaseEnd,
+          limitedOvertimeStart,
+          limitedOvertimeEnd
         );
         totalOverlapHours += overlap;
+        
       });
     }
     
@@ -1503,37 +1598,27 @@ export class EfficiencyCalcPage implements OnInit {
       
       const allTasks: Task[] = tasksResponse || [];
       
-      // 在清空数据前，先保存已确认任务的数据到内存和 localStorage
-      const confirmedDataMap = new Map<string, EfficiencyData[]>();
-      if (this.efficiencyData.length > 0) {
-        this.efficiencyData.forEach(data => {
-          const key = this.getTaskConfirmKey(data.task.id, data.phase);
-          if (this.confirmedTasks.has(key)) {
-            if (!confirmedDataMap.has(key)) {
-              confirmedDataMap.set(key, []);
-            }
-            confirmedDataMap.get(key)!.push(data);
-          }
-        });
-        // 保存到 localStorage
-        this.saveConfirmedTasksData();
-      }
-      
-      // 从 localStorage 加载已确认任务的数据（如果内存中没有）
-      const savedConfirmedData = this.loadConfirmedTasksData();
-      console.log('从 localStorage 加载的已确认任务数据:', Object.keys(savedConfirmedData).length, '个任务');
-      console.log('已确认任务列表:', Array.from(this.confirmedTasks));
-      Object.keys(savedConfirmedData).forEach(key => {
-        if (!confirmedDataMap.has(key) && this.confirmedTasks.has(key)) {
-          confirmedDataMap.set(key, savedConfirmedData[key]);
-          console.log(`从 localStorage 恢复已确认任务数据: ${key}, 数据条数: ${savedConfirmedData[key].length}`);
-        } else if (!this.confirmedTasks.has(key)) {
-          console.log(`跳过未确认的任务数据: ${key}`);
-        } else if (confirmedDataMap.has(key)) {
-          console.log(`使用内存中的已确认任务数据: ${key}`);
-        }
+      // 直接优先从数据库加载已确认任务的数据（数据库是权威来源）
+      const confirmedDataMap = await this.loadConfirmedTasksDataFromDatabase();
+      // 更新 this.confirmedTasks 以确保一致性（基于数据库中的数据）
+      this.confirmedTasks.clear();
+      confirmedDataMap.forEach((dataArray, key) => {
+        this.confirmedTasks.add(key);
       });
-      console.log('已确认任务数据总数:', confirmedDataMap.size);
+      this.confirmedTasksCount = this.confirmedTasks.size;
+      
+      // 可选：将数据库数据同步到 localStorage 作为缓存（不作为数据源）
+      if (confirmedDataMap.size > 0) {
+        const confirmedDataForStorage: { [key: string]: EfficiencyData[] } = {};
+        confirmedDataMap.forEach((dataArray, key) => {
+          confirmedDataForStorage[key] = dataArray;
+        });
+        try {
+          localStorage.setItem('confirmedEfficiencyTasksData', JSON.stringify(confirmedDataForStorage));
+        } catch (e) {
+          console.error('同步已确认任务数据到 localStorage 失败:', e);
+        }
+      }
       
       // 批量加载所有任务的标准工时（在开始计算之前）
       await this.loadStandardHoursForTasks(allTasks);
@@ -1548,47 +1633,15 @@ export class EfficiencyCalcPage implements OnInit {
           const completedTasks = this.filterCompletedTasksByPhase(allTasks, phase);
           
           
-          // 检查任务846和1493是否在筛选结果中
-          const task846 = completedTasks.find(task => task.id === 846);
-          const task1493 = completedTasks.find(task => task.id === 1493);
-          if (task846) {
-            console.log(`✓ 任务846 (${task846.name}) 被筛选出来用于${this.getPhaseDisplayName(phase)}计算`);
-            console.log(`  机加负责人ID: ${task846.machining_assignee}`);
-            console.log(`  电气负责人ID: ${task846.electrical_assignee}`);
-          } else {
-            
-          }
-          if (task1493) {
-            console.log(`✓ 任务1493 (${task1493.name}) 被筛选出来用于${this.getPhaseDisplayName(phase)}计算`);
-            console.log(`  机加负责人ID: ${task1493.machining_assignee}`);
-            console.log(`  电气负责人ID: ${task1493.electrical_assignee}`);
-          } else {
-            
-          }
         
           for (const task of completedTasks) {
             try {
               // 检查任务是否已确认，如果已确认则跳过计算（会在后面统一恢复）
               const confirmKey = this.getTaskConfirmKey(task.id, phase);
               if (this.confirmedTasks.has(confirmKey) && confirmedDataMap.has(confirmKey)) {
-                console.log(`任务${task.id}的${phase}阶段已确认，跳过计算，将使用缓存数据`);
                 continue;
               }
               
-              // 特别跟踪任务846和1493
-              if (task.id === 846 || task.id === 1493) {
-                console.log(`开始处理任务${task.id} (${task.name}) 的 ${phase} 阶段效率计算`);
-              }
-              
-              // 特别跟踪任务1421
-              if (task.id === 1421) {
-                console.log(`=== 任务1421负责人信息调试 ===`);
-                console.log(`任务ID: ${task.id}`);
-                console.log(`任务名称: ${task.name}`);
-                console.log(`当前阶段: ${phase}`);
-                console.log(`machining_assignee: ${task.machining_assignee}`);
-                console.log(`electrical_assignee: ${task.electrical_assignee}`);
-              }
               
               // 获取任务负责人ID
               let taskAssigneeId: number | null = null;
@@ -1606,21 +1659,12 @@ export class EfficiencyCalcPage implements OnInit {
               
               // 如果阶段负责人为空，跳过此任务
               if (!taskAssigneeId) {
-                console.log(`任务${task.id}没有分配阶段负责人，跳过`);
                 continue;
-              }
-              
-              // 特别跟踪任务1421的最终负责人ID
-              if (task.id === 1421) {
-                console.log(`任务1421最终使用的负责人ID: ${taskAssigneeId}`);
               }
               
               const workReportsResponse = await this.http.get<any>(`${base}/api/work-reports/by-task/${task.id}`).toPromise();
               const workReports: WorkReport[] = workReportsResponse || [];
               
-              if (task.id === 846 || task.id === 1493) {
-                console.log(`任务${task.id}的报工记录数量: ${workReports.length}`);
-              }
               
               const exceptionResponse = await this.http.get<any>(`${base}/api/exception-reports/by-task/${task.id}`).toPromise();
               const rawExceptionReports = exceptionResponse || [];
@@ -1631,24 +1675,12 @@ export class EfficiencyCalcPage implements OnInit {
                 phase: report.phase ?? ''
               }));
               
-              if (task.id === 846 || task.id === 1493) {
-                console.log(`任务${task.id}的异常报告数量: ${exceptionReports.length}`);
-                console.log(`任务${task.id}的异常报告详情:`, exceptionReports.map(ex => ({
-                  id: ex.id,
-                  phase: ex.phase,
-                  exception_type: ex.exception_type,
-                  user_name: ex.user_name,
-                  duration_hours: ex.duration_hours,
-                  status: ex.status
-                })));
-              }
               
               // 获取阶段时间范围内的考勤记录
               const phaseStartTime = this.getPhaseStartTime(task, phase);
               const phaseEndTime = this.getPhaseEndTime(task, phase);
               
               if (!phaseStartTime || !phaseEndTime) {
-                console.log(`任务${task.id}的${phase}阶段时间不完整，跳过`);
                 continue;
               }
               
@@ -1666,35 +1698,9 @@ export class EfficiencyCalcPage implements OnInit {
               const attendanceResponse = await this.http.get<any>(apiUrl).toPromise();
               const allAttendanceRecords = attendanceResponse?.list || [];
               
-              if (task.id === 846) {
-                console.log(`任务846的考勤记录总数: ${allAttendanceRecords.length}`);
-              }
-              
               const taskEfficiencyData = await this.calculateTaskEfficiencyWithAttendance(
                 task, workReports, exceptionReports, allAttendanceRecords, phase
               );
-              
-              if (task.id === 846) {
-                console.log(`任务846的效率数据数量: ${taskEfficiencyData.length}`);
-                if (taskEfficiencyData.length > 0) {
-                  console.log(`任务846的效率数据:`, taskEfficiencyData[0]);
-                }
-              }
-              
-              // 任务182详细调试
-              if (task.id === 182) {
-                console.log(`\n========== 任务182效率计算详细过程 ==========`);
-                console.log(`阶段: ${phase}`);
-                console.log(`负责人ID: ${taskAssigneeId}`);
-                console.log(`报工记录数量: ${workReports.length}`);
-                console.log(`异常报告数量: ${exceptionReports.length}`);
-                console.log(`考勤记录总数: ${allAttendanceRecords.length}`);
-                console.log(`效率数据数量: ${taskEfficiencyData.length}`);
-                if (taskEfficiencyData.length > 0) {
-                  console.log(`效率数据详情:`, JSON.stringify(taskEfficiencyData[0], null, 2));
-                }
-                console.log(`==========================================\n`);
-              }
               
               this.efficiencyData.push(...taskEfficiencyData);
             } catch (error) {
@@ -1711,28 +1717,65 @@ export class EfficiencyCalcPage implements OnInit {
         }
       }
       
-      // 恢复已确认任务的数据（保留之前计算的结果，不再重新计算）
+      // 恢复已确认任务的数据（直接从数据库加载的数据中恢复）
       let restoredCount = 0;
+      let skippedRestoreCount = 0;
+      const skippedRestoreKeys: string[] = [];
+      const restoredKeys: string[] = [];
+      
+      // 为已确认的任务阶段加载异常报告
+      const exceptionReportsPromises: Promise<void>[] = [];
+      
       confirmedDataMap.forEach((dataArray, key) => {
-        // 只要任务已确认，就保留数据（不管是否还是7个工作日前的）
+        // 检查是否已经存在相同的数据（防止重复添加）
         const [taskIdStr, phase] = key.split('_');
         const taskId = parseInt(taskIdStr, 10);
-        if (this.isTaskConfirmed(taskId, phase)) {
-          // 检查是否已经存在相同的数据（防止重复添加）
-          const existingData = this.efficiencyData.find(data => 
-            data.task.id === taskId && data.phase === phase
-          );
-          if (!existingData) {
-            // 任务已确认，且不存在重复数据，才添加
-            this.efficiencyData.push(...dataArray);
-            restoredCount += dataArray.length;
-            console.log(`恢复已确认任务 ${key} 的数据，${dataArray.length} 条`);
-          } else {
-            console.log(`已确认任务 ${key} 的数据已存在，跳过恢复（避免重复）`);
-          }
+        const existingData = this.efficiencyData.find(data => 
+          data.task.id === taskId && data.phase === phase
+        );
+        
+        if (!existingData) {
+          // 从数据库加载的数据中恢复
+          this.efficiencyData.push(...dataArray);
+          restoredCount += dataArray.length;
+          restoredKeys.push(key);
+          
+          // 为每个恢复的数据加载异常报告
+          dataArray.forEach(data => {
+            const loadExceptionReportsPromise = (async () => {
+              try {
+                const exceptionResponse = await this.http.get<any>(`${base}/api/exception-reports/by-task/${data.task.id}`).toPromise();
+                const rawExceptionReports = exceptionResponse || [];
+                const exceptionReports: ExceptionReport[] = rawExceptionReports.map((report: any) => ({
+                  ...report,
+                  phase: report.phase ?? ''
+                }));
+                
+                // 筛选属于当前阶段的异常报告
+                const phaseExceptions = exceptionReports.filter(ex => {
+                  const exceptionPhase = ex.phase || '';
+                  return exceptionPhase === data.phase || !exceptionPhase;
+                });
+                
+                // 将异常报告添加到数据中
+                data.exceptionReports.push(...phaseExceptions);
+              } catch (error) {
+                console.error(`加载任务${data.task.id}的异常报告失败:`, error);
+              }
+            })();
+            exceptionReportsPromises.push(loadExceptionReportsPromise);
+          });
+        } else {
+          skippedRestoreCount += dataArray.length;
+          skippedRestoreKeys.push(key);
         }
       });
-      console.log(`总共恢复了 ${restoredCount} 条已确认任务的数据`);
+      
+      // 等待所有异常报告加载完成
+      if (exceptionReportsPromises.length > 0) {
+        await Promise.all(exceptionReportsPromises);
+      }
+      
       
       // 保存已确认任务的数据到 localStorage（确保数据持久化）
       if (confirmedDataMap.size > 0) {
@@ -1740,25 +1783,30 @@ export class EfficiencyCalcPage implements OnInit {
       }
       
       // 全局去重：移除重复的任务-阶段组合
+      const beforeDedupCount = this.efficiencyData.length;
       const uniqueDataMap = new Map<string, EfficiencyData>();
       const duplicateCount = { count: 0 };
+      const duplicateKeys: string[] = [];
+      
       this.efficiencyData.forEach(data => {
         const key = `${data.task.id}_${data.phase}`;
         if (uniqueDataMap.has(key)) {
           duplicateCount.count++;
-          console.log(`发现重复数据: 任务${data.task.id}的${data.phase}阶段，已移除重复项`);
+          if (!duplicateKeys.includes(key)) {
+            duplicateKeys.push(key);
+          }
         } else {
           uniqueDataMap.set(key, data);
         }
       });
       
       if (duplicateCount.count > 0) {
-        console.log(`去重完成: 移除了 ${duplicateCount.count} 条重复数据`);
         this.efficiencyData = Array.from(uniqueDataMap.values());
       }
 
       // 将当前效率结果落库到后端（task_efficiency），区分已确认 / 未确认
       await this.saveEfficiencySnapshotsToBackend();
+      
       
     } catch (error) {
       console.error('统计效率失败:', error);
@@ -1796,19 +1844,6 @@ export class EfficiencyCalcPage implements OnInit {
       
       const allTasks: Task[] = tasksResponse || [];
       
-      // 添加调试信息
-      console.log(`获取到的任务总数: ${allTasks.length}`);
-      const task1493 = allTasks.find(task => task.id === 1493);
-      if (task1493) {
-        console.log(`任务1493在任务列表中:`, {
-          id: task1493.id,
-          name: task1493.name,
-          machining_start_time: task1493.machining_start_time,
-          machining_complete_time: task1493.machining_complete_time
-        });
-      } else {
-        console.log(`任务1493不在任务列表中`);
-      }
       
       // 筛选今天以前已完成指定阶段的任务
       const completedTasks = this.filterCompletedTasksByPhase(allTasks, this.selectedPhase);
@@ -1856,7 +1891,6 @@ export class EfficiencyCalcPage implements OnInit {
         }
       });
       
-      console.log(`已确认任务: ${confirmedTasks.length} 个，未确认任务: ${unconfirmedTasks.length} 个`);
       
       // 初始化效率数据数组
       this.efficiencyData = [];
@@ -1867,7 +1901,7 @@ export class EfficiencyCalcPage implements OnInit {
         const cachedData = confirmedDataMap.get(key);
         if (cachedData) {
           this.efficiencyData.push(...cachedData);
-          console.log(`使用缓存数据: 任务${task.id}的${this.selectedPhase}阶段`);
+          
         }
       });
       
@@ -1880,12 +1914,10 @@ export class EfficiencyCalcPage implements OnInit {
           batches.push(unconfirmedTasks.slice(i, i + batchSize));
         }
         
-        console.log(`需要重新计算的任务: ${unconfirmedTasks.length}个，分为${batches.length}批处理，每批${batchSize}个任务`);
         
         // 逐批处理
         for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
           const batch = batches[batchIndex];
-          console.log(`正在处理第 ${batchIndex + 1}/${batches.length} 批，包含 ${batch.length} 个任务`);
           
           // 并行处理当前批次的所有任务
           const batchPromises = batch.map(async (task) => {
@@ -1906,7 +1938,6 @@ export class EfficiencyCalcPage implements OnInit {
             
             // 如果阶段负责人为空，跳过此任务
             if (!taskAssigneeId) {
-              console.log(`任务${task.id}没有分配阶段负责人，跳过`);
               return [];
             }
             
@@ -1962,21 +1993,6 @@ export class EfficiencyCalcPage implements OnInit {
             
             const allAttendanceRecords: any[] = attendanceResponse || [];
             
-            // 添加调试信息
-            if (task.id === 1493) {
-              console.log(`任务1493考勤记录获取调试:`, {
-                phaseStartTime: this.getPhaseStartTime(task, this.selectedPhase),
-                phaseEndTime: this.getPhaseEndTime(task, this.selectedPhase),
-                attendanceRecordsCount: allAttendanceRecords.length,
-                attendanceRecords: allAttendanceRecords.map(rec => ({
-                  id: rec.id,
-                  user_id: rec.user_id,
-                  date: rec.date,
-                  actual_hours: rec.actual_hours,
-                  is_confirmed: rec.is_confirmed
-                }))
-              });
-            }
             
             // 统计该任务的效率
             const taskEfficiencyData = await this.calculateTaskEfficiencyWithAttendance(
@@ -2006,10 +2022,8 @@ export class EfficiencyCalcPage implements OnInit {
         // 批次之间不再添加延迟，连续处理以提高性能
       }
       } else {
-        console.log(`所有任务都已确认，直接使用缓存数据，无需重新计算`);
       }
       
-      console.log(`效率统计完成，共 ${this.efficiencyData.length} 条效率数据（其中 ${confirmedTasks.length} 个任务使用缓存，${unconfirmedTasks.length} 个任务重新计算）`);
       
       // 全局去重：移除重复的任务-阶段组合
       const uniqueDataMap = new Map<string, EfficiencyData>();
@@ -2018,16 +2032,13 @@ export class EfficiencyCalcPage implements OnInit {
         const key = `${data.task.id}_${data.phase}`;
         if (uniqueDataMap.has(key)) {
           duplicateCount.count++;
-          console.log(`发现重复数据: 任务${data.task.id}的${data.phase}阶段，已移除重复项`);
         } else {
           uniqueDataMap.set(key, data);
         }
       });
       
       if (duplicateCount.count > 0) {
-        console.log(`去重完成: 移除了 ${duplicateCount.count} 条重复数据`);
         this.efficiencyData = Array.from(uniqueDataMap.values());
-        console.log(`去重后剩余 ${this.efficiencyData.length} 条效率数据`);
       }
       
     } catch (error) {
@@ -2066,68 +2077,15 @@ export class EfficiencyCalcPage implements OnInit {
     
     // 如果阶段负责人为空，返回空结果
     if (!taskAssigneeId) {
-      console.log(`任务${task.id}没有分配阶段负责人，无法计算效率`);
       return [];
     }
     
-    // 特别调试日志仅在调试模式下输出
-    if (EfficiencyCalcPage.DEBUG) {
-      if (task.id === 846) {
-        console.log(`任务846进入calculateTaskEfficiencyWithAttendance方法，阶段: ${phase}`);
-      }
-      
-      // 任务182详细调试
-      if (task.id === 182) {
-        console.log(`\n--- 任务182进入calculateTaskEfficiencyWithAttendance方法 ---`);
-        console.log(`阶段: ${phase}`);
-        console.log(`任务负责人ID: ${taskAssigneeId}`);
-        console.log(`报工记录数量: ${workReports.length}`);
-        console.log(`异常报告数量: ${exceptionReports.length}`);
-        console.log(`考勤记录总数: ${allAttendanceRecords.length}`);
-      }
-    }
 
-    // 任务622 + 工人175 专门调试：入口概况（仅在调试模式下输出）
-    if (EfficiencyCalcPage.DEBUG && task.id === 622 && taskAssigneeId === 175) {
-      console.log('=== 任务622 / 工人175 效率调试(入口) ===', {
-        phase,
-        taskId: task.id,
-        assigneeId: taskAssigneeId,
-        workReportsCount: workReports.length,
-        rawExceptionReportsCount: exceptionReports.length,
-        allAttendanceRecordsCount: allAttendanceRecords.length
-      });
-    }
     
     // 获取阶段开始和结束时间
     const phaseStartTime = this.getPhaseStartTime(task, phase);
     const phaseEndTime = this.getPhaseEndTime(task, phase);
     
-    if (EfficiencyCalcPage.DEBUG) {
-      if (task.id === 846) {
-        console.log(`任务846的阶段时间 - 开始: ${phaseStartTime}, 结束: ${phaseEndTime}`);
-      }
-      
-      // 任务182阶段时间调试
-      if (task.id === 182) {
-        console.log(`任务182的阶段时间 - 开始: ${phaseStartTime}, 结束: ${phaseEndTime}`);
-      }
-      
-      // 添加任务1493的调试日志
-      if (task.id === 1493) {
-        console.log(`任务1493的阶段时间 - 开始: ${phaseStartTime}, 结束: ${phaseEndTime}`);
-        console.log(`任务1493原始数据 - machining_start_time: ${task.machining_start_time}, machining_complete_time: ${task.machining_complete_time}`);
-      }
-    }
-
-    // 任务622 + 工人175：检查阶段时间是否完整（仅在调试模式下输出）
-    if (EfficiencyCalcPage.DEBUG && task.id === 622 && taskAssigneeId === 175) {
-      console.log('=== 任务622 / 工人175 阶段时间 ===', {
-        phase,
-        phaseStartTime,
-        phaseEndTime
-      });
-    }
     
     
     // 获取已批准的异常报告
@@ -2161,31 +2119,8 @@ export class EfficiencyCalcPage implements OnInit {
       }
     });
     const allExceptionReports = Array.from(allExceptionReportsMap.values());
-
-    // 任务622 + 工人175：观察合并后的异常列表（仅在调试模式下输出）
-    if (EfficiencyCalcPage.DEBUG && task.id === 622 && taskAssigneeId === 175) {
-      console.log('=== 任务622 / 工人175 合并后所有异常 ===', {
-        phase,
-        total: allExceptionReports.length,
-        byTaskCount: exceptionReports.length,
-        approvedCount: approvedExceptionReports.length,
-        list: allExceptionReports.map(ex => ({
-          id: ex.id,
-          user_id: ex.user_id,
-          phase: ex.phase,
-          status: ex.status,
-          duration_hours: ex.duration_hours,
-          start_time: ex.start_time || ex.exception_start_datetime,
-          end_time: ex.end_time || ex.exception_end_datetime
-        }))
-      });
-    }
     
     if (!phaseStartTime || !phaseEndTime) {
-      console.log(`任务 ${task.id} 的 ${phase} 阶段缺少时间数据，跳过计算`);
-      if (task.id === 846) {
-        console.log(`任务846被跳过，原因：缺少时间数据`);
-      }
       return [];
     }
     
@@ -2201,26 +2136,19 @@ export class EfficiencyCalcPage implements OnInit {
     if (!taskAssigneeId && allAttendanceRecords.length > 0) {
       taskAssigneeId = allAttendanceRecords[0].user_id;
       if (task.id === 846) {
-        console.log(`任务846使用默认用户ID: ${taskAssigneeId}`);
       }
     }
     
     if (task.id === 846) {
-      console.log(`任务846的分配信息检查:`);
-      console.log(`  machining_assignee: ${task.machining_assignee}`);
-      console.log(`  electrical_assignee: ${task.electrical_assignee}`);
-      console.log(`  最终使用的taskAssigneeId: ${taskAssigneeId}`);
     }
     
     if (!taskAssigneeId) {
       if (task.id === 846) {
-        console.log(`任务846被跳过：没有找到负责人ID`);
       }
       return [];
     }
     
     if (task.id === 846) {
-      console.log(`任务846最终使用的负责人ID: ${taskAssigneeId}`);
     }
     
     // 筛选该员工在阶段期间的考勤记录
@@ -2232,30 +2160,8 @@ export class EfficiencyCalcPage implements OnInit {
     );
     
     if (task.id === 846) {
-      console.log(`任务846的考勤记录筛选结果:`, attendanceRecords);
-      console.log(`任务846筛选到的考勤记录数量: ${attendanceRecords.length}`);
     }
     
-    // 特别调试任务1421的考勤记录
-    if (task.id === 1421) {
-      console.log(`=== 任务1421考勤记录调试 ===`);
-      console.log(`API返回的原始考勤记录数量: ${allAttendanceRecords.length}`);
-      console.log(`API返回的原始考勤记录:`, allAttendanceRecords.map(rec => ({
-        id: rec.id,
-        user_id: rec.user_id,
-        date: rec.date,
-        actual_hours: rec.actual_hours,
-        is_confirmed: rec.is_confirmed
-      })));
-      console.log(`筛选后的考勤记录数量: ${attendanceRecords.length}`);
-      console.log(`筛选后的考勤记录详情:`, attendanceRecords.map(rec => ({
-        id: rec.id,
-        user_id: rec.user_id,
-        date: rec.date,
-        actual_hours: rec.actual_hours,
-        is_confirmed: rec.is_confirmed
-      })));
-    }
     
     // 获取工作时段设置
     const workTimeSettings = await this.loadWorkTimeSettings();
@@ -2290,39 +2196,6 @@ export class EfficiencyCalcPage implements OnInit {
     const actualWorkHours = workHoursResult.totalHours;
     const dailyCalculations = workHoursResult.dailyCalculations;
     
-    if (task.id === 846) {
-      console.log(`任务846的实际工作小时数: ${actualWorkHours}`);
-      console.log('阶段总时间对比(考勤 vs 日历):', {
-        phase,
-        actualWorkHours,
-        totalCalendarHours
-      });
-    }
-    
-    // 任务182实际工作小时调试
-    if (task.id === 182) {
-      console.log(`\n--- 任务182实际工作小时计算结果 ---`);
-      console.log(`实际工作小时总数: ${actualWorkHours}`);
-      console.log(`日历总小时数: ${totalCalendarHours}`);
-      console.log(`逐日计算详情:`, JSON.stringify(dailyCalculations, null, 2));
-      console.log(`考勤记录详情:`, attendanceRecords.map(rec => ({
-        date: rec.date,
-        actual_hours: rec.actual_hours,
-        standard_attendance_hours: rec.standard_attendance_hours,
-        overtime_hours: rec.overtime_hours,
-        leave_hours: rec.leave_hours,
-        exception_minutes: rec.exception_minutes,
-        is_confirmed: rec.is_confirmed
-      })));
-      console.log(`异常报告详情:`, allExceptionReports.map(ex => ({
-        id: ex.id,
-        start_time: ex.start_time,
-        end_time: ex.end_time,
-        duration_hours: ex.duration_hours,
-        status: ex.status,
-        phase: ex.phase
-      })));
-    }
     
     // 确保为当前阶段创建效率数据，即使没有报工记录
     if (!efficiencyMap.has(phase)) {
@@ -2358,36 +2231,16 @@ export class EfficiencyCalcPage implements OnInit {
       }
     });
     
-    // 添加异常时间
-    if (task.id === 1493) {
-      console.log(`任务1493的异常报告筛选调试:`, {
-        phase,
-        allExceptionReportsCount: allExceptionReports.length,
-        allExceptionReports: allExceptionReports.map(ex => ({
-          id: ex.id,
-          phase: ex.phase,
-          exception_type: ex.exception_type,
-          user_name: ex.user_name,
-          duration_hours: ex.duration_hours
-        }))
-      });
-    }
     
     // 先收集所有属于该阶段的异常报告（去重）
     const phaseExceptionReportsMap = new Map<number, ExceptionReport>();
     for (const exception of allExceptionReports) {
-      const exceptionPhase = exception.phase;
+      const exceptionPhase = exception.phase || '';
       
-      if (task.id === 1493) {
-        console.log(`任务1493异常报告检查:`, {
-          exceptionId: exception.id,
-          exceptionPhase,
-          targetPhase: phase,
-          matches: exceptionPhase === phase
-        });
-      }
       
-      if (exceptionPhase === phase && efficiencyMap.has(phase)) {
+      
+      // 如果异常报告的phase与当前阶段匹配，或者phase为空（兼容旧数据），则添加到列表
+      if ((exceptionPhase === phase || !exceptionPhase) && efficiencyMap.has(phase)) {
         // 基于ID去重
         if (!phaseExceptionReportsMap.has(exception.id)) {
           phaseExceptionReportsMap.set(exception.id, exception);
@@ -2395,10 +2248,40 @@ export class EfficiencyCalcPage implements OnInit {
       }
     }
     
+    
     // 对每个阶段的异常报告进行处理
     if (phaseExceptionReportsMap.size > 0 && efficiencyMap.has(phase)) {
       const efficiency = efficiencyMap.get(phase)!;
       const phaseExceptions = Array.from(phaseExceptionReportsMap.values());
+      
+      // 先计算每个异常的实际时间（用于显示）
+      phaseExceptions.forEach(exception => {
+        const startTime = exception.start_time || exception.exception_start_datetime;
+        const endTime = exception.end_time || exception.exception_end_datetime;
+        
+        if (startTime && endTime) {
+          // 计算该异常时间段与阶段时间、工作时间的重叠
+          exception.calculated_hours = this.calculateExceptionOverlapHours(
+            startTime,
+            endTime,
+            phaseStartTime,
+            phaseEndTime,
+            workTimeSettings,
+            attendanceRecords
+          );
+        } else if (exception.duration_hours) {
+          // 如果没有时间段但有duration_hours，使用原值
+          if (typeof exception.duration_hours === 'number') {
+            exception.calculated_hours = exception.duration_hours;
+          } else {
+            const parsed = parseFloat(exception.duration_hours);
+            exception.calculated_hours = isNaN(parsed) ? 0 : parsed;
+          }
+        } else {
+          exception.calculated_hours = 0;
+        }
+      });
+      
       
       // 将所有异常报告添加到列表中（用于显示）
       efficiency.exceptionReports.push(...phaseExceptions);
@@ -2442,18 +2325,6 @@ export class EfficiencyCalcPage implements OnInit {
       });
       
       efficiency.exceptionHours = totalExceptionHours;
-      
-      if (task.id === 1493) {
-        console.log(`任务1493异常报告处理完成:`, {
-          exceptionCount: phaseExceptions.length,
-          mergedPeriodsCount: mergedPeriods.length,
-          totalExceptionHours: efficiency.exceptionHours,
-          mergedPeriods: mergedPeriods.map(p => ({
-            start: p.start.toISOString(),
-            end: p.end.toISOString()
-          }))
-        });
-      }
     }
     
     // 查询协助记录（该用户在该阶段时间范围内协助其他任务/其他阶段的记录）
@@ -2525,27 +2396,6 @@ export class EfficiencyCalcPage implements OnInit {
       // 设置协助时间和标记
       efficiency.assistHours = totalAssistHours;
       efficiency.hasAssistTasks = hasAssistTasks;
-      
-      // 调试异常时长计算
-      if (task.id === 1493) {
-        console.log(`任务1493异常时长计算调试:`, {
-          taskId: task.id,
-          phase: phase,
-          exceptionReportsCount: efficiency.exceptionReports.length,
-          exceptionHours: efficiency.exceptionHours,
-          assistHours: efficiency.assistHours,
-          exceptionHoursType: typeof efficiency.exceptionHours,
-          isNaN: isNaN(efficiency.exceptionHours),
-          exceptionReports: efficiency.exceptionReports.map(ex => ({
-            id: ex.id,
-            duration_hours: ex.duration_hours,
-            duration_hours_type: typeof ex.duration_hours,
-            parsed: typeof ex.duration_hours === 'number' ? 
-              ex.duration_hours : 
-              parseFloat(ex.duration_hours) || 0
-          }))
-        });
-      }
       
       // 效率 = 标准工时 / (实际工作小时数 - 异常时间 - 协助时间)
       const effectiveHours = efficiency.actualWorkHours - efficiency.exceptionHours - efficiency.assistHours;
@@ -2985,8 +2835,9 @@ export class EfficiencyCalcPage implements OnInit {
       return 0;
     }
     
-    const start = new Date(startTime);
-    const end = new Date(endTime);
+    // 使用TimeUtils统一处理时间转换，确保时区处理一致
+    const start = TimeUtils.utcToLocalDate(startTime);
+    const end = TimeUtils.utcToLocalDate(endTime);
     
     // 检查Date对象是否有效
     if (isNaN(start.getTime()) || isNaN(end.getTime())) {
@@ -3156,9 +3007,27 @@ export class EfficiencyCalcPage implements OnInit {
     phaseEndTime: string, 
     workTimeSettings: any,
     exceptionReports: ExceptionReport[]
-  ): Promise<{ totalHours: number; dailyCalculations: { [date: string]: { totalHours: number; effectiveHours: number; } } }> {
+  ): Promise<{ totalHours: number; dailyCalculations: { [date: string]: { 
+    totalHours: number; 
+    effectiveHours: number; 
+    workWindowOverlap?: number;
+    overtimeOverlap?: number;
+    leaveDeduction?: number;
+    exceptionDeduction?: number;
+    attendanceLimit?: number;
+    finalHours?: number;
+  } } }> {
     let totalEffectiveHours = 0;
-    const dailyCalculations: { [date: string]: { totalHours: number; effectiveHours: number; } } = {};
+    const dailyCalculations: { [date: string]: { 
+      totalHours: number; 
+      effectiveHours: number; 
+      workWindowOverlap?: number;
+      overtimeOverlap?: number;
+      leaveDeduction?: number;
+      exceptionDeduction?: number;
+      attendanceLimit?: number;
+      finalHours?: number;
+    } } = {};
     
     // 使用TimeUtils统一处理时间转换
     const start = TimeUtils.utcToLocalDate(phaseStartTime);
@@ -3367,90 +3236,17 @@ export class EfficiencyCalcPage implements OnInit {
       // 5. 取最小值：计算出的重叠时间 vs 实际出勤时间
       const effectiveHours = Math.min(dayPhaseOverlapHours, actualAttendanceHours);
       
-      // 任务182的逐日计算详细调试（针对2025-10-20）
-      if (currentDay === '2025-10-20') {
-        console.log(`\n========== 任务182 - 2025-10-20 逐日计算详情 ==========`);
-        console.log(`阶段时间范围: ${start.toLocaleString('zh-CN')} - ${end.toLocaleString('zh-CN')}`);
-        console.log(`当日考勤记录:`, {
-          date: dayAttendance.date,
-          actual_hours: dayAttendance.actual_hours,
-          standard_attendance_hours: dayAttendance.standard_attendance_hours,
-          overtime_hours: dayAttendance.overtime_hours,
-          overtime_start_time: dayAttendance.overtime_start_time,
-          overtime_end_time: dayAttendance.overtime_end_time,
-          leave_hours: dayAttendance.leave_hours,
-          leave_start_time: dayAttendance.leave_start_time,
-          leave_end_time: dayAttendance.leave_end_time,
-          exception_minutes: dayAttendance.exception_minutes
-        });
-        console.log(`工作窗口数量: ${workWindows.length}`);
-        workWindows.forEach((window, idx) => {
-          const windowStart = TimeUtils.createLocalDateTime(currentDay, window.start);
-          const windowEnd = TimeUtils.createLocalDateTime(currentDay, window.end);
-          const overlap = TimeUtils.calculateOverlapHours(windowStart, windowEnd, start, end);
-          console.log(`  窗口${idx + 1}: ${window.start}-${window.end}, 与阶段重叠: ${overlap.toFixed(4)}小时`);
-        });
-        console.log(`加班时段数量: ${overtimePeriods.length}`);
-        overtimePeriods.forEach((overtime, idx) => {
-          const overtimeStart = TimeUtils.createLocalDateTime(currentDay, overtime.start);
-          const overtimeEnd = TimeUtils.createLocalDateTime(currentDay, overtime.end);
-          const overlap = TimeUtils.calculateOverlapHours(overtimeStart, overtimeEnd, start, end);
-          console.log(`  加班${idx + 1}: ${overtime.start}-${overtime.end}, 与阶段重叠: ${overlap.toFixed(4)}小时`);
-        });
-        console.log(`请假时段数量: ${leavePeriods.length}`);
-        leavePeriods.forEach((leave, idx) => {
-          console.log(`  请假${idx + 1}: ${leave.start}-${leave.end}`);
-        });
-        console.log(`异常时段数量: ${exceptionPeriods.length}`);
-        exceptionPeriods.forEach((exception, idx) => {
-          console.log(`  异常${idx + 1}: ${exception.start}-${exception.end}`);
-          // 显示异常时段与各窗口的重叠详情
-          const exceptionStart = new Date(`${currentDay}T${exception.start}`);
-          const exceptionEnd = new Date(`${currentDay}T${exception.end}`);
-          const exceptionInPhaseStart = new Date(Math.max(exceptionStart.getTime(), start.getTime()));
-          const exceptionInPhaseEnd = new Date(Math.min(exceptionEnd.getTime(), end.getTime()));
-          console.log(`    异常时段限缩到阶段内: ${exceptionInPhaseStart.toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'})}-${exceptionInPhaseEnd.toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'})}`);
-          workWindows.forEach((window, wIdx) => {
-            const windowStart = TimeUtils.createLocalDateTime(currentDay, window.start);
-            const windowEnd = TimeUtils.createLocalDateTime(currentDay, window.end);
-            const limitedWindowStart = new Date(Math.max(windowStart.getTime(), start.getTime()));
-            const limitedWindowEnd = new Date(Math.min(windowEnd.getTime(), end.getTime()));
-            if (limitedWindowEnd > limitedWindowStart) {
-              const overlap = TimeUtils.calculateOverlapHours(exceptionInPhaseStart, exceptionInPhaseEnd, limitedWindowStart, limitedWindowEnd);
-              if (overlap > 0) {
-                console.log(`      与工作窗口${wIdx + 1}(${window.start}-${window.end})重叠: ${overlap.toFixed(4)}小时`);
-              }
-            }
-          });
-          overtimePeriods.forEach((overtime, otIdx) => {
-            const overtimeStart = TimeUtils.createLocalDateTime(currentDay, overtime.start);
-            const overtimeEnd = TimeUtils.createLocalDateTime(currentDay, overtime.end);
-            const limitedOvertimeStart = new Date(Math.max(overtimeStart.getTime(), start.getTime()));
-            const limitedOvertimeEnd = new Date(Math.min(overtimeEnd.getTime(), end.getTime()));
-            if (limitedOvertimeEnd > limitedOvertimeStart) {
-              const overlap = TimeUtils.calculateOverlapHours(exceptionInPhaseStart, exceptionInPhaseEnd, limitedOvertimeStart, limitedOvertimeEnd);
-              if (overlap > 0) {
-                console.log(`      与加班时段${otIdx + 1}(${overtime.start}-${overtime.end})重叠: ${overlap.toFixed(4)}小时`);
-              }
-            }
-          });
-        });
-        console.log(`计算步骤:`);
-        console.log(`  1. 作息窗口与阶段重叠总和: ${initialWorkWindowHours.toFixed(4)}小时`);
-        console.log(`  2. 加班时段与阶段重叠总和: ${overtimeOverlapTotal.toFixed(4)}小时`);
-        console.log(`  3. 加上加班后总计: ${beforeLeaveHours.toFixed(4)}小时`);
-        console.log(`  4. 扣除请假: -${leaveDeductionTotal.toFixed(4)}小时，剩余: ${beforeExceptionHours.toFixed(4)}小时`);
-        console.log(`  5. 异常时间重叠: ${exceptionDeductionTotal.toFixed(4)}小时（仅记录，不扣除）`);
-        console.log(`  6. 扣除异常后剩余: ${Math.max(0, dayPhaseOverlapHours).toFixed(4)}小时（与第4步相同，因为不扣除异常）`);
-        console.log(`  7. 实际出勤小时: ${actualAttendanceHours}`);
-        console.log(`  8. 最终有效小时(取较小值): ${effectiveHours}`);
-        console.log(`==================================================\n`);
-      }
       
-      // 存储单日计算详情
+      // 存储单日计算详情（包含详细分解数据）
       dailyCalculations[currentDay] = {
         totalHours: dayPhaseOverlapHours, // 单日与阶段的重叠时长
-        effectiveHours: effectiveHours    // 单日有效工时
+        effectiveHours: effectiveHours,    // 单日有效工时
+        workWindowOverlap: initialWorkWindowHours, // 作息时间重叠
+        overtimeOverlap: overtimeOverlapTotal, // 加班时间重叠
+        leaveDeduction: leaveDeductionTotal, // 请假扣除
+        exceptionDeduction: exceptionDeductionTotal, // 异常扣除（仅记录，不扣除）
+        attendanceLimit: actualAttendanceHours, // 实际出勤时间限制
+        finalHours: effectiveHours // 最终有效工时
       };
       
       totalEffectiveHours += effectiveHours;
@@ -3502,9 +3298,7 @@ export class EfficiencyCalcPage implements OnInit {
             start: record.overtime_start_time, 
             end: record.overtime_end_time 
           });
-          console.log(`使用实际加班时间段: ${record.overtime_start_time}-${record.overtime_end_time}`);
         } else if (record.overtime_hours && parseFloat(record.overtime_hours) > 0) {
-          console.log(`警告: 用户${record.user_id}在${dateStr}有${record.overtime_hours}小时加班，但未设置具体时间段，跳过计算`);
         }
       }
     });
@@ -3526,9 +3320,7 @@ export class EfficiencyCalcPage implements OnInit {
             start: record.leave_start_time, 
             end: record.leave_end_time 
           });
-          console.log(`使用实际请假时间段: ${record.leave_start_time}-${record.leave_end_time}`);
         } else if (record.leave_hours && parseFloat(record.leave_hours) > 0) {
-          console.log(`警告: 用户${record.user_id}在${dateStr}有${record.leave_hours}小时请假，但未设置具体时间段，跳过计算`);
         }
       }
     });
@@ -3559,13 +3351,11 @@ export class EfficiencyCalcPage implements OnInit {
             const startTimeStr = startTime.split('T')[1].substring(0, 5);
             const endTimeStr = endTime.split('T')[1].substring(0, 5);
             periods.push({ start: startTimeStr, end: endTimeStr });
-            console.log(`使用异常时间段: ${startTimeStr}-${endTimeStr}`);
           } else {
             // 同一天，使用本地时间处理
             const startTimeStr = startDate.toTimeString().split(' ')[0].substring(0, 5);
             const endTimeStr = endDate.toTimeString().split(' ')[0].substring(0, 5);
             periods.push({ start: startTimeStr, end: endTimeStr });
-            console.log(`使用异常时间段: ${startTimeStr}-${endTimeStr}`);
           }
         }
       }
@@ -3916,9 +3706,12 @@ export class EfficiencyCalcPage implements OnInit {
     const current = this.calculationDetailsVisible.get(key) || false;
     this.calculationDetailsVisible.set(key, !current);
     
-    // 如果显示详情且还没有计算过，则计算逐日详情
-    if (!current && !this.dayCalculationDetails.has(key)) {
-      this.calculateDayDetails(taskId, phase);
+    // 如果显示详情，则计算逐日详情（如果还没有计算过或数据为空）
+    if (!current) {
+      const existingDetails = this.dayCalculationDetails.get(key);
+      if (!existingDetails || existingDetails.length === 0) {
+        this.calculateDayDetails(taskId, phase);
+      }
     }
   }
 
@@ -3926,6 +3719,94 @@ export class EfficiencyCalcPage implements OnInit {
   getCalculationDetailsVisible(taskId: number, phase: string): boolean {
     const key = `${taskId}-${phase}`;
     return this.calculationDetailsVisible.get(key) || false;
+  }
+
+  // 切换计算步骤列表展开状态
+  toggleCalculationSteps(taskId: number, phase: string): void {
+    const key = `${taskId}-${phase}`;
+    const current = this.calculationStepsExpanded.get(key) ?? true; // 默认展开
+    this.calculationStepsExpanded.set(key, !current);
+  }
+
+  // 获取计算步骤列表是否展开
+  getCalculationStepsExpanded(taskId: number, phase: string): boolean {
+    const key = `${taskId}-${phase}`;
+    return this.calculationStepsExpanded.get(key) ?? true; // 默认展开
+  }
+
+  // 计算单个异常报告的实际异常时间（用于显示）
+  getExceptionCalculatedHours(exception: ExceptionReport, taskId: number, phase: string): number {
+    // 优先使用计算后的时间（如果已计算）
+    if (exception.calculated_hours !== undefined && exception.calculated_hours !== null) {
+      return exception.calculated_hours;
+    }
+
+    // 如果没有计算后的时间，尝试实时计算
+    const efficiencyData = this.efficiencyData.find(
+      data => data.task.id === taskId && data.phase === phase
+    );
+
+    if (!efficiencyData) {
+      // 如果没有效率数据，尝试使用 duration_hours
+      return exception.duration_hours || 0;
+    }
+
+    const phaseStartTime = efficiencyData.phaseStartTime;
+    const phaseEndTime = efficiencyData.phaseEndTime;
+
+    if (!phaseStartTime || !phaseEndTime) {
+      return exception.duration_hours || 0;
+    }
+
+    const startTime = exception.start_time || exception.exception_start_datetime;
+    const endTime = exception.end_time || exception.exception_end_datetime;
+
+    // 如果有时间段，尝试使用更准确的计算方法
+    if (startTime && endTime) {
+      try {
+        // 如果有工作时间设置，则始终使用带作息/加班的重叠计算
+        // 即使没有考勤记录，仍会按作息时间窗口扣除休息时间
+        if (this.workTimeSettings) {
+          return this.calculateExceptionOverlapHours(
+            startTime,
+            endTime,
+            phaseStartTime,
+            phaseEndTime,
+            this.workTimeSettings,
+            efficiencyData.attendanceRecords || []
+          );
+        } else {
+          // 否则使用基本的时间差计算（与阶段时间的重叠）
+          const start = TimeUtils.utcToLocalDate(startTime);
+          const end = TimeUtils.utcToLocalDate(endTime);
+          const phaseStart = TimeUtils.utcToLocalDate(phaseStartTime);
+          const phaseEnd = TimeUtils.utcToLocalDate(phaseEndTime);
+
+          // 计算重叠时间
+          const overlapStart = new Date(Math.max(start.getTime(), phaseStart.getTime()));
+          const overlapEnd = new Date(Math.min(end.getTime(), phaseEnd.getTime()));
+
+          if (overlapEnd > overlapStart) {
+            const hours = (overlapEnd.getTime() - overlapStart.getTime()) / (1000 * 60 * 60);
+            return Math.max(0, hours);
+          }
+        }
+      } catch (error) {
+        console.error('计算异常时间失败:', error);
+      }
+    }
+
+    // 如果没有时间段但有 duration_hours，使用原值
+    if (exception.duration_hours) {
+      if (typeof exception.duration_hours === 'number') {
+        return exception.duration_hours;
+      } else {
+        const parsed = parseFloat(exception.duration_hours);
+        return isNaN(parsed) ? 0 : parsed;
+      }
+    }
+
+    return 0;
   }
 
   // 切换异常时间段详情显示
@@ -4065,8 +3946,10 @@ export class EfficiencyCalcPage implements OnInit {
     try {
       if (this.exportType === 'detail') {
         await this.exportDetailEfficiency(start, end);
-      } else {
+      } else if (this.exportType === 'monthly') {
         await this.exportMonthlyEfficiency(start, end);
+      } else if (this.exportType === 'device') {
+        await this.exportDeviceEfficiency(start, end);
       }
       this.presentToast('导出成功');
       this.closeExportModal();
@@ -4180,6 +4063,56 @@ export class EfficiencyCalcPage implements OnInit {
     XLSX.writeFile(wb, `月度效率汇总_${dateStr}.xlsx`);
   }
 
+  // 导出设备效率汇总（按设备号/产品型号）
+  private async exportDeviceEfficiency(start: Date, end: Date) {
+    // 如果还没有计算过设备效率，先计算一次
+    if (!this.deviceEfficiencyResults || this.deviceEfficiencyResults.length === 0) {
+      this.calculateDeviceEfficiency();
+    }
+
+    if (!this.deviceEfficiencyResults || this.deviceEfficiencyResults.length === 0) {
+      this.presentToast('当前没有设备效率数据，请先点击“设备效率”按钮进行统计');
+      return;
+    }
+
+    const rows = this.deviceEfficiencyResults;
+
+    if (rows.length === 0) {
+      this.presentToast('当前没有设备效率数据可导出');
+      return;
+    }
+
+    const data: any[][] = [];
+    const header = [
+      '设备标识',
+      '设备/型号',
+      '标准工时合计(h)',
+      '有效工时合计(h)',
+      '设备效率(%)',
+      '任务数量',
+      '是否全部阶段完成'
+    ];
+    data.push(header);
+
+    rows.forEach(item => {
+      data.push([
+        item.deviceKey,
+        item.deviceLabel,
+        Number((item.standardHours || 0).toFixed(2)),
+        Number((item.actualHours || 0).toFixed(2)),
+        Number((item.efficiency || 0).toFixed(2)),
+        item.taskCount || 0,
+        item.isCompleted ? '是' : '否'
+      ]);
+    });
+
+    const ws: XLSX.WorkSheet = XLSX.utils.aoa_to_sheet(data);
+    const wb: XLSX.WorkBook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '设备效率汇总');
+    const dateStr = `${this.exportStartDate}_${this.exportEndDate}`;
+    XLSX.writeFile(wb, `设备效率汇总_${dateStr}.xlsx`);
+  }
+
   /**
    * 计算当前月度效率结果的整体合计（可用于显示 1-3 月总效率等）
    * 如果设置了“用户筛选”，则只统计匹配该用户的行
@@ -4244,20 +4177,20 @@ export class EfficiencyCalcPage implements OnInit {
 
     const dayDetails: any[] = [];
     
-    // 如果有单日计算详情，直接使用
-    if (efficiencyData.dailyCalculations) {
+    // 如果有单日计算详情，直接使用（包含详细分解数据）
+    if (efficiencyData.dailyCalculations && Object.keys(efficiencyData.dailyCalculations).length > 0) {
       Object.keys(efficiencyData.dailyCalculations).forEach(date => {
         const dailyCalc = efficiencyData.dailyCalculations![date];
         dayDetails.push({
           date: date,
-          totalHours: dailyCalc.totalHours, // 单日与阶段的重叠时长
-          effectiveHours: dailyCalc.effectiveHours, // 单日有效工时
-          workWindowOverlap: 0, // 这些字段暂时设为0，因为我们使用新的计算方式
-          overtimeOverlap: 0,
-          leaveDeduction: 0,
-          exceptionDeduction: 0,
-          attendanceLimit: 0,
-          finalHours: dailyCalc.effectiveHours
+          totalHours: dailyCalc.totalHours || 0, // 单日与阶段的重叠时长
+          effectiveHours: dailyCalc.effectiveHours || 0, // 单日有效工时
+          workWindowOverlap: dailyCalc.workWindowOverlap || 0, // 作息时间重叠
+          overtimeOverlap: dailyCalc.overtimeOverlap || 0, // 加班时间重叠
+          leaveDeduction: dailyCalc.leaveDeduction || 0, // 请假扣除
+          exceptionDeduction: dailyCalc.exceptionDeduction || 0, // 异常扣除
+          attendanceLimit: dailyCalc.attendanceLimit || 0, // 实际出勤时间限制
+          finalHours: dailyCalc.finalHours || dailyCalc.effectiveHours || 0 // 最终有效工时
         });
       });
       this.dayCalculationDetails.set(key, dayDetails);
@@ -4265,8 +4198,9 @@ export class EfficiencyCalcPage implements OnInit {
     }
 
     // 如果没有单日计算详情，使用旧的计算方式
-    const start = new Date(efficiencyData.phaseStartTime);
-    const end = new Date(efficiencyData.phaseEndTime);
+    // 使用TimeUtils统一处理时间转换，确保时区处理一致
+    const start = TimeUtils.utcToLocalDate(efficiencyData.phaseStartTime);
+    const end = TimeUtils.utcToLocalDate(efficiencyData.phaseEndTime);
 
     // 逐日计算 - 使用TimeUtils确保包含结束日期的整天
     const endOfLastDay = TimeUtils.createEndOfDay(end);
@@ -4274,16 +4208,6 @@ export class EfficiencyCalcPage implements OnInit {
     for (let d = new Date(start); d <= endOfLastDay; d.setDate(d.getDate() + 1)) {
       const currentDay = TimeUtils.getLocalDateString(d);
       
-      // 添加调试信息 - 检查所有日期的计算
-      if (currentDay.startsWith('2025-10-')) {
-        console.log(`日期调试 - ${currentDay}:`, {
-          currentDay,
-          start: start.toISOString(),
-          end: end.toISOString(),
-          d: d.toISOString(),
-          attendanceRecordsCount: efficiencyData.attendanceRecords.length
-        });
-      }
       
       const dayAttendance = efficiencyData.attendanceRecords.find(rec => {
         // 使用TimeUtils统一处理日期比较
@@ -4291,23 +4215,9 @@ export class EfficiencyCalcPage implements OnInit {
         return TimeUtils.isSameDay(recDate, d);
       });
       
-      // 添加调试信息
-      if (currentDay === '2025-10-21') {
-        console.log('10.21调试 - 考勤记录查找:', {
-          currentDay,
-          attendanceRecordsCount: efficiencyData.attendanceRecords.length,
-          attendanceRecords: efficiencyData.attendanceRecords.map(rec => ({
-            id: rec.id,
-            date: rec.date,
-            actual_hours: rec.actual_hours
-          })),
-          found: !!dayAttendance
-        });
-      }
       
       if (!dayAttendance) {
         if (currentDay.startsWith('2025-10-')) {
-          console.log(`跳过日期 ${currentDay} - 没有考勤记录`);
         }
         continue;
       }
@@ -4318,24 +4228,6 @@ export class EfficiencyCalcPage implements OnInit {
       const leaveDeduction = this.calculateLeaveDeduction(dayAttendance, currentDay);
       const exceptionDeduction = this.calculateExceptionDeduction(efficiencyData.exceptionReports, currentDay, efficiencyData.attendanceRecords);
       
-      // 调试异常扣除计算
-      if (currentDay === '2025-10-20' && efficiencyData.task.id === 1493) {
-        console.log(`任务1493 - 2025-10-20异常扣除调试:`, {
-          currentDay,
-          exceptionReportsCount: efficiencyData.exceptionReports.length,
-          exceptionReports: efficiencyData.exceptionReports.map(ex => ({
-            id: ex.id,
-            start_time: ex.start_time || ex.exception_start_datetime,
-            end_time: ex.end_time || ex.exception_end_datetime,
-            exception_type: ex.exception_type
-          })),
-          workWindowOverlap,
-          overtimeOverlap,
-          leaveDeduction,
-          exceptionDeduction,
-          effectiveHours: workWindowOverlap + overtimeOverlap - leaveDeduction - exceptionDeduction
-        });
-      }
       
       const effectiveHours = workWindowOverlap + overtimeOverlap - leaveDeduction - exceptionDeduction;
       const attendanceLimit = dayAttendance.actual_hours || dayAttendance.standard_attendance_hours || 0;
@@ -4706,38 +4598,22 @@ export class EfficiencyCalcPage implements OnInit {
       return;
     }
 
-    this.efficiencyData.forEach(entry => {
-      if (!entry.phaseEndTime) return;
-      const phaseEnd = new Date(entry.phaseEndTime);
-      if (isNaN(phaseEnd.getTime())) return;
-
-      // 只取结束时间的日期部分
-      const phaseEndDateOnly = new Date(
-        phaseEnd.getFullYear(),
-        phaseEnd.getMonth(),
-        phaseEnd.getDate()
-      );
-
-      // 日期区间过滤（含首尾）
-      if (rangeStart && phaseEndDateOnly < rangeStart) {
-        return;
-      }
-      if (rangeEnd && phaseEndDateOnly > rangeEnd) {
-        return;
-      }
-
-      // 获取设备标识（优先使用设备号进行分组）
-      const deviceNumber = entry.task.device_number?.trim() || '';
-      const productModel = entry.task.product_model?.trim() || '';
+    // 先按设备号分组所有任务
+    const deviceTasksMap = new Map<string, Task[]>();
+    this.tasks.forEach(task => {
+      const deviceNumber = task.device_number?.trim() || '';
+      if (!deviceNumber) return;
       
-      // 如果没有设备号，跳过（设备效率统计只统计有设备号的任务）
-      if (!deviceNumber) {
-        return; // 跳过没有设备号的任务
+      if (!deviceTasksMap.has(deviceNumber)) {
+        deviceTasksMap.set(deviceNumber, []);
       }
+      deviceTasksMap.get(deviceNumber)!.push(task);
+    });
 
-      // 使用设备号作为主键（同一个设备号的所有阶段都会累加）
+    // 对每个设备，计算所有阶段的标准工时之和（从任务配置中获取）
+    deviceTasksMap.forEach((tasks, deviceNumber) => {
+      const productModel = tasks[0]?.product_model?.trim() || '';
       const deviceKey = deviceNumber;
-      // 显示标签：如果有产品型号则显示"型号-设备号"，否则只显示设备号
       const deviceLabel = productModel 
         ? `${productModel}-${deviceNumber}` 
         : deviceNumber;
@@ -4755,21 +4631,53 @@ export class EfficiencyCalcPage implements OnInit {
         aggregates.set(deviceKey, agg);
       }
 
-      // 累加该设备号所有阶段的标准工时
-      agg.standard += Number(entry.standardHours || 0);
-      
-      // 计算该阶段的有效工时 = 实际工时 - 异常时间 - 协助时间
-      const effectiveHours = (entry.actualWorkHours || 0) - (entry.exceptionHours || 0) - (entry.assistHours || 0);
-      
-      // 累加该设备号所有阶段的有效工时（只累加有效值）
-      agg.actual += effectiveHours > 0 ? effectiveHours : 0;
-      
-      // 记录该设备号涉及的任务ID（用于统计任务数）
-      agg.taskIds.add(entry.task.id);
-      
-      // 记录已完成的阶段（该阶段有phaseEndTime，说明已完成）
-      const phaseKey = `${entry.task.id}_${entry.phase}`;
-      agg.completedPhaseKeys.add(phaseKey);
+      // 对每个任务，累加所有阶段的标准工时（从任务配置中获取）
+      tasks.forEach(task => {
+        agg.taskIds.add(task.id);
+        
+        const phases = ['machining', 'electrical', 'pre_assembly', 'post_assembly', 'debugging'];
+        phases.forEach(phase => {
+          // 从任务配置中获取该阶段的标准工时（无论是否完成都累加）
+          const phaseStandardHours = this.getStandardHoursForPhase(task, phase);
+          agg.standard += phaseStandardHours;
+          
+          // 检查该阶段是否已完成（有结束时间且在日期范围内）
+          const phaseEndTime = this.getPhaseEndTime(task, phase);
+          if (phaseEndTime) {
+            const phaseEnd = new Date(phaseEndTime);
+            if (!isNaN(phaseEnd.getTime())) {
+              const phaseEndDateOnly = new Date(
+                phaseEnd.getFullYear(),
+                phaseEnd.getMonth(),
+                phaseEnd.getDate()
+              );
+              
+              // 日期区间过滤（含首尾）
+              if ((!rangeStart || phaseEndDateOnly >= rangeStart) && 
+                  (!rangeEnd || phaseEndDateOnly <= rangeEnd)) {
+                // 该阶段已完成且在日期范围内，累加实际工时
+                const phaseKey = `${task.id}_${phase}`;
+                agg.completedPhaseKeys.add(phaseKey);
+                
+                // 从 efficiencyData 中查找该阶段的实际工时数据
+                const efficiencyEntry = this.efficiencyData.find(
+                  entry => entry.task.id === task.id && entry.phase === phase
+                );
+                
+                if (efficiencyEntry) {
+                  // 计算该阶段的有效工时 = 实际工时 - 异常时间 - 协助时间
+                  const effectiveHours = (efficiencyEntry.actualWorkHours || 0) - 
+                                        (efficiencyEntry.exceptionHours || 0) - 
+                                        (efficiencyEntry.assistHours || 0);
+                  
+                  // 累加该阶段的有效工时（只累加有效值）
+                  agg.actual += effectiveHours > 0 ? effectiveHours : 0;
+                }
+              }
+            }
+          }
+        });
+      });
     });
 
     if (aggregates.size === 0) {
@@ -4808,6 +4716,14 @@ export class EfficiencyCalcPage implements OnInit {
 
     this.deviceEfficiencyResults = Array.from(aggregates.values())
       .map(item => {
+        // 防御性处理：确保 standard / actual 为数字
+        const standardNum = typeof item.standard === 'number'
+          ? item.standard
+          : Number(item.standard || 0);
+        const actualNum = typeof item.actual === 'number'
+          ? item.actual
+          : Number(item.actual || 0);
+
         // 获取该设备号的所有阶段（包括未完成的）
         const allPhases = deviceTaskPhases.get(item.deviceKey) || new Set<string>();
         // 判断是否所有阶段都已完成
@@ -4817,12 +4733,12 @@ export class EfficiencyCalcPage implements OnInit {
         return {
           deviceKey: item.deviceKey,
           deviceLabel: item.deviceLabel,
-          standardHours: Number(item.standard.toFixed(2)),
-          actualHours: Number(item.actual.toFixed(2)),
+          standardHours: Number(standardNum.toFixed(2)),
+          actualHours: Number(actualNum.toFixed(2)),
           // 效率 = (标准工时之和 / 有效工时之和) × 100%
           efficiency:
-            item.actual > 0
-              ? Number(((item.standard / item.actual) * 100).toFixed(2))
+            actualNum > 0
+              ? Number(((standardNum / actualNum) * 100).toFixed(2))
               : 0,
           taskCount: item.taskIds.size,
           isCompleted: isCompleted

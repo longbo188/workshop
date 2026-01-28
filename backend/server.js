@@ -3648,6 +3648,110 @@ app.get('/api/task-efficiency', async (req, res) => {
   }
 });
 
+// 管理员：将状态为 completed 且所有阶段已确认、并且结束时间早于7天前的任务设备效率写回 tasks 表
+app.post('/api/admin/device-efficiency/save-to-tasks', async (req, res) => {
+  const { user } = req; // 视你的鉴权中间件而定
+
+  try {
+    // 简单权限检查：仅允许管理员调用（如果没有角色字段，可按需调整或去掉）
+    if (!user || (user.role && user.role !== 'admin')) {
+      return res.status(403).json({ error: '无权限执行此操作' });
+    }
+  } catch (e) {
+    // 如果没有 user / role 体系，可以忽略权限检查
+  }
+
+  let connection;
+  try {
+    connection = await mysql.createConnection(dbConfig);
+    await connection.beginTransaction();
+
+    // 计算 7 天前的自然日截止时间（YYYY-MM-DD HH:mm:ss）
+    const now = new Date();
+    now.setDate(now.getDate() - 7);
+    const cutoff =
+      now.getFullYear() +
+      '-' +
+      String(now.getMonth() + 1).padStart(2, '0') +
+      '-' +
+      String(now.getDate()).padStart(2, '0') +
+      ' ' +
+      '23:59:59';
+
+    // 1. 先按任务聚合：只选 status=completed 且所有阶段快照 is_confirmed=1 的任务
+    const [taskAggRows] = await connection.execute(
+      `
+      SELECT
+        t.id AS task_id,
+        t.device_number AS device_key,
+        SUM(te.standard_hours) AS total_standard_hours,
+        SUM(GREATEST(te.actual_work_hours - te.exception_hours - te.assist_hours, 0)) AS total_actual_hours,
+        MAX(te.phase_end_time) AS last_phase_end_time
+      FROM tasks t
+      JOIN task_efficiency te ON te.task_id = t.id
+      WHERE t.status = 'completed'
+        AND t.device_number IS NOT NULL
+        AND t.device_number <> ''
+        AND te.phase_end_time IS NOT NULL
+        AND te.phase_end_time < ?
+      GROUP BY t.id, t.device_number
+      HAVING MIN(te.is_confirmed) = 1
+      `,
+      [cutoff]
+    );
+
+    // 如果没有符合条件的任务，直接返回
+    if (!taskAggRows || taskAggRows.length === 0) {
+      await connection.commit();
+      await connection.end();
+      return res.json({ success: true, updatedTasks: 0 });
+    }
+
+    // 2. 按任务写回设备效率到 tasks.device_efficiency
+    let updatedCount = 0;
+    for (const row of taskAggRows) {
+      const taskId = row.task_id;
+      const deviceKey = row.device_key;
+      const standard = Number(row.total_standard_hours) || 0;
+      const actual = Number(row.total_actual_hours) || 0;
+      const efficiency =
+        actual > 0 ? Number(((standard / actual) * 100).toFixed(2)) : 0;
+
+      // 只更新状态为 completed 的任务
+      const [updateResult] = await connection.execute(
+        `
+        UPDATE tasks
+        SET device_efficiency = ?
+        WHERE id = ?
+          AND status = 'completed'
+          AND device_number = ?
+        `,
+        [efficiency, taskId, deviceKey]
+      );
+
+      // updateResult.affectedRows 在 mysql2 中存在
+      if (updateResult && updateResult.affectedRows > 0) {
+        updatedCount += updateResult.affectedRows;
+      }
+    }
+
+    await connection.commit();
+    await connection.end();
+    return res.json({ success: true, updatedTasks: updatedCount });
+  } catch (error) {
+    if (connection) {
+      try {
+        await connection.rollback();
+        await connection.end();
+      } catch (e) {}
+    }
+    console.error('保存设备效率到 tasks 失败:', error);
+    return res
+      .status(500)
+      .json({ error: '保存设备效率到 tasks 失败: ' + error.message });
+  }
+});
+
 // 获取产品标准工时（根据产品型号查询）
 app.get('/api/product-standard-hours', async (req, res) => {
   const { productModel } = req.query;
@@ -4516,7 +4620,13 @@ app.get('/api/admin/work-completions', async (req, res) => {
 // 管理员：撤回完工记录
 app.post('/api/admin/work-completions/:id/rollback', async (req, res) => {
   const { id } = req.params;
-  const { userId } = req.body || {};
+  const { userId, clearStartTime } = req.body || {};
+  // 严格将 clearStartTime 转成布尔值，避免 "false" 之类的字符串被当成 true
+  const clearStartFlag =
+    clearStartTime === true ||
+    clearStartTime === 1 ||
+    clearStartTime === '1' ||
+    (typeof clearStartTime === 'string' && clearStartTime.toLowerCase() === 'true');
   const connection = await mysql.createConnection(dbConfig);
   
   try {
@@ -4616,16 +4726,29 @@ app.post('/api/admin/work-completions/:id/rollback', async (req, res) => {
     }
     
     // 5. 撤回阶段完成状态
-    //    需求：撤回后视为“从未开始过”，不保留开始/暂停/完成时间，但保留负责人，方便同一人重新开始
-    await connection.execute(
-      `UPDATE tasks 
-       SET ${phaseKey}_phase = 0,
-           ${phaseKey}_start_time = NULL,
-           ${phaseKey}_paused_at = NULL,
-           ${phaseKey}_complete_time = NULL
-       WHERE id = ?`,
-      [task.id]
-    );
+    //    根据 clearStartFlag 参数决定是否清除开始时间
+    if (clearStartFlag) {
+      // 情况1：清除任务开始时间（完全撤回，视为从未开始过），但保留负责人
+      await connection.execute(
+        `UPDATE tasks 
+         SET ${phaseKey}_phase = 0,
+             ${phaseKey}_start_time = NULL,
+             ${phaseKey}_paused_at = NULL,
+             ${phaseKey}_complete_time = NULL
+         WHERE id = ?`,
+        [task.id]
+      );
+    } else {
+      // 情况2：不清除任务开始时间（保留开始时间和负责人，只清除完成时间）
+      await connection.execute(
+        `UPDATE tasks 
+         SET ${phaseKey}_phase = 0,
+             ${phaseKey}_paused_at = NULL,
+             ${phaseKey}_complete_time = NULL
+         WHERE id = ?`,
+        [task.id]
+      );
+    }
     
     // 6. 检查任务是否应该恢复为未完成状态
     const updatedTask = { ...task, [`${phaseKey}_phase`]: 0 };

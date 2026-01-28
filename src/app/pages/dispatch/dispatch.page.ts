@@ -91,6 +91,8 @@ export class DispatchPage implements OnInit {
 
   // 派工任务可视化相关属性
   isVizModalOpen = false;
+  isFullscreen = false; // 是否处于全屏状态
+  private fullscreenChangeHandler: (() => void) | null = null; // 全屏状态变化监听器
   vizData: any[] = [];
   vizDepartmentFilter = ''; // 可视化部门筛选
   vizGroupFilter = ''; // 可视化组筛选
@@ -1643,10 +1645,121 @@ export class DispatchPage implements OnInit {
   async openVizModal() {
     this.isVizModalOpen = true;
     await this.loadVizData();
+    // 监听全屏状态变化
+    this.setupFullscreenListeners();
   }
 
   closeVizModal() {
+    // 如果处于全屏状态，先退出全屏
+    if (this.isFullscreen) {
+      this.exitFullscreen();
+    }
+    // 移除全屏状态监听器
+    this.removeFullscreenListeners();
     this.isVizModalOpen = false;
+  }
+
+  /**
+   * 切换全屏状态
+   */
+  toggleFullscreen() {
+    if (this.isFullscreen) {
+      this.exitFullscreen();
+    } else {
+      this.enterFullscreen();
+    }
+  }
+
+  /**
+   * 进入全屏
+   */
+  enterFullscreen() {
+    // 直接对整个文档进行全屏，这是最可靠的方式
+    const element = document.documentElement;
+
+    if (element.requestFullscreen) {
+      element.requestFullscreen().then(() => {
+        this.isFullscreen = true;
+      }).catch(err => {
+        console.error('进入全屏失败:', err);
+      });
+    } else if ((element as any).webkitRequestFullscreen) {
+      // Safari
+      (element as any).webkitRequestFullscreen();
+      this.isFullscreen = true;
+    } else if ((element as any).mozRequestFullScreen) {
+      // Firefox
+      (element as any).mozRequestFullScreen();
+      this.isFullscreen = true;
+    } else if ((element as any).msRequestFullscreen) {
+      // IE/Edge
+      (element as any).msRequestFullscreen();
+      this.isFullscreen = true;
+    } else {
+      console.warn('浏览器不支持全屏 API');
+    }
+  }
+
+  /**
+   * 退出全屏
+   */
+  exitFullscreen() {
+    if (document.exitFullscreen) {
+      document.exitFullscreen().then(() => {
+        this.isFullscreen = false;
+      }).catch(err => {
+        console.error('退出全屏失败:', err);
+      });
+    } else if ((document as any).webkitExitFullscreen) {
+      // Safari
+      (document as any).webkitExitFullscreen();
+      this.isFullscreen = false;
+    } else if ((document as any).mozCancelFullScreen) {
+      // Firefox
+      (document as any).mozCancelFullScreen();
+      this.isFullscreen = false;
+    } else if ((document as any).msExitFullscreen) {
+      // IE/Edge
+      (document as any).msExitFullscreen();
+      this.isFullscreen = false;
+    }
+  }
+
+  /**
+   * 设置全屏状态监听器
+   */
+  setupFullscreenListeners() {
+    // 先移除旧的监听器（如果存在）
+    this.removeFullscreenListeners();
+
+    // 监听全屏状态变化（用户按 ESC 键退出全屏时）
+    this.fullscreenChangeHandler = () => {
+      const isCurrentlyFullscreen = !!(
+        document.fullscreenElement ||
+        (document as any).webkitFullscreenElement ||
+        (document as any).mozFullScreenElement ||
+        (document as any).msFullscreenElement
+      );
+      this.isFullscreen = isCurrentlyFullscreen;
+    };
+
+    document.addEventListener('fullscreenchange', this.fullscreenChangeHandler);
+    document.addEventListener('webkitfullscreenchange', this.fullscreenChangeHandler);
+    document.addEventListener('mozfullscreenchange', this.fullscreenChangeHandler);
+    document.addEventListener('MSFullscreenChange', this.fullscreenChangeHandler);
+  }
+
+  /**
+   * 移除全屏状态监听器
+   */
+  removeFullscreenListeners() {
+    if (this.fullscreenChangeHandler) {
+      document.removeEventListener('fullscreenchange', this.fullscreenChangeHandler);
+      document.removeEventListener('webkitfullscreenchange', this.fullscreenChangeHandler);
+      document.removeEventListener('mozfullscreenchange', this.fullscreenChangeHandler);
+      document.removeEventListener('MSFullscreenChange', this.fullscreenChangeHandler);
+      this.fullscreenChangeHandler = null;
+    }
   }
 
   async loadVizData() {

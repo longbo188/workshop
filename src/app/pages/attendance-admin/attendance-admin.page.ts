@@ -60,8 +60,6 @@ export class AttendanceAdminPage implements OnInit {
   showStats = false;
   statsData: any = null;
   statsLoading = false;
-  // 调试开关（逐日计算详情）
-  private debugDailyDetail = true;
   
   // 调整相关
   isAdjustModalOpen = false;
@@ -118,7 +116,7 @@ export class AttendanceAdminPage implements OnInit {
   batchAttendanceDateMode: 'single' | 'range' = 'range'; // 日期选择模式：单个日期或日期区间，默认日期区间
   batchAttendanceStartDate: string = '';
   batchAttendanceEndDate: string = '';
-  batchAttendanceType: 'holiday' | 'normal' | 'overtime' = 'normal'; // 考勤类型：放假、不加班、加班
+  batchAttendanceType: 'holiday' | 'normal' | 'overtime' | 'custom_overtime' = 'normal'; // 考勤类型：放假、不加班、加班、自定义加班时间
   batchAttendanceHours: number | null = null;
   filteredWorkers: any[] = [];
   batchSelectedGroup: string = ''; // 批量考勤选择的组
@@ -135,6 +133,10 @@ export class AttendanceAdminPage implements OnInit {
   // 批量调整时间输入格式属性
   batchOvertimeStartTime: string = '';
   batchOvertimeEndTime: string = '';
+  
+  // 排班管理自定义加班时间
+  batchAttendanceCustomOvertimeStartTime: string = '';
+  batchAttendanceCustomOvertimeEndTime: string = '';
 
   // 工作时间设置相关属性
   isWorkTimeModalOpen = false;
@@ -636,7 +638,6 @@ export class AttendanceAdminPage implements OnInit {
   }
 
   load(resetPage = false) {
-    console.log('=== load方法开始执行 ===');
     if (resetPage) this.page = 1;
     
     // 并行加载考勤数据和节假日数据，提高加载速度
@@ -644,7 +645,7 @@ export class AttendanceAdminPage implements OnInit {
     this.loadData();
     // 节假日数据在后台加载，用于显示节假日名称
     this.loadHolidays().catch(err => {
-      console.warn('[考勤管理] 节假日数据加载失败，但不影响考勤数据显示:', err);
+      // 节假日数据加载失败不影响考勤数据显示
     });
   }
   
@@ -659,11 +660,6 @@ export class AttendanceAdminPage implements OnInit {
     params.set('pageSize', String(this.pageSize));
     
     const url = `${base}/api/daily-attendance?${params.toString()}`;
-    console.log('API请求URL:', url);
-    console.log('请求参数:', params.toString());
-    
-    // 使用日考勤列表接口（小时制）
-    console.log('发送API请求...');
     
     // 添加超时处理
     const timeout = setTimeout(() => {
@@ -675,31 +671,24 @@ export class AttendanceAdminPage implements OnInit {
     this.http.get(url).subscribe({
       next: (data: any) => {
         clearTimeout(timeout);
-        console.log('=== API响应成功 ===');
-        console.log('响应数据:', data);
         let allRecords = data?.list || [];
         
         // 如果选择了车间筛选，进行客户端筛选
         if (this.selectedDepartmentFilter) {
-          console.log('应用车间筛选:', this.selectedDepartmentFilter);
           allRecords = allRecords.filter((record: any) => 
             record.department === this.selectedDepartmentFilter
           );
-          console.log('筛选后记录数量:', allRecords.length);
         }
         
         // 如果输入了姓名筛选，进行客户端筛选
         if (this.userNameFilter && this.userNameFilter.trim()) {
-          console.log('应用姓名筛选:', this.userNameFilter);
           allRecords = allRecords.filter((record: any) => 
             record.user_name && record.user_name.includes(this.userNameFilter.trim())
           );
-          console.log('姓名筛选后记录数量:', allRecords.length);
         }
         
         // 如果选择了组筛选，进行客户端筛选
         if (this.selectedGroupFilter) {
-          console.log('应用组筛选:', this.selectedGroupFilter);
           // 需要根据用户的组信息筛选，需要先获取用户信息
           const base = this.getApiBase();
           this.http.get(`${base}/api/users`).subscribe({
@@ -717,7 +706,6 @@ export class AttendanceAdminPage implements OnInit {
               this.list = allRecords;
               this.total = allRecords.length;
               this.isLoading = false;
-              console.log('组筛选后记录数量:', this.list.length);
             }
           });
           return; // 等待异步加载完成后再更新
@@ -735,47 +723,16 @@ export class AttendanceAdminPage implements OnInit {
           leave_minutes: Number(record.leave_minutes || 0)
         }));
         this.total = this.list.length; // 使用筛选后的数量
-        if (this.debugDailyDetail) {
-          console.group('逐日详情-记录(数值化后)');
-          this.list.forEach((r: any) => {
-            console.log({
-              date: r.date,
-              standard_attendance_hours: r.standard_attendance_hours,
-              overtime_hours: r.overtime_hours,
-              leave_hours: r.leave_hours,
-              actual_hours: r.actual_hours,
-              overtime_minutes: r.overtime_minutes,
-              leave_minutes: r.leave_minutes
-            });
-          });
-          console.groupEnd();
-        }
+        
         // 如果当前是日历视图，更新日历
         if (this.viewMode === 'calendar') {
           this.generateCalendar();
         }
         // 撤回：不在前端保存用户ID集合用于统计
         this.isLoading = false;
-        console.log('最终记录数量:', this.list.length);
-        
-        // 显示所有记录
-        console.log('=== 所有记录 ===');
-        this.list.forEach((record: any, index: number) => {
-          console.log(`记录${index + 1}:`, {
-            id: record.id,
-            user_id: record.user_id,
-            date: record.date,
-            department: record.department,
-            standard_attendance_hours: record.standard_attendance_hours,
-            overtime_hours: record.overtime_hours,
-            actual_hours: record.actual_hours
-          });
-        });
       },
       error: (err) => {
         clearTimeout(timeout);
-        console.log('=== API请求失败 ===');
-        console.log('错误:', err);
         this.errorMsg = '加载失败：' + (err?.error?.error || err?.message);
         this.isLoading = false;
       }
@@ -856,12 +813,6 @@ export class AttendanceAdminPage implements OnInit {
     const totalOvertime = normalized.reduce((sum: number, r: any) => sum + r.overtime_hours, 0);
     const totalLeave = normalized.reduce((sum: number, r: any) => sum + this.calculateLeaveHours(r), 0);
     const totalActual = normalized.reduce((sum: number, r: any) => sum + this.calculateActualHours(r), 0);
-    if (this.debugDailyDetail) {
-      console.group('逐日统计-汇总调试');
-      console.log('输入记录数:', totalDays);
-      console.log('合计: 加班', totalOvertime, ' 请假', totalLeave, ' 实际', totalActual);
-      console.groupEnd();
-    }
     
     return {
       total_days: totalDays,
@@ -885,11 +836,10 @@ export class AttendanceAdminPage implements OnInit {
   
   // 打开调整模态框
   openAdjustModal(record: any) {
-    console.log('打开调整模态框，记录信息:', record);
     this.selectedRecord = record;
     this.overtimeMinutes = record.overtime_minutes || 0;
     this.leaveMinutes = record.leave_minutes || 0;
-    this.adjustmentNote = record.adjustment_note || '';
+    this.adjustmentNote = '';
     
     // 从现有记录中加载加班时间信息
     if (record.overtime_start_time && record.overtime_end_time) {
@@ -1145,29 +1095,12 @@ export class AttendanceAdminPage implements OnInit {
     // 调试信息
     const overtimeHours = this.calculateOvertimeHours();
     const leaveHours = this.calculateCurrentLeaveHours();
-    console.log('=== 确认调整调试信息 ===');
-    console.log('记录ID:', this.selectedRecord.id);
-    console.log('记录ID类型:', typeof this.selectedRecord.id);
-    console.log('记录是否存在ID:', !!this.selectedRecord.id);
-    console.log('记录ID是否为null:', this.selectedRecord.id === null);
-    console.log('记录ID是否为undefined:', this.selectedRecord.id === undefined);
-    console.log('记录ID是否为字符串null:', this.selectedRecord.id === 'null');
-    console.log('计算出的加班时长:', overtimeHours);
-    console.log('计算出的请假时长:', leaveHours);
-    console.log('发送到后端的数据:', {
-      overtimeHours,
-      leaveHours,
-      adjustmentNote: this.adjustmentNote,
-      adjustedBy: this.currentUser.id
-    });
     
     try {
       const base = this.getApiBase();
       
       // 如果记录ID为null或undefined，需要先创建记录
       if (!this.selectedRecord.id || this.selectedRecord.id === null || this.selectedRecord.id === undefined || this.selectedRecord.id === 'null') {
-        console.log('记录ID为null，尝试创建记录');
-        console.log('selectedRecord完整信息:', this.selectedRecord);
         // 将日期转换为YYYY-MM-DD格式，避免时区问题
         const date = this.selectedRecord.date instanceof Date 
           ? this.selectedRecord.date 
@@ -1187,76 +1120,58 @@ export class AttendanceAdminPage implements OnInit {
           overtimeEndTime: this.overtimeEndTime || null,
           leaveStartTime: this.leaveStartTime || null,
           leaveEndTime: this.leaveEndTime || null,
-          note: this.adjustmentNote,
+          note: '',
           adjustedBy: this.currentUser.id
         };
-        console.log('创建记录的数据:', createData);
-        console.log('日期格式:', dateStr);
         
         // 先创建记录
         const createResponse = await this.http.post(`${base}/api/daily-attendance`, createData).toPromise();
-        console.log('创建记录响应:', createResponse);
         
         if (createResponse && (createResponse as any).success) {
-          console.log('记录创建成功');
-          console.log('准备关闭模态框...');
           // 直接关闭模态框
           this.closeAdjustModal();
-          console.log('模态框已关闭');
-          console.log('准备延迟重新加载数据...');
           // 延迟重新加载数据
           setTimeout(() => {
-            console.log('=== 开始重新加载数据 ===');
             this.load(true); // 重新加载列表
             if (this.showStats) {
               this.loadStats(); // 重新加载统计
             }
-          console.log('=== 数据重新加载完成 ===');
-          // 使用 toast 提示，避免阻塞弹窗
-          this.presentToast('考勤记录创建并调整成功');
+            // 使用 toast 提示，避免阻塞弹窗
+            this.presentToast('考勤记录创建并调整成功');
           }, 1000);
-          console.log('setTimeout已设置');
         } else {
-          console.log('记录创建失败:', createResponse);
           throw new Error((createResponse as any).error || '创建记录失败');
         }
       } else {
         // 记录存在，直接调整
-        console.log('记录存在，使用调整API');
-        console.log('调整API URL:', `${base}/api/daily-attendance/${this.selectedRecord.id}/adjust`);
-      const response = await this.http.post(`${base}/api/daily-attendance/${this.selectedRecord.id}/adjust`, {
+        const response = await this.http.post(`${base}/api/daily-attendance/${this.selectedRecord.id}/adjust`, {
           overtimeHours: overtimeHours,
           leaveHours: leaveHours,
           overtimeStartTime: this.overtimeStartTime || null,
           overtimeEndTime: this.overtimeEndTime || null,
           leaveStartTime: this.leaveStartTime || null,
           leaveEndTime: this.leaveEndTime || null,
-          note: this.adjustmentNote,
-        adjustedBy: this.currentUser.id
-      }).toPromise();
+          note: '',
+          adjustedBy: this.currentUser.id
+        }).toPromise();
       
-      if (response && (response as any).success) {
-          console.log('后端响应:', response);
-        // 使用 toast 提示，避免阻塞弹窗
-        this.presentToast('考勤时长调整成功');
-        this.closeAdjustModal();
+        if (response && (response as any).success) {
+          // 使用 toast 提示，避免阻塞弹窗
+          this.presentToast('考勤时长调整成功');
+          this.closeAdjustModal();
           // 强制刷新数据
           setTimeout(() => {
             this.load(true); // 重置到第一页并重新加载
-        if (this.showStats) {
-          this.loadStats(); // 重新加载统计
-        }
+            if (this.showStats) {
+              this.loadStats(); // 重新加载统计
+            }
           }, 100);
-      } else {
-          console.log('后端响应失败:', response);
-        throw new Error((response as any).error || '调整失败');
+        } else {
+          throw new Error((response as any).error || '调整失败');
         }
       }
     } catch (error: any) {
-      console.error('调整失败，完整错误信息:', error);
-      console.error('错误状态:', error.status);
-      console.error('错误消息:', error.message);
-      console.error('错误详情:', error.error);
+      console.error('调整失败:', error);
       alert('调整失败：' + (error.error?.error || error.message));
     }
   }
@@ -1442,39 +1357,25 @@ export class AttendanceAdminPage implements OnInit {
 
   // 测试计算方法
   testCalculation() {
-    console.log('=== 测试计算逻辑 ===');
-    console.log('加班开始时间:', (this.overtimeStartHour ?? '未选择') + ':' + (this.overtimeStartMinute?.toString().padStart(2, '0') || '00'));
-    console.log('加班结束时间:', (this.overtimeEndHour ?? '未选择') + ':' + (this.overtimeEndMinute?.toString().padStart(2, '0') || '00'));
-    console.log('请假开始时间:', (this.leaveStartHour ?? '未选择') + ':' + (this.leaveStartMinute?.toString().padStart(2, '0') || '00'));
-    console.log('请假结束时间:', (this.leaveEndHour ?? '未选择') + ':' + (this.leaveEndMinute?.toString().padStart(2, '0') || '00'));
-    console.log('计算出的加班时长:', this.calculateOvertimeHours());
-    console.log('计算出的请假时长:', this.calculateCurrentLeaveHours());
-    console.log('当前记录信息:', this.selectedRecord);
-    console.log('当前实际时长计算:', this.calculateCurrentActualHours());
+    // 测试方法已移除调试信息
   }
 
   // 测试API调用
   testApiCall() {
-    console.log('=== 测试API调用 ===');
     const base = this.getApiBase();
     const url = `${base}/api/daily-attendance?page=1&pageSize=20`;
-    console.log('测试URL:', url);
     
     // 添加超时处理
     const timeout = setTimeout(() => {
-      console.log('=== 测试API调用超时 ===');
+      // 超时处理
     }, 5000);
     
     this.http.get(url).subscribe({
       next: (data: any) => {
         clearTimeout(timeout);
-        console.log('=== 测试API调用成功 ===');
-        console.log('测试响应:', data);
       },
       error: (err) => {
         clearTimeout(timeout);
-        console.log('=== 测试API调用失败 ===');
-        console.log('测试错误:', err);
       }
     });
   }
@@ -1542,7 +1443,9 @@ export class AttendanceAdminPage implements OnInit {
     try {
       const base = this.getApiBase();
       const response = await this.http.get(`${base}/api/users`).toPromise();
-      this.availableUsers = (response as any[]).filter(user => user.role === 'worker');
+      this.availableUsers = (response as any[]).filter(user => 
+        user.role === 'worker' || user.role === 'supervisor'
+      );
       this.filteredUsers = [...this.availableUsers];
     } catch (error) {
       console.error('加载用户列表失败:', error);
@@ -1618,39 +1521,25 @@ export class AttendanceAdminPage implements OnInit {
   }
 
   calculateBatchOvertimeHours(): number {
-    console.log('=== 计算批量加班时长 ===');
-    console.log('开始时间:', this.batchOvertimeStartTime);
-    console.log('结束时间:', this.batchOvertimeEndTime);
-    
     if (!this.batchOvertimeStartTime || !this.batchOvertimeEndTime) {
-      console.log('时间未设置，返回0');
       return 0;
     }
     
     const startTime = this.parseTimeString(this.batchOvertimeStartTime);
     const endTime = this.parseTimeString(this.batchOvertimeEndTime);
     
-    console.log('解析后的开始时间:', startTime);
-    console.log('解析后的结束时间:', endTime);
-    
     if (!startTime || !endTime) {
-      console.log('时间解析失败，返回0');
       return 0;
     }
     
     const startMinutes = startTime.hour * 60 + startTime.minute;
     const endMinutes = endTime.hour * 60 + endTime.minute;
     
-    console.log('开始分钟数:', startMinutes);
-    console.log('结束分钟数:', endMinutes);
-    
     if (startMinutes >= endMinutes) {
-      console.log('开始时间大于等于结束时间，返回0');
       return 0;
     }
     
     const hours = (endMinutes - startMinutes) / 60;
-    console.log('计算出的加班时长:', hours);
     return hours; // 转换为小时
   }
 
@@ -1678,14 +1567,9 @@ export class AttendanceAdminPage implements OnInit {
 
     try {
       const base = this.getApiBase();
-      console.log('=== 批量调整开始 ===');
-      console.log('选择的用户:', this.selectedUsers);
-      console.log('调整日期:', this.batchAdjustDate);
-      console.log('加班时长:', overtimeHours);
       
       const promises = this.selectedUsers.map(user => {
         const dateStr = this.batchAdjustDate;
-        console.log(`处理用户 ${user.id} (${user.name})`);
         // 直接使用后端API，后端会智能判断记录是否存在
         // 不传递 standardAttendanceHours，让后端保持原有值
         return this.http.post(`${base}/api/daily-attendance`, {
@@ -1720,7 +1604,9 @@ export class AttendanceAdminPage implements OnInit {
     try {
       const base = this.getApiBase();
       const response = await this.http.get(`${base}/api/users`).toPromise();
-      const users = (response as any[]).filter(user => user.role === 'worker');
+      const users = (response as any[]).filter(user => 
+        user.role === 'worker' || user.role === 'supervisor'
+      );
       this.availableDepartmentsFilter = [...new Set(users.map(user => user.department))].filter(dept => dept);
       this.availableDepartmentsFilter.sort();
     } catch (error) {
@@ -1796,8 +1682,6 @@ export class AttendanceAdminPage implements OnInit {
         endYear = currentYear + 1;
       }
       
-      console.log(`[考勤管理] 准备加载 ${startYear}-${endYear} 年的节假日数据`);
-      
       // 方案4：优先从GitHub获取节假日数据（NateScarlet/holiday-cn项目）
       // 并行加载所有需要的年份数据
       const yearPromises: Promise<any>[] = [];
@@ -1808,7 +1692,6 @@ export class AttendanceAdminPage implements OnInit {
           ).pipe(
             timeout(5000), // 5秒超时
             catchError((error) => {
-              console.warn(`[考勤管理] 获取${year}年节假日数据失败:`, error);
               return Promise.resolve(null); // 失败时返回null，不中断其他请求
             })
           ).toPromise()
@@ -1843,20 +1726,16 @@ export class AttendanceAdminPage implements OnInit {
               });
             
             loadedYears++;
-            console.log(`[考勤管理] 已加载 ${year} 年节假日数据`);
           }
         });
         
         if (loadedYears > 0) {
           this.holidays = new Set(holidayDates);
           this.holidayNames = holidayNamesMap;
-          console.log(`[考勤管理] 已加载 ${this.holidays.size} 个节假日（来自GitHub，${loadedYears}个年份：${startYear}-${endYear}）`);
           return; // 成功获取，直接返回
-        } else {
-          console.warn('[考勤管理] 所有年份的GitHub数据获取失败，尝试使用后端API');
         }
       } catch (githubError) {
-        console.warn('[考勤管理] 从GitHub获取节假日数据失败，尝试使用后端API:', githubError);
+        // GitHub获取失败，尝试使用后端API
       }
       
       // 备用方案：从后端API获取
@@ -1894,9 +1773,7 @@ export class AttendanceAdminPage implements OnInit {
         
         this.holidays = new Set(holidayDates);
         this.holidayNames = holidayNamesMap;
-        console.log(`[考勤管理] 已加载 ${this.holidays.size} 个节假日（来自后端API）`);
       } else {
-        console.warn('[考勤管理] 未获取到节假日数据');
         this.holidays = new Set();
         this.holidayNames = new Map();
       }
@@ -1947,6 +1824,19 @@ export class AttendanceAdminPage implements OnInit {
     this.batchAttendanceType = 'normal';
     this.batchAttendanceHours = this.calculateBatchAttendanceHours();
     this.batchSelectedGroup = '';
+    
+    // 初始化自定义加班时间（如果有默认值，使用默认值）
+    if (this.workTimeSettings && this.workTimeSettings.defaultOvertimeStartTime) {
+      this.batchAttendanceCustomOvertimeStartTime = this.workTimeSettings.defaultOvertimeStartTime;
+    } else {
+      this.batchAttendanceCustomOvertimeStartTime = '';
+    }
+    
+    if (this.workTimeSettings && this.workTimeSettings.defaultOvertimeEndTime) {
+      this.batchAttendanceCustomOvertimeEndTime = this.workTimeSettings.defaultOvertimeEndTime;
+    } else {
+      this.batchAttendanceCustomOvertimeEndTime = '';
+    }
     
     // 打开模态框
     this.isBatchAttendanceModalOpen = true;
@@ -2134,6 +2024,75 @@ export class AttendanceAdminPage implements OnInit {
     return Math.round(overtimeHours * 100) / 100;
   }
 
+  // 计算自定义加班时长
+  calculateCustomOvertimeHours(): number {
+    if (!this.batchAttendanceCustomOvertimeStartTime || !this.batchAttendanceCustomOvertimeEndTime) {
+      return 0;
+    }
+
+    const startTime = this.parseTimeString(this.batchAttendanceCustomOvertimeStartTime);
+    const endTime = this.parseTimeString(this.batchAttendanceCustomOvertimeEndTime);
+
+    if (!startTime || !endTime) {
+      return 0;
+    }
+
+    const startMinutes = startTime.hour * 60 + startTime.minute;
+    const endMinutes = endTime.hour * 60 + endTime.minute;
+
+    if (startMinutes >= endMinutes) {
+      return 0;
+    }
+
+    // 基础加班时长
+    const totalOvertimeMinutes = endMinutes - startMinutes;
+    
+    // 检查是否与作息窗口重叠，如果重叠则需要减去休息时间
+    if (!this.workTimeSettings) {
+      return Math.round((totalOvertimeMinutes / 60) * 100) / 100;
+    }
+    
+    const workStart = this.timeToMinutes(this.workTimeSettings.startTime);
+    const workEnd = this.timeToMinutes(this.workTimeSettings.endTime);
+    
+    // 检查加班时间是否与工作时间重叠
+    if (startMinutes < workEnd && endMinutes > workStart) {
+      // 有重叠，需要减去休息时间
+      const lunchStart = this.timeToMinutes(this.workTimeSettings.lunchStartTime);
+      const lunchEnd = this.timeToMinutes(this.workTimeSettings.lunchEndTime);
+      
+      // 计算与午休时间的重叠
+      let lunchOverlapMinutes = 0;
+      if (lunchStart && lunchEnd && startMinutes < lunchEnd && endMinutes > lunchStart) {
+        const overlapStart = Math.max(startMinutes, lunchStart);
+        const overlapEnd = Math.min(endMinutes, lunchEnd);
+        lunchOverlapMinutes = Math.max(0, overlapEnd - overlapStart);
+      }
+      
+      // 计算与其他休息时间的重叠
+      let otherBreakOverlapMinutes = 0;
+      if (this.workTimeSettings.otherBreakStartTime && this.workTimeSettings.otherBreakEndTime) {
+        const otherStart = this.timeToMinutes(this.workTimeSettings.otherBreakStartTime);
+        const otherEnd = this.timeToMinutes(this.workTimeSettings.otherBreakEndTime);
+        
+        if (startMinutes < otherEnd && endMinutes > otherStart) {
+          const overlapStart = Math.max(startMinutes, otherStart);
+          const overlapEnd = Math.min(endMinutes, otherEnd);
+          otherBreakOverlapMinutes = Math.max(0, overlapEnd - overlapStart);
+        }
+      }
+      
+      // 从加班时间中减去休息时间重叠
+      const effectiveOvertimeMinutes = totalOvertimeMinutes - lunchOverlapMinutes - otherBreakOverlapMinutes;
+      const result = Math.max(0, effectiveOvertimeMinutes) / 60;
+      return Math.round(result * 100) / 100;
+    }
+    
+    // 没有与作息窗口重叠，直接返回总时长
+    const overtimeHours = totalOvertimeMinutes / 60;
+    return Math.round(overtimeHours * 100) / 100;
+  }
+
   // 根据考勤类型计算考勤时长
   calculateBatchAttendanceHours(): number {
     if (!this.workTimeSettings) {
@@ -2158,13 +2117,14 @@ export class AttendanceAdminPage implements OnInit {
         const total = standardHours + overtimeHours;
         // 保留两位小数，确保精度
         const result = Math.round(total * 100) / 100;
-        console.log('计算加班总时长:', {
-          standardHours,
-          overtimeHours,
-          total,
-          result
-        });
         return result;
+      
+      case 'custom_overtime':
+        // 自定义加班：标准工作时长 + 自定义加班时长
+        const standardHoursCustom = Number(this.workTimeSettings.standardHours) || 0;
+        const customOvertimeHours = this.calculateCustomOvertimeHours();
+        const totalCustom = standardHoursCustom + customOvertimeHours;
+        return Math.round(totalCustom * 100) / 100;
       
       default:
         return 0;
@@ -2200,6 +2160,14 @@ export class AttendanceAdminPage implements OnInit {
     this.isBatchAttendanceModalOpen = false;
     this.filteredWorkers = [];
     this.batchSelectedGroup = '';
+    // 清理自定义加班时间
+    this.batchAttendanceCustomOvertimeStartTime = '';
+    this.batchAttendanceCustomOvertimeEndTime = '';
+  }
+  
+  // 自定义加班时间变化时重新计算
+  onCustomOvertimeTimeChange() {
+    this.batchAttendanceHours = this.calculateBatchAttendanceHours();
   }
 
   // 加载工人列表（用于批量考勤，获取可用的组）
@@ -2207,7 +2175,9 @@ export class AttendanceAdminPage implements OnInit {
     try {
       const base = this.getApiBase();
       const response = await this.http.get(`${base}/api/users`).toPromise();
-      const users = (response as any[]).filter(user => user.role === 'worker');
+      const users = (response as any[]).filter(user => 
+        user.role === 'worker' || user.role === 'supervisor'
+      );
       
       this.filteredWorkers = users;
       
@@ -2397,6 +2367,18 @@ export class AttendanceAdminPage implements OnInit {
                   overtimeStartTime = this.workTimeSettings.defaultOvertimeStartTime;
                   overtimeEndTime = this.workTimeSettings.defaultOvertimeEndTime;
                 }
+              } else if (this.batchAttendanceType === 'custom_overtime') {
+                // 自定义加班：验证自定义加班时间是否已填写
+                if (!this.batchAttendanceCustomOvertimeStartTime || !this.batchAttendanceCustomOvertimeEndTime) {
+                  await loadingToast.dismiss();
+                  this.presentToast('请填写自定义加班时间');
+                  return;
+                }
+                
+                standardHours = this.getStandardHours();
+                overtimeHours = this.calculateCustomOvertimeHours();
+                overtimeStartTime = this.batchAttendanceCustomOvertimeStartTime;
+                overtimeEndTime = this.batchAttendanceCustomOvertimeEndTime;
               }
               
               for (const worker of selectedWorkers) {

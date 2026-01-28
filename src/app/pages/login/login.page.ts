@@ -52,6 +52,9 @@ export class LoginPage implements OnInit {
   errorMessage: string = '';
   rememberMe: boolean = false;
 
+  // 保存的用户名列表
+  savedUsernames: string[] = [];
+
   // 修改密码相关
   isChangePasswordModalOpen: boolean = false;
   oldPassword: string = '';
@@ -105,12 +108,61 @@ export class LoginPage implements OnInit {
   }
 
   ngOnInit(): void {
-    // 预填充用户名与记住选项
+    // 加载保存的用户名列表
+    this.loadSavedUsernames();
+    
+    // 预填充用户名与记住选项（兼容旧版本）
     const savedUsername = localStorage.getItem('savedUsername');
     if (savedUsername) {
       this.username = savedUsername;
       this.rememberMe = true;
+      // 如果旧版本保存的用户名不在列表中，添加到列表
+      if (!this.savedUsernames.includes(savedUsername)) {
+        this.saveUsername(savedUsername);
+      }
+    } else if (this.savedUsernames.length > 0) {
+      // 如果有保存的用户名列表，自动填充第一个
+      this.username = this.savedUsernames[0];
     }
+  }
+
+  /**
+   * 加载保存的用户名列表
+   */
+  loadSavedUsernames(): void {
+    const saved = localStorage.getItem('savedUsernames');
+    if (saved) {
+      try {
+        this.savedUsernames = JSON.parse(saved);
+      } catch (error) {
+        console.error('解析保存的用户名列表失败:', error);
+        this.savedUsernames = [];
+      }
+    }
+  }
+
+  /**
+   * 保存用户名到列表
+   * 无论是否勾选"记住密码"，都会保存用户名（只保存用户名，不保存密码）
+   */
+  saveUsername(username: string): void {
+    if (!username || username.trim() === '') return;
+    
+    const trimmedUsername = username.trim();
+    
+    // 移除已存在的同名项
+    this.savedUsernames = this.savedUsernames.filter(u => u !== trimmedUsername);
+    
+    // 添加到最前面
+    this.savedUsernames.unshift(trimmedUsername);
+    
+    // 最多保存10个用户名
+    if (this.savedUsernames.length > 10) {
+      this.savedUsernames = this.savedUsernames.slice(0, 10);
+    }
+    
+    // 保存到 localStorage（无论是否勾选"记住密码"都保存）
+    localStorage.setItem('savedUsernames', JSON.stringify(this.savedUsernames));
   }
 
 
@@ -135,15 +187,21 @@ export class LoginPage implements OnInit {
       }).toPromise();
 
       if (response.success) {
+        // 无论是否勾选"记住密码"，都保存用户名（只保存用户名，不保存密码）
+        // 必须在跳转前保存，确保用户名被记录
+        this.saveUsername(this.username);
+        
         // 根据记住密码选项保存会话
         if (this.rememberMe) {
           localStorage.setItem('currentUser', JSON.stringify(response.user));
-          localStorage.setItem('savedUsername', this.username);
+          localStorage.setItem('savedUsername', this.username); // 保留兼容性
           sessionStorage.removeItem('currentUser');
         } else {
           sessionStorage.setItem('currentUser', JSON.stringify(response.user));
           localStorage.removeItem('currentUser');
-          localStorage.removeItem('savedUsername');
+          // 注意：不删除 savedUsername，因为我们要保存用户名列表
+          // 但清除旧的 savedUsername，因为用户没有勾选"记住密码"
+          // 不过用户名已经通过 saveUsername 保存到 savedUsernames 列表中了
         }
         // 登录成功跳转到首页
         this.router.navigate(['/home']);

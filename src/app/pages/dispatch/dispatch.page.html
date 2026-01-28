@@ -1516,6 +1516,9 @@
         <ion-toolbar color="light">
           <ion-title>派工任务可视化</ion-title>
           <ion-buttons slot="end">
+            <ion-button color="dark" fill="clear" style="color: #111827;" (click)="toggleFullscreen()">
+              {{ isFullscreen ? '退出全屏' : '全屏' }}
+            </ion-button>
             <ion-button color="dark" fill="clear" style="color: #111827;" (click)="closeVizModal()">
               关闭
             </ion-button>

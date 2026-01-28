@@ -138,11 +138,23 @@
 }
 
 .input-field {
-  --background: transparent;
-  --color: #e5e7eb;
-  --placeholder-color: #6b7280;
-  --padding-start: 8px;
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #e5e7eb;
   font-size: 14px;
+  padding: 8px;
+  width: 100%;
+
+  &::placeholder {
+    color: #6b7280;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
 }
 
 /* 记住密码 + 修改密码 */

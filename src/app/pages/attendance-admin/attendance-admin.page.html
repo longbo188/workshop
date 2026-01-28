@@ -499,15 +499,6 @@
             </ion-input>
           </ion-item>
           
-          <ion-item>
-            <ion-label position="stacked">调整备注</ion-label>
-            <ion-textarea 
-              [(ngModel)]="adjustmentNote" 
-              placeholder="请输入调整原因"
-              rows="3">
-            </ion-textarea>
-          </ion-item>
-          
           <!-- 预览实际时长 -->
           <ion-item>
             <ion-label>
@@ -806,8 +797,32 @@
               <ion-select-option value="holiday">放假（0小时）</ion-select-option>
               <ion-select-option value="normal">不加班（{{ getStandardHours() }}小时）</ion-select-option>
               <ion-select-option value="overtime">加班（{{ getOvertimeTotalHours() }}小时）</ion-select-option>
+              <ion-select-option value="custom_overtime">自定义加班时间</ion-select-option>
             </ion-select>
           </ion-item>
+
+          <!-- 自定义加班时间输入（仅在选择自定义加班时间时显示） -->
+          <div *ngIf="batchAttendanceType === 'custom_overtime'">
+            <ion-item>
+              <ion-label position="stacked">加班开始时间</ion-label>
+              <ion-input 
+                type="time" 
+                [(ngModel)]="batchAttendanceCustomOvertimeStartTime"
+                placeholder="18:00"
+                (ionInput)="onCustomOvertimeTimeChange()">
+              </ion-input>
+            </ion-item>
+            
+            <ion-item>
+              <ion-label position="stacked">加班结束时间</ion-label>
+              <ion-input 
+                type="time" 
+                [(ngModel)]="batchAttendanceCustomOvertimeEndTime"
+                placeholder="20:00"
+                (ionInput)="onCustomOvertimeTimeChange()">
+              </ion-input>
+            </ion-item>
+          </div>
 
           <!-- 显示计算出的考勤时长 -->
           <ion-item *ngIf="batchAttendanceType">
@@ -821,6 +836,13 @@
                 标准工作时长：{{ getStandardHours() }} 小时
                 <br>
                 加班时长：{{ calculateDefaultOvertimeHours() }} 小时
+                <br>
+                总计：{{ calculateBatchAttendanceHours() }} 小时
+              </small>
+              <small *ngIf="batchAttendanceType === 'custom_overtime'">
+                标准工作时长：{{ getStandardHours() }} 小时
+                <br>
+                自定义加班时长：{{ calculateCustomOvertimeHours() }} 小时
                 <br>
                 总计：{{ calculateBatchAttendanceHours() }} 小时
               </small>
