@@ -629,7 +629,7 @@ export class EfficiencyCalcPage implements OnInit {
   private async loadHolidaysFromBackend(): Promise<void> {
     try {
       const base = this.getApiBase();
-
+      
       // 向前回溯的自然日天数，用来覆盖「7个工作日」的计算区间
       // 60 天是一个比较保守的值：即使有连续长假也足够
       const daysBack = 30;
@@ -646,16 +646,16 @@ export class EfficiencyCalcPage implements OnInit {
       const holidayDates = new Set<string>();
 
       // 只请求这段时间的日考勤
-      const attendanceResponse: any = await this.http.get(`${base}/api/daily-attendance`, {
-        params: {
-          start: startDate,
-          end: endDate,
+        const attendanceResponse: any = await this.http.get(`${base}/api/daily-attendance`, {
+          params: {
+            start: startDate,
+            end: endDate,
           pageSize: daysBack + 10 // 预留一点富余
-        }
-      }).toPromise();
-
-      if (attendanceResponse?.list && Array.isArray(attendanceResponse.list)) {
-        // 从考勤记录中提取放假日期
+          }
+        }).toPromise();
+        
+        if (attendanceResponse?.list && Array.isArray(attendanceResponse.list)) {
+          // 从考勤记录中提取放假日期
         // 数据结构：后端返回的是所有工人的考勤记录，每条记录是 (日期 × 工人)
         // 优化：只遍历一次，用Map记录每个日期的考勤情况
         
@@ -665,13 +665,13 @@ export class EfficiencyCalcPage implements OnInit {
         const dateStatus = new Map<string, { hasWork: boolean; recordCount: number }>();
         
         // 只遍历一次，记录每个日期的考勤情况
-        attendanceResponse.list.forEach((record: any) => {
+          attendanceResponse.list.forEach((record: any) => {
           if (!record.date) return;
-          
-          const dateStr = record.date instanceof Date
-            ? record.date.toISOString().slice(0, 10)
-            : record.date;
-          if (dateStr && dateStr.length >= 10) {
+            
+              const dateStr = record.date instanceof Date 
+                ? record.date.toISOString().slice(0, 10) 
+                : record.date;
+              if (dateStr && dateStr.length >= 10) {
             const normalizedDate = dateStr.substring(0, 10); // YYYY-MM-DD
             
             // 初始化或获取该日期的状态
@@ -693,16 +693,16 @@ export class EfficiencyCalcPage implements OnInit {
             if (standardHours > 0 || overtimeHours > 0) {
               // 该日期有工人有考勤，标记为工作日
               status.hasWork = true;
+              }
             }
-          }
-        });
-        
+          });
+          
         // 对于有考勤记录的日期，如果所有工人都没有考勤，则认为是放假
         dateStatus.forEach((status, dateStr) => {
           // 如果该日期有考勤记录，但所有工人都没有考勤，则认为是放假
           if (!status.hasWork && status.recordCount > 0) {
             holidayDates.add(dateStr);
-          }
+        }
         });
       }
 
@@ -1730,14 +1730,14 @@ export class EfficiencyCalcPage implements OnInit {
         // 检查是否已经存在相同的数据（防止重复添加）
         const [taskIdStr, phase] = key.split('_');
         const taskId = parseInt(taskIdStr, 10);
-        const existingData = this.efficiencyData.find(data => 
-          data.task.id === taskId && data.phase === phase
-        );
+          const existingData = this.efficiencyData.find(data => 
+            data.task.id === taskId && data.phase === phase
+          );
         
-        if (!existingData) {
+          if (!existingData) {
           // 从数据库加载的数据中恢复
-          this.efficiencyData.push(...dataArray);
-          restoredCount += dataArray.length;
+            this.efficiencyData.push(...dataArray);
+            restoredCount += dataArray.length;
           restoredKeys.push(key);
           
           // 为每个恢复的数据加载异常报告
@@ -1765,7 +1765,7 @@ export class EfficiencyCalcPage implements OnInit {
             })();
             exceptionReportsPromises.push(loadExceptionReportsPromise);
           });
-        } else {
+          } else {
           skippedRestoreCount += dataArray.length;
           skippedRestoreKeys.push(key);
         }
@@ -3710,7 +3710,7 @@ export class EfficiencyCalcPage implements OnInit {
     if (!current) {
       const existingDetails = this.dayCalculationDetails.get(key);
       if (!existingDetails || existingDetails.length === 0) {
-        this.calculateDayDetails(taskId, phase);
+      this.calculateDayDetails(taskId, phase);
       }
     }
   }
@@ -4640,7 +4640,7 @@ export class EfficiencyCalcPage implements OnInit {
           // 从任务配置中获取该阶段的标准工时（无论是否完成都累加）
           const phaseStandardHours = this.getStandardHoursForPhase(task, phase);
           agg.standard += phaseStandardHours;
-          
+      
           // 检查该阶段是否已完成（有结束时间且在日期范围内）
           const phaseEndTime = this.getPhaseEndTime(task, phase);
           if (phaseEndTime) {
@@ -4651,13 +4651,13 @@ export class EfficiencyCalcPage implements OnInit {
                 phaseEnd.getMonth(),
                 phaseEnd.getDate()
               );
-              
+      
               // 日期区间过滤（含首尾）
               if ((!rangeStart || phaseEndDateOnly >= rangeStart) && 
                   (!rangeEnd || phaseEndDateOnly <= rangeEnd)) {
                 // 该阶段已完成且在日期范围内，累加实际工时
                 const phaseKey = `${task.id}_${phase}`;
-                agg.completedPhaseKeys.add(phaseKey);
+      agg.completedPhaseKeys.add(phaseKey);
                 
                 // 从 efficiencyData 中查找该阶段的实际工时数据
                 const efficiencyEntry = this.efficiencyData.find(

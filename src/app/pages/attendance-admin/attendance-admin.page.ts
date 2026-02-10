@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { IonHeader, IonToolbar, IonTitle, IonContent, IonCard, IonCardContent, IonItem, IonLabel, IonButton, IonInput, IonList, IonSpinner, IonModal, IonTextarea, IonSelect, IonSelectOption, IonBadge, IonButtons, IonIcon, IonCardHeader, IonCardTitle, IonCheckbox, IonText, IonDatetime, IonNote, AlertController, ToastController } from '@ionic/angular/standalone';
 import { environment } from '../../../environments/environment';
+import { Router } from '@angular/router';
 import { Capacitor } from '@capacitor/core';
 import { timeout, catchError } from 'rxjs/operators';
 
@@ -24,6 +25,7 @@ export class AttendanceAdminPage implements OnInit {
   private http = inject(HttpClient);
   private alertController = inject(AlertController);
   private toastController = inject(ToastController);
+  private router = inject(Router);
   
   isLoading = false;
   errorMsg = '';
@@ -75,6 +77,10 @@ export class AttendanceAdminPage implements OnInit {
   selectedLeaveSlots: number[] = [];
   overtimeTimeSlots: any[] = [];
   leaveTimeSlots: any[] = [];
+
+  goHome() {
+    this.router.navigate(['/home']);
+  }
   
   // 时间选择相关属性
   overtimeStartHour: number | null = null;
@@ -703,8 +709,23 @@ export class AttendanceAdminPage implements OnInit {
                 return userGroup === this.selectedGroupFilter;
               });
               
-              this.list = allRecords;
-              this.total = allRecords.length;
+              // 数值化关键字段，避免字符串参与计算导致为0
+              this.list = allRecords.map((record: any) => ({
+                ...record,
+                standard_attendance_hours: Number(record.standard_attendance_hours) || 0,
+                overtime_hours: parseFloat(record.overtime_hours) || 0,
+                leave_hours: parseFloat(record.leave_hours) || 0,
+                actual_hours: Number(record.actual_hours) || 0,
+                // 兼容分钟字段（若存在）
+                overtime_minutes: Number(record.overtime_minutes || 0),
+                leave_minutes: Number(record.leave_minutes || 0)
+              }));
+              this.total = this.list.length; // 使用筛选后的数量
+              
+              // 如果当前是日历视图，更新日历
+              if (this.viewMode === 'calendar') {
+                this.generateCalendar();
+              }
               this.isLoading = false;
             }
           });
@@ -1136,15 +1157,15 @@ export class AttendanceAdminPage implements OnInit {
             if (this.showStats) {
               this.loadStats(); // 重新加载统计
             }
-            // 使用 toast 提示，避免阻塞弹窗
-            this.presentToast('考勤记录创建并调整成功');
+          // 使用 toast 提示，避免阻塞弹窗
+          this.presentToast('考勤记录创建并调整成功');
           }, 1000);
         } else {
           throw new Error((createResponse as any).error || '创建记录失败');
         }
       } else {
         // 记录存在，直接调整
-        const response = await this.http.post(`${base}/api/daily-attendance/${this.selectedRecord.id}/adjust`, {
+      const response = await this.http.post(`${base}/api/daily-attendance/${this.selectedRecord.id}/adjust`, {
           overtimeHours: overtimeHours,
           leaveHours: leaveHours,
           overtimeStartTime: this.overtimeStartTime || null,
@@ -1152,22 +1173,22 @@ export class AttendanceAdminPage implements OnInit {
           leaveStartTime: this.leaveStartTime || null,
           leaveEndTime: this.leaveEndTime || null,
           note: '',
-          adjustedBy: this.currentUser.id
-        }).toPromise();
+        adjustedBy: this.currentUser.id
+      }).toPromise();
       
-        if (response && (response as any).success) {
-          // 使用 toast 提示，避免阻塞弹窗
-          this.presentToast('考勤时长调整成功');
-          this.closeAdjustModal();
+      if (response && (response as any).success) {
+        // 使用 toast 提示，避免阻塞弹窗
+        this.presentToast('考勤时长调整成功');
+        this.closeAdjustModal();
           // 强制刷新数据
           setTimeout(() => {
             this.load(true); // 重置到第一页并重新加载
-            if (this.showStats) {
-              this.loadStats(); // 重新加载统计
-            }
+        if (this.showStats) {
+          this.loadStats(); // 重新加载统计
+        }
           }, 100);
-        } else {
-          throw new Error((response as any).error || '调整失败');
+      } else {
+        throw new Error((response as any).error || '调整失败');
         }
       }
     } catch (error: any) {

@@ -1,5 +1,11 @@
 <ion-header>
   <ion-toolbar>
+    <ion-buttons slot="start">
+      <ion-button (click)="goHome()">
+        <ion-icon name="home-outline"></ion-icon>
+        <ion-label class="ion-padding-start">主页</ion-label>
+      </ion-button>
+    </ion-buttons>
     <ion-title>协助时间审批</ion-title>
     <ion-buttons slot="end">
       <ion-button (click)="loadPendingAssistApprovals()">

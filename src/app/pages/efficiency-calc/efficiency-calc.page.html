@@ -1,11 +1,12 @@
 <ion-header>
   <ion-toolbar>
-    <ion-title>效率统计</ion-title>
-    <ion-buttons slot="end">
+    <ion-buttons slot="start">
       <ion-button [routerLink]="['/home']">
         <ion-icon name="home-outline"></ion-icon>
+        <ion-label class="ion-padding-start">主页</ion-label>
       </ion-button>
     </ion-buttons>
+    <ion-title>效率统计</ion-title>
   </ion-toolbar>
 </ion-header>
 
@@ -613,7 +614,7 @@
         <div class="calculation-details-header">
           <h4>📊 效率计算过程</h4>
           <div style="display: flex; gap: 8px;">
-            <ion-button 
+          <ion-button 
               fill="solid" 
               color="primary"
               size="small" 
@@ -625,12 +626,12 @@
             <ion-button 
               fill="solid" 
               color="medium"
-              size="small" 
-              (click)="toggleCalculationDetails(data.task.id, data.phase)"
-              class="calculation-toggle-btn">
-              <ion-icon name="chevron-up-outline" slot="start"></ion-icon>
-              隐藏详情
-            </ion-button>
+            size="small" 
+            (click)="toggleCalculationDetails(data.task.id, data.phase)"
+            class="calculation-toggle-btn">
+            <ion-icon name="chevron-up-outline" slot="start"></ion-icon>
+            隐藏详情
+          </ion-button>
           </div>
         </div>
         

@@ -1,11 +1,12 @@
 <ion-header>
   <ion-toolbar>
-    <ion-title>我的异常报告</ion-title>
     <ion-buttons slot="start">
       <ion-button (click)="goBack()">
-        <ion-icon name="arrow-back"></ion-icon>
+        <ion-icon name="home-outline"></ion-icon>
+        <ion-label class="ion-padding-start">主页</ion-label>
       </ion-button>
     </ion-buttons>
+    <ion-title>我的异常报告</ion-title>
   </ion-toolbar>
 </ion-header>
 
@@ -33,6 +34,8 @@
           <ion-select-option value="来料不良">来料不良</ion-select-option>
           <ion-select-option value="改造类（研发售后或生产不良）">改造类（研发售后或生产不良）</ion-select-option>
           <ion-select-option value="临时安排任务">临时安排任务</ion-select-option>
+          <ion-select-option value="设计问题">设计问题</ion-select-option>
+          <ion-select-option value="其他问题">其他问题</ion-select-option>
         </ion-select>
       </ion-item>
       

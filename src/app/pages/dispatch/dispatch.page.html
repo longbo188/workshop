@@ -1,5 +1,11 @@
 <ion-header>
   <ion-toolbar>
+    <ion-buttons slot="start">
+      <ion-button (click)="goHome()">
+        <ion-icon name="home-outline"></ion-icon>
+        <ion-label class="ion-padding-start">主页</ion-label>
+      </ion-button>
+    </ion-buttons>
     <ion-title>主管派工</ion-title>
     <ion-buttons slot="end">
       <!-- 非 PMC 用户的任务管理按钮（右侧） -->
@@ -33,7 +39,7 @@
           </ion-content>
         </ng-template>
       </ion-popover>
-      <ion-button (click)="openStdHoursModal()" *ngIf="currentUser?.role === 'admin' || (currentUser?.role === 'staff' && currentUser?.department === '工程部')" fill="outline">
+      <ion-button (click)="openStdHoursModal()" *ngIf="currentUser?.role === 'admin' || currentUser?.role === 'manager' || currentUser?.role === 'supervisor' || (currentUser?.role === 'staff' && currentUser?.department === '工程部')" fill="outline">
         <ion-icon name="time-outline"></ion-icon>
         导入工时
       </ion-button>
@@ -232,8 +238,46 @@
                     <th *ngIf="columnVisible('priority')">优先级</th>
                     <th *ngIf="columnVisible('status')">状态</th>
                     <th *ngIf="columnVisible('currentPhase')">当前阶段</th>
-                    <th *ngIf="columnVisible('productionTime')">开工日期</th>
-                    <th *ngIf="columnVisible('promisedTime')">承诺交付</th>
+                    <th *ngIf="columnVisible('productionTime')" style="cursor: pointer; user-select: none;" (click)="toggleSort('production_time')">
+                      <div style="display: flex; align-items: center; gap: 4px; justify-content: center; flex-wrap: wrap;">
+                        <span>开工日期</span>
+                        <ion-icon 
+                          *ngIf="sortField === 'production_time'"
+                          [name]="sortOrder === 'asc' ? 'arrow-up-outline' : 'arrow-down-outline'"
+                          style="font-size: 16px; color: var(--ion-color-primary);">
+                        </ion-icon>
+                        <span 
+                          *ngIf="sortField === 'production_time'"
+                          style="font-size: 12px; color: var(--ion-color-primary); font-weight: 500;">
+                          {{ sortOrder === 'asc' ? '升序' : '降序' }}
+                        </span>
+                        <ion-icon 
+                          *ngIf="sortField !== 'production_time'"
+                          name="swap-vertical-outline"
+                          style="font-size: 14px; opacity: 0.3;">
+                        </ion-icon>
+                      </div>
+                    </th>
+                    <th *ngIf="columnVisible('promisedTime')" style="cursor: pointer; user-select: none;" (click)="toggleSort('promised_completion_time')">
+                      <div style="display: flex; align-items: center; gap: 4px; justify-content: center; flex-wrap: wrap;">
+                        <span>承诺交付</span>
+                        <ion-icon 
+                          *ngIf="sortField === 'promised_completion_time'"
+                          [name]="sortOrder === 'asc' ? 'arrow-up-outline' : 'arrow-down-outline'"
+                          style="font-size: 16px; color: var(--ion-color-primary);">
+                        </ion-icon>
+                        <span 
+                          *ngIf="sortField === 'promised_completion_time'"
+                          style="font-size: 12px; color: var(--ion-color-primary); font-weight: 500;">
+                          {{ sortOrder === 'asc' ? '升序' : '降序' }}
+                        </span>
+                        <ion-icon 
+                          *ngIf="sortField !== 'promised_completion_time'"
+                          name="swap-vertical-outline"
+                          style="font-size: 14px; opacity: 0.3;">
+                        </ion-icon>
+                      </div>
+                    </th>
                     <th *ngIf="columnVisible('progress')">整体进度</th>
                     <th *ngIf="columnVisible('machining')">
                       机加
@@ -430,7 +474,7 @@
                     <td *ngIf="columnVisible('productionTime')">{{ t.production_time ? (t.production_time | date:'yyyy-MM-dd') : '-' }}</td>
                     <td *ngIf="columnVisible('promisedTime')">{{ t.promised_completion_time ? (t.promised_completion_time | date:'yyyy-MM-dd') : '-' }}</td>
                     <td *ngIf="columnVisible('progress')">{{ t._progressPercent !== undefined ? t._progressPercent : getTaskProgressPercent(t) }}%</td>
-                    <td class="phase-check-col" *ngIf="columnVisible('machining')" [class.phase-completed]="isPhaseCompleted(t, 'machining')">
+                    <td class="phase-check-col" *ngIf="columnVisible('machining')" [class.phase-completed]="isPhaseCompleted(t, 'machining')" [class.phase-started]="isPhaseStarted(t, 'machining')">
                       <div class="phase-check-content">
                         <span class="phase-assignee-text">{{ getPhaseAssigneeName(t, 'machining') || '-' }}</span>
                         <span class="phase-assistant-text" *ngIf="getAssistantNamesForPhase(t, 'machining').length > 0">
@@ -438,7 +482,7 @@
                   </span>
                       </div>
                     </td>
-                    <td class="phase-check-col" *ngIf="columnVisible('electrical')" [class.phase-completed]="isPhaseCompleted(t, 'electrical')">
+                    <td class="phase-check-col" *ngIf="columnVisible('electrical')" [class.phase-completed]="isPhaseCompleted(t, 'electrical')" [class.phase-started]="isPhaseStarted(t, 'electrical')">
                       <div class="phase-check-content">
                         <span class="phase-assignee-text">{{ getPhaseAssigneeName(t, 'electrical') || '-' }}</span>
                         <span class="phase-assistant-text" *ngIf="getAssistantNamesForPhase(t, 'electrical').length > 0">
@@ -446,7 +490,7 @@
                         </span>
                       </div>
                     </td>
-                    <td class="phase-check-col" *ngIf="columnVisible('pre_assembly')" [class.phase-completed]="isPhaseCompleted(t, 'pre_assembly')">
+                    <td class="phase-check-col" *ngIf="columnVisible('pre_assembly')" [class.phase-completed]="isPhaseCompleted(t, 'pre_assembly')" [class.phase-started]="isPhaseStarted(t, 'pre_assembly')">
                       <div class="phase-check-content">
                         <span class="phase-assignee-text">{{ getPhaseAssigneeName(t, 'pre_assembly') || '-' }}</span>
                         <span class="phase-assistant-text" *ngIf="getAssistantNamesForPhase(t, 'pre_assembly').length > 0">
@@ -454,7 +498,7 @@
                         </span>
                       </div>
                     </td>
-                    <td class="phase-check-col" *ngIf="columnVisible('post_assembly')" [class.phase-completed]="isPhaseCompleted(t, 'post_assembly')">
+                    <td class="phase-check-col" *ngIf="columnVisible('post_assembly')" [class.phase-completed]="isPhaseCompleted(t, 'post_assembly')" [class.phase-started]="isPhaseStarted(t, 'post_assembly')">
                       <div class="phase-check-content">
                         <span class="phase-assignee-text">{{ getPhaseAssigneeName(t, 'post_assembly') || '-' }}</span>
                         <span class="phase-assistant-text" *ngIf="getAssistantNamesForPhase(t, 'post_assembly').length > 0">
@@ -462,7 +506,7 @@
                         </span>
                       </div>
                     </td>
-                    <td class="phase-check-col" *ngIf="columnVisible('debugging')" [class.phase-completed]="isPhaseCompleted(t, 'debugging')">
+                    <td class="phase-check-col" *ngIf="columnVisible('debugging')" [class.phase-completed]="isPhaseCompleted(t, 'debugging')" [class.phase-started]="isPhaseStarted(t, 'debugging')">
                       <div class="phase-check-content">
                         <span class="phase-assignee-text">{{ getPhaseAssigneeName(t, 'debugging') || '-' }}</span>
                         <span class="phase-assistant-text" *ngIf="getAssistantNamesForPhase(t, 'debugging').length > 0">
@@ -1420,10 +1464,30 @@
           <ion-card-content>
             <ion-item>
               <ion-label position="stacked">设备号或产品型号</ion-label>
-              <ion-input [(ngModel)]="searchDeviceOrModel" placeholder="输入设备号或产品型号"></ion-input>
+              <ion-input [(ngModel)]="searchDeviceOrModel" placeholder="输入设备号或产品型号（支持模糊搜索）"></ion-input>
               <ion-button (click)="loadTaskForEditByDeviceOrModel()" [disabled]="!searchDeviceOrModel">搜索</ion-button>
             </ion-item>
-            <p style="color: #999; font-size: 12px; margin-top: 8px;">请输入设备的完整设备号或产品型号进行搜索</p>
+            <p style="color: #999; font-size: 12px; margin-top: 8px;">支持模糊搜索，输入设备号或产品型号的部分内容即可</p>
+            <!-- 显示匹配的任务列表（当有多个结果时） -->
+            <div *ngIf="matchedTasksForEdit.length > 1" style="margin-top: 12px;">
+              <ion-label style="font-size: 13px; font-weight: 500; margin-bottom: 8px; display: block;">
+                找到 {{ matchedTasksForEdit.length }} 个匹配的任务，请选择：
+              </ion-label>
+              <ion-list>
+                <ion-item 
+                  *ngFor="let task of matchedTasksForEdit" 
+                  button
+                  (click)="editTask = formatTaskForEdit(task)"
+                  [class.selected]="editTask?.id === task.id"
+                  style="--padding-start: 12px; --padding-end: 12px;">
+                  <ion-label>
+                    <h3>{{ task.device_number || ('任务#' + task.id) }}</h3>
+                    <p>型号：{{ task.product_model || '-' }}</p>
+                  </ion-label>
+                  <ion-icon *ngIf="editTask?.id === task.id" name="checkmark" color="primary" slot="end"></ion-icon>
+                </ion-item>
+              </ion-list>
+            </div>
           </ion-card-content>
         </ion-card>
 

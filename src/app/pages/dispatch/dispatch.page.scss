@@ -544,6 +544,15 @@ ion-content.viz-content {
     }
   }
 
+  &.phase-started {
+    background-color: #ffeb3b !important; // 黄色
+    
+    .phase-assignee-text,
+    .phase-assistant-text {
+      color: #333; // 深色文字，确保在黄色背景上可读
+    }
+  }
+
   .phase-check-content {
     display: flex;
     flex-direction: column;

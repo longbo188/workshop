@@ -1639,9 +1639,10 @@ export class HomePage implements OnInit, OnDestroy {
     let firstNotStarted: any | null = null;
     const pausedTasks: any[] = [];
 
+    // 遍历所有任务
     this.filteredTasks.forEach((task, index) => {
-      // 只考虑当前任务之后的任务
-      if (index <= currentTaskIndex) return;
+      // 跳过当前任务本身
+      if (index === currentTaskIndex) return;
 
       const taskPhase = this.getTaskOperatePhase(task);
       if (!taskPhase) return;
@@ -1653,13 +1654,13 @@ export class HomePage implements OnInit, OnDestroy {
       const started = this.isPhaseStarted(task);
       const paused = this.isPhasePaused(task);
 
-      // 1) 记录“紧接着的下一个未开始任务”（列表中第一个未开始且未暂停的任务）
-      if (!started && !paused && !firstNotStarted) {
+      // 1) 记录"紧接着的下一个未开始任务"（当前任务之后第一个未开始且未暂停的任务）
+      if (!started && !paused && !firstNotStarted && index > currentTaskIndex) {
         firstNotStarted = task;
         return;
       }
 
-      // 2) 收集所有已暂停的任务（当前任务之后）
+      // 2) 收集所有已暂停的任务（包括当前任务之前和之后的）
       if (paused) {
         pausedTasks.push(task);
       }

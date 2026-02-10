@@ -2,7 +2,7 @@ import { Component, OnInit, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
-import { IonHeader, IonToolbar, IonTitle, IonContent, IonCard, IonCardHeader, IonCardTitle, IonCardContent, IonButton, IonIcon, IonSpinner, IonButtons } from '@ionic/angular/standalone';
+import { IonHeader, IonToolbar, IonTitle, IonContent, IonCard, IonCardHeader, IonCardTitle, IonCardContent, IonButton, IonIcon, IonSpinner, IonButtons, IonLabel } from '@ionic/angular/standalone';
 import { environment } from '../../../environments/environment';
 import { Router } from '@angular/router';
 
@@ -14,7 +14,7 @@ import { Router } from '@angular/router';
   imports: [
     IonHeader, IonToolbar, IonTitle, IonContent,
     IonCard, IonCardHeader, IonCardTitle, IonCardContent,
-    IonButton, IonIcon, IonSpinner, IonButtons,
+    IonButton, IonIcon, IonSpinner, IonButtons, IonLabel,
     CommonModule, FormsModule
   ]
 })
@@ -53,6 +53,10 @@ export class ManagerHomePage implements OnInit {
       }
     }
     this.currentUserId = localStorage.getItem('userId') || sessionStorage.getItem('userId');
+  }
+
+  goHome() {
+    this.router.navigate(['/home']);
   }
 
   async loadPendingAssistApprovals() {

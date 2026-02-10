@@ -133,6 +133,10 @@ export class ExceptionApprovalPage implements OnInit {
     this.loadExceptionReports();
   }
 
+  goHome() {
+    this.router.navigate(['/home']);
+  }
+
   // 加载异常报告列表
   async loadExceptionReports() {
     this.isLoading = true;

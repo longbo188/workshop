@@ -1741,14 +1741,14 @@ app.post('/api/tasks/import', upload.single('file'), async (req, res) => {
   try {
     const { userId } = req.body || {};
     
-    // 权限验证：只有管理员和主管可以导入任务
+    // 权限验证：只有管理员、主管、经理和PMC部门的staff可以导入任务
     if (!userId) {
       return res.status(400).json({ error: '用户ID必填' });
     }
 
     const connection = await mysql.createConnection(dbConfig);
     const [userRows] = await connection.execute(
-      'SELECT role FROM users WHERE id = ?',
+      'SELECT role, department FROM users WHERE id = ?',
       [userId]
     );
     
@@ -1758,9 +1758,17 @@ app.post('/api/tasks/import', upload.single('file'), async (req, res) => {
     }
     
     const userRole = userRows[0].role;
-    if (userRole !== 'admin' && userRole !== 'supervisor' && userRole !== 'manager') {
+    const userDepartment = userRows[0].department;
+    
+    const hasPermission = 
+      userRole === 'admin' || 
+      userRole === 'supervisor' || 
+      userRole === 'manager' ||
+      (userRole === 'staff' && userDepartment === 'PMC');
+    
+    if (!hasPermission) {
       await connection.end();
-      return res.status(403).json({ error: '权限不足，只有管理员、主管和经理可以导入任务' });
+      return res.status(403).json({ error: '权限不足，只有管理员、主管、经理和PMC部门员工可以导入任务' });
     }
 
     if (!req.file) {
@@ -4729,15 +4737,15 @@ app.post('/api/admin/work-completions/:id/rollback', async (req, res) => {
     //    根据 clearStartFlag 参数决定是否清除开始时间
     if (clearStartFlag) {
       // 情况1：清除任务开始时间（完全撤回，视为从未开始过），但保留负责人
-      await connection.execute(
-        `UPDATE tasks 
-         SET ${phaseKey}_phase = 0,
-             ${phaseKey}_start_time = NULL,
-             ${phaseKey}_paused_at = NULL,
-             ${phaseKey}_complete_time = NULL
-         WHERE id = ?`,
-        [task.id]
-      );
+    await connection.execute(
+      `UPDATE tasks 
+       SET ${phaseKey}_phase = 0,
+           ${phaseKey}_start_time = NULL,
+           ${phaseKey}_paused_at = NULL,
+           ${phaseKey}_complete_time = NULL
+       WHERE id = ?`,
+      [task.id]
+    );
     } else {
       // 情况2：不清除任务开始时间（保留开始时间和负责人，只清除完成时间）
       await connection.execute(
@@ -5928,7 +5936,7 @@ app.post('/api/exception-reports/:reportId/approve', async (req, res) => {
         let assignedStaffId = null;
         let newStatus = 'approved'; // 默认直接批准
         
-        if (exceptionType !== '临时安排任务') {
+        if (exceptionType !== '临时安排任务' && exceptionType !== '其他问题') {
           // 需要转给责任部门确认
           let targetDepartment = null;
           
@@ -5938,6 +5946,8 @@ app.post('/api/exception-reports/:reportId/approve', async (req, res) => {
             targetDepartment = '质量部';
           } else if (exceptionType === '改造类（研发售后或生产不良）' || exceptionType === '改造类') {
             targetDepartment = '售后';
+          } else if (exceptionType === '设计问题') {
+            targetDepartment = '研发部';
           }
           
           if (targetDepartment) {
@@ -5977,18 +5987,21 @@ app.post('/api/exception-reports/:reportId/approve', async (req, res) => {
             '异常报告已批准'
         });
       } else {
-        // 二级审批驳回：直接拒绝
-      await connection.execute(`
-        UPDATE exception_reports 
-        SET status = ?, second_approver_id = ?, second_approved_at = NOW(), second_approval_note = ?
-        WHERE id = ?
-        `, ['rejected', approverId, approvalNote || null, reportId]);
-      
-      await connection.end();
-      res.json({ 
-        success: true, 
-          message: '异常报告已驳回'
-      });
+        // 二级审批驳回：退回到一级审批（状态改回 pending）
+        await connection.execute(`
+          UPDATE exception_reports 
+          SET status = ?, 
+              second_approver_id = ?, 
+              second_approved_at = NOW(), 
+              second_approval_note = ?
+          WHERE id = ?
+        `, ['pending', approverId, approvalNote || null, reportId]);
+        
+        await connection.end();
+        res.json({ 
+          success: true, 
+          message: '已退回至一级审批'
+        });
       }
     } else {
       await connection.end();

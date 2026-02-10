@@ -5,6 +5,7 @@ import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { IonHeader, IonToolbar, IonTitle, IonContent, IonCard, IonCardHeader, IonCardTitle, IonCardContent, IonList, IonItem, IonLabel, IonSpinner, IonButton, IonIcon, IonModal, IonChip, IonButtons, IonInput, IonSelect, IonSelectOption, IonRow, IonCol, IonBadge, IonPopover, IonTextarea, IonDatetime, IonSearchbar, ToastController, ActionSheetController, IonCheckbox, IonToggle } from '@ionic/angular/standalone';
 import { environment } from '../../../environments/environment';
 import * as XLSX from 'xlsx';
+import { Router } from '@angular/router';
 
 @Component({
   selector: 'app-dispatch',
@@ -23,6 +24,7 @@ import * as XLSX from 'xlsx';
 export class DispatchPage implements OnInit {
     private toastController = inject(ToastController);
     private actionSheetController = inject(ActionSheetController);
+    private router = inject(Router);
     
   isLoading = true;
   errorMsg = '';
@@ -52,6 +54,7 @@ export class DispatchPage implements OnInit {
   editTask: any = null;
   editTaskId: number | null = null; // 编辑时的任务ID
   searchDeviceOrModel: string = '';
+  matchedTasksForEdit: any[] = []; // 模糊搜索匹配的任务列表
 
   // 删除任务属性
   isDeleteTaskModalOpen = false;
@@ -96,7 +99,7 @@ export class DispatchPage implements OnInit {
   vizData: any[] = [];
   vizDepartmentFilter = ''; // 可视化部门筛选
   vizGroupFilter = ''; // 可视化组筛选
-  vizEmployeeLimit: number = 10; // 可视化显示员工上限
+  vizEmployeeLimit: number = 100; // 可视化显示员工上限
   hiddenEmployeeIds: number[] = []; // 被隐藏的员工ID列表（避免已离职人员占用位置）
   showHiddenEmployees: boolean = false; // 是否显示被隐藏的员工（用于筛选时临时显示）
   unassignedTasks: any[] = []; // 待分配任务列表
@@ -123,6 +126,15 @@ export class DispatchPage implements OnInit {
   selectedAssignmentStatus = ''; // 新增：分配状态筛选
   currentPage = 1;
   pageSize = 50;
+  
+  // 排序相关属性
+  sortField: 'none' | 'production_time' | 'promised_completion_time' = 'production_time'; // 排序字段：无、开工日期、承诺交付日期（默认：开工日期）
+  sortOrder: 'asc' | 'desc' = 'asc'; // 排序方向：升序、降序（默认：升序）
+
+  // 返回主页
+  goHome() {
+    this.router.navigate(['/home']);
+  }
 
   // 根据工位名称映射到对应的阶段 key（用于联动）
   private mapDepartmentToPhase(dept: string): string {
@@ -450,14 +462,16 @@ export class DispatchPage implements OnInit {
 
   // 获取当前显示的任务
   getDisplayTasks() {
-    // 生成缓存键
+    // 生成缓存键（包含排序信息）
     const cacheKey = JSON.stringify({
       selectedView: this.selectedView,
       selectedPriority: this.selectedPriority,
       selectedStatus: this.selectedStatus,
       selectedPhase: this.selectedPhase,
       selectedAssignmentStatus: this.selectedAssignmentStatus,
-      searchKeyword: this.searchKeyword
+      searchKeyword: this.searchKeyword,
+      sortField: this.sortField,
+      sortOrder: this.sortOrder
     });
     
     // 如果缓存键匹配，直接返回缓存
@@ -479,11 +493,76 @@ export class DispatchPage implements OnInit {
       result = this.applyTableFilters(filtered);
     }
     
+    // 应用排序
+    if (this.sortField !== 'none') {
+      result = this.applySorting(result);
+    }
+    
     // 更新缓存
     this._cachedDisplayTasks = result;
     this._cachedDisplayTasksKey = cacheKey;
     
     return result;
+  }
+  
+  // 应用排序
+  private applySorting(tasks: any[]): any[] {
+    if (this.sortField === 'none') {
+      return tasks;
+    }
+    
+    const sorted = [...tasks].sort((a, b) => {
+      let valueA: any = null;
+      let valueB: any = null;
+      
+      if (this.sortField === 'production_time') {
+        valueA = a.production_time ? new Date(a.production_time).getTime() : Number.MAX_SAFE_INTEGER;
+        valueB = b.production_time ? new Date(b.production_time).getTime() : Number.MAX_SAFE_INTEGER;
+      } else if (this.sortField === 'promised_completion_time') {
+        valueA = a.promised_completion_time ? new Date(a.promised_completion_time).getTime() : Number.MAX_SAFE_INTEGER;
+        valueB = b.promised_completion_time ? new Date(b.promised_completion_time).getTime() : Number.MAX_SAFE_INTEGER;
+      }
+      
+      // 处理 null/undefined 值：没有日期的任务排在最后
+      if (valueA === Number.MAX_SAFE_INTEGER && valueB === Number.MAX_SAFE_INTEGER) {
+        return 0; // 都没有日期，保持原顺序
+      }
+      if (valueA === Number.MAX_SAFE_INTEGER) {
+        return 1; // a 没有日期，排在后面
+      }
+      if (valueB === Number.MAX_SAFE_INTEGER) {
+        return -1; // b 没有日期，排在后面
+      }
+      
+      // 正常排序
+      if (this.sortOrder === 'asc') {
+        return valueA - valueB;
+      } else {
+        return valueB - valueA;
+      }
+    });
+    
+    return sorted;
+  }
+  
+  // 切换排序
+  onSortChange() {
+    // 清除缓存，触发重新计算
+    this.clearAllCache();
+  }
+  
+  // 切换排序字段和方向（点击列头时调用）
+  toggleSort(field: 'production_time' | 'promised_completion_time') {
+    if (this.sortField === field) {
+      // 如果点击的是当前排序字段，则切换升序/降序
+      this.sortOrder = this.sortOrder === 'asc' ? 'desc' : 'asc';
+    } else {
+      // 如果点击的是不同的字段，则设置为该字段并默认升序
+      this.sortField = field;
+      this.sortOrder = 'asc';
+    }
+    // 清除缓存，触发重新计算
+    this.clearAllCache();
   }
 
   // 获取筛选后的任务
@@ -1321,6 +1400,31 @@ export class DispatchPage implements OnInit {
     return truthyValues.includes(normalized);
   }
 
+  // 判断阶段是否已开工但未完成
+  isPhaseStarted(task: any, phaseKey: string): boolean {
+    if (!task || !phaseKey) return false;
+    
+    // 如果已完成，不算已开工（已完成用绿色）
+    if (this.isPhaseCompleted(task, phaseKey)) {
+      return false;
+    }
+    
+    // 检查是否有开始时间
+    const startTimeFieldMap: Record<string, string> = {
+      machining: 'machining_start_time',
+      electrical: 'electrical_start_time',
+      pre_assembly: 'pre_assembly_start_time',
+      post_assembly: 'post_assembly_start_time',
+      debugging: 'debugging_start_time'
+    };
+    
+    const startTimeField = startTimeFieldMap[phaseKey];
+    if (!startTimeField) return false;
+    
+    // 有开始时间且未完成，表示已开工但未完成
+    return !!task[startTimeField];
+  }
+
   // 已撤回可视化徽章颜色使用
   getPhaseBadgeColor(task: any): string { return 'medium'; }
 
@@ -1527,48 +1631,111 @@ export class DispatchPage implements OnInit {
     this.isEditTaskModalOpen = true;
     this.editTask = null;
     this.searchDeviceOrModel = '';
+    this.matchedTasksForEdit = [];
   }
 
   closeEditTaskModal() {
     this.isEditTaskModalOpen = false;
     this.editTask = null;
     this.searchDeviceOrModel = '';
+    this.matchedTasksForEdit = [];
   }
 
   async loadTaskForEditByDeviceOrModel() {
     if (!this.searchDeviceOrModel) return;
     
     try {
+      this.errorMsg = '';
       // 先搜索所有任务
       const tasks: any = await this.http.get(`${environment.apiBase}/api/tasks`).toPromise();
       const tasksArray = Array.isArray(tasks) ? tasks : [];
-      // 按设备号或产品型号查找
-      const foundTask = tasksArray.find((t: any) => 
-        t.device_number === this.searchDeviceOrModel || 
-        t.product_model === this.searchDeviceOrModel
-      );
+      const keyword = this.searchDeviceOrModel.trim().toLowerCase();
       
-      if (foundTask) {
-        this.editTask = foundTask;
-      } else {
+      // 模糊搜索：按设备号或产品型号查找（包含关键字即可）
+      const matchedTasks = tasksArray.filter((t: any) => {
+        const deviceNumber = (t.device_number || '').toLowerCase();
+        const productModel = (t.product_model || '').toLowerCase();
+        return deviceNumber.includes(keyword) || productModel.includes(keyword);
+      });
+      
+      this.matchedTasksForEdit = matchedTasks;
+      
+      if (matchedTasks.length === 0) {
         this.errorMsg = '未找到匹配的任务';
+        this.editTask = null;
+      } else if (matchedTasks.length === 1) {
+        // 只有一个匹配结果，直接加载
+        this.editTask = this.formatTaskForEdit(matchedTasks[0]);
+      } else {
+        // 多个匹配结果，需要用户选择
+        // 先显示第一个，用户可以在列表中选择
+        this.editTask = this.formatTaskForEdit(matchedTasks[0]);
       }
     } catch (error: any) {
       this.errorMsg = '获取任务信息失败';
+      this.editTask = null;
     }
+  }
+  
+  // 格式化任务数据用于编辑（主要是日期格式）
+  formatTaskForEdit(task: any): any {
+    const formatted = { ...task };
+    
+    // 格式化开工时间：转换为 YYYY-MM-DD 格式（type="date" 需要的格式）
+    if (formatted.production_time) {
+      const date = new Date(formatted.production_time);
+      if (!isNaN(date.getTime())) {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        formatted.production_time = `${year}-${month}-${day}`;
+      }
+    }
+    
+    // 格式化承诺交货时间
+    if (formatted.promised_completion_time) {
+      const date = new Date(formatted.promised_completion_time);
+      if (!isNaN(date.getTime())) {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        formatted.promised_completion_time = `${year}-${month}-${day}`;
+      }
+    }
+    
+    return formatted;
   }
 
   async updateTask() {
     if (!this.editTask) return;
 
     try {
-      // 处理时间格式
+      // 处理时间格式：确保格式为 YYYY-MM-DDTHH:mm:ss
+      const formatDateTime = (dateStr: string | null | undefined): string | null => {
+        if (!dateStr) return null;
+        // 如果已经是 YYYY-MM-DD 格式，添加时间部分
+        if (dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
+          return dateStr + 'T00:00:00';
+        }
+        // 如果包含 T，只取日期部分并添加时间
+        if (dateStr.includes('T')) {
+          return dateStr.split('T')[0] + 'T00:00:00';
+        }
+        // 其他情况，尝试解析日期
+        const date = new Date(dateStr);
+        if (!isNaN(date.getTime())) {
+          const year = date.getFullYear();
+          const month = String(date.getMonth() + 1).padStart(2, '0');
+          const day = String(date.getDate()).padStart(2, '0');
+          return `${year}-${month}-${day}T00:00:00`;
+        }
+        return null;
+      };
+      
       const updateData = {
         ...this.editTask,
-        production_time: this.editTask.production_time ? 
-          (this.editTask.production_time.split('T')[0] + 'T00:00:00') : this.editTask.production_time,
-        promised_completion_time: this.editTask.promised_completion_time ? 
-          (this.editTask.promised_completion_time.split('T')[0] + 'T00:00:00') : this.editTask.promised_completion_time
+        production_time: formatDateTime(this.editTask.production_time),
+        promised_completion_time: formatDateTime(this.editTask.promised_completion_time)
       };
       
       await this.http.put(`${environment.apiBase}/api/tasks/${this.editTask.id}`, updateData).toPromise();
@@ -1890,21 +2057,18 @@ export class DispatchPage implements OnInit {
         employeeData = employeeData.filter(e => !this.hiddenEmployeeIds.includes(e.id));
       }
 
-      // 排序：有任务的员工优先（按任务数降序），无任务员工放最后
+      // 排序：按部门、组、姓名固定顺序排序，保持位置稳定（不因任务数变化而改变）
       employeeData.sort((a, b) => {
-        if (a.tasks.length > 0 && b.tasks.length > 0) {
-          // 两者都有任务，按任务数降序
-          return b.tasks.length - a.tasks.length;
-        } else if (a.tasks.length > 0) {
-          // a有任务，b没有，a优先
-          return -1;
-        } else if (b.tasks.length > 0) {
-          // b有任务，a没有，b优先
-          return 1;
-        } else {
-          // 两者都无任务，按姓名排序
-          return a.name.localeCompare(b.name);
+        // 先按部门排序
+        if (a.department !== b.department) {
+          return (a.department || '').localeCompare(b.department || '');
         }
+        // 部门相同，按组排序
+        if (a.user_group !== b.user_group) {
+          return (a.user_group || '').localeCompare(b.user_group || '');
+        }
+        // 组也相同，按姓名排序
+        return a.name.localeCompare(b.name);
       });
 
       // 取前 N 个（可调）
