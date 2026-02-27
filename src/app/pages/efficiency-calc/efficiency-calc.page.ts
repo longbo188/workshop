@@ -378,6 +378,7 @@ export class EfficiencyCalcPage implements OnInit {
   tableAssigneeFilter: string = ''; // 负责人筛选
   tableEfficiencySort: string = ''; // 效率排序
   tableExceptionSort: string = ''; // 异常排序
+  tableNonStandardFilter: string = ''; // 非标筛选：''全部，'non_standard'仅非标，'standard'仅标准
   
   // 分页相关
   pageSize: number = 50; // 每页显示条数，默认50
@@ -3429,6 +3430,22 @@ export class EfficiencyCalcPage implements OnInit {
         const taskUserName = (this.getTaskAssigneeName(data.task, data.phase) || '').toLowerCase();
         if (!taskUserName.includes(keyword)) {
           return false;
+        }
+      }
+
+      // 按是否非标筛选（基于任务的 is_non_standard 字段）
+      if (this.tableNonStandardFilter) {
+        const isNonStandard = Number(data.task?.is_non_standard) === 1;
+        if (this.tableNonStandardFilter === 'non_standard') {
+          // 仅显示非标任务
+          if (!isNonStandard) {
+            return false;
+          }
+        } else if (this.tableNonStandardFilter === 'standard') {
+          // 仅显示标准任务
+          if (isNonStandard) {
+            return false;
+          }
         }
       }
       

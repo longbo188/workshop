@@ -538,7 +538,21 @@ app.get('/api/tasks/:id', async (req, res) => {
 app.post('/api/tasks', async (req, res) => {
   let connection;
   try {
-    const { name, description, status, priority, device_number, product_model, order_status, production_time, promised_completion_time, is_non_standard, created_by } = req.body;
+    const { 
+      name, 
+      description, 
+      status, 
+      priority, 
+      device_number, 
+      product_model, 
+      order_status, 
+      delivery_plan_note,
+      is_inventory,
+      production_time, 
+      promised_completion_time, 
+      is_non_standard, 
+      created_by 
+    } = req.body;
     const normalizedPriority = normalizePriority(priority);
     
     if (!name) {
@@ -547,9 +561,23 @@ app.post('/api/tasks', async (req, res) => {
     
     connection = await mysql.createConnection(dbConfig);
     const [result] = await connection.execute(
-      `INSERT INTO tasks (name, description, status, priority, device_number, product_model, order_status, production_time, promised_completion_time, is_non_standard, created_by) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [name, description || null, status || 'pending', normalizedPriority, device_number || null, product_model || null, order_status || null, production_time || null, promised_completion_time || null, is_non_standard || 0, created_by || null]
+      `INSERT INTO tasks (name, description, status, priority, device_number, product_model, order_status, delivery_plan_note, is_inventory, production_time, promised_completion_time, is_non_standard, created_by) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        name, 
+        description || null, 
+        status || 'pending', 
+        normalizedPriority, 
+        device_number || null, 
+        product_model || null, 
+        order_status || null, 
+        delivery_plan_note || null,
+        is_inventory != null ? (is_inventory ? 1 : 0) : 0,
+        production_time || null, 
+        promised_completion_time || null, 
+        is_non_standard || 0, 
+        created_by || null
+      ]
     );
     
     const taskId = result.insertId;
@@ -609,7 +637,7 @@ app.put('/api/tasks/:id', async (req, res) => {
     // 允许更新的字段列表（排除阶段和进度相关字段，防止误操作）
     const allowedFields = [
       'name', 'description', 'status', 'priority', 
-      'device_number', 'product_model', 'order_status',
+      'device_number', 'product_model', 'order_status', 'delivery_plan_note', 'is_inventory',
       'production_time', 'promised_completion_time',
       'estimated_hours', 'machining_hours_est', 'electrical_hours_est',
       'pre_assembly_hours_est', 'post_assembly_hours_est', 'debugging_hours_est',
@@ -636,6 +664,60 @@ app.put('/api/tasks/:id', async (req, res) => {
     const sql = `UPDATE tasks SET ${setClause} WHERE id = ?`;
     
     const connection = await mysql.createConnection(dbConfig);
+
+    // 如果本次更新涉及任何阶段负责人（*_assignee），并且该阶段已经开始，则禁止修改负责人
+    const assigneeFields = [
+      'machining_assignee',
+      'electrical_assignee',
+      'pre_assembly_assignee',
+      'post_assembly_assignee',
+      'debugging_assignee'
+    ];
+
+    if (fields.some(f => assigneeFields.includes(f))) {
+      const [taskRows] = await connection.execute(
+        `SELECT 
+           machining_assignee, machining_start_time,
+           electrical_assignee, electrical_start_time,
+           pre_assembly_assignee, pre_assembly_start_time,
+           post_assembly_assignee, post_assembly_start_time,
+           debugging_assignee, debugging_start_time
+         FROM tasks WHERE id = ?`,
+        [taskId]
+      );
+
+      if (taskRows.length === 0) {
+        await connection.end();
+        return res.status(404).json({ success: false, message: '任务不存在' });
+      }
+
+      const existing = taskRows[0];
+
+      const phaseKeys = ['machining', 'electrical', 'pre_assembly', 'post_assembly', 'debugging'];
+
+      for (const phaseKey of phaseKeys) {
+        const assigneeField = `${phaseKey}_assignee`;
+        const startField = `${phaseKey}_start_time`;
+
+        if (!fields.includes(assigneeField)) continue;
+
+        const newAssignee = updateData[assigneeField];
+        const oldAssignee = existing[assigneeField];
+
+        // 只有在负责人发生变化时才需要检查
+        if (newAssignee == oldAssignee) continue;
+
+        if (existing[startField]) {
+          await connection.end();
+          const phaseName = getPhaseName(phaseKey);
+          return res.status(400).json({
+            success: false,
+            message: `任务的${phaseName}阶段已开工，禁止修改负责人`
+          });
+        }
+      }
+    }
+
     await connection.execute(sql, [...values, taskId]);
     
     // 如果更新了产品型号，且任务的标准工时字段为空，且不是非标产品，尝试从标准工时表同步
@@ -1214,6 +1296,43 @@ app.get('/api/standard-hours/template', async (req, res) => {
   }
 });
 
+// 12.z 下载任务导入Excel模板
+app.get('/api/tasks/import/template', async (req, res) => {
+  try {
+    const workbook = XLSX.utils.book_new();
+
+    // 使用稀疏数组精确控制列号：C(2), E(4), F(5), H(7), O(14), Q(16), V(21), AL(37)
+    const headerRow = [];
+    headerRow[2]  = '设备号';          // C列
+    headerRow[4]  = '是否非标';        // E列
+    headerRow[5]  = '产品型号';        // F列
+    headerRow[7]  = '是否库存';        // H列
+    headerRow[14] = '承诺完成时间';    // O列
+    headerRow[16] = '投产时间';        // Q列
+    headerRow[21] = '订单状态';        // V列
+    headerRow[37] = '紧急程度';        // AL列
+
+    const sheetData = [headerRow];
+
+    const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
+    XLSX.utils.book_append_sheet(workbook, worksheet, '任务导入模板');
+
+    const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="task_import_template.xlsx"'
+    );
+    res.send(buffer);
+  } catch (error) {
+    console.error('生成任务导入模板失败：', error);
+    res.status(500).json({ error: '生成模板失败：' + error.message });
+  }
+});
+
 // 9.2 待审批列表（主管/管理员查看所有 pending 的完成记录）
 app.get('/api/approvals/pending', async (req, res) => {
   try {
@@ -1321,12 +1440,13 @@ app.get('/api/work-reports/by-task/:taskId', async (req, res) => {
   }
 });
 
-// 10. 获取所有用户（用于主管派工界面）
+// 10. 获取所有用户（用于主管派工界面，只返回在职 active 用户）
 app.get('/api/users', async (_req, res) => {
   try {
     const connection = await mysql.createConnection(dbConfig);
     const [rows] = await connection.execute(
-      'SELECT id, username, name, role, department, user_group FROM users ORDER BY role DESC, name ASC'
+      'SELECT id, username, name, role, department, user_group FROM users WHERE status = ? ORDER BY role DESC, name ASC',
+      ['active']
     );
     await connection.end();
     res.json(rows);
@@ -1453,6 +1573,60 @@ app.post('/api/users/import', upload.single('file'), async (req, res) => {
   } catch (error) {
     console.error('导入员工失败:', error);
     res.status(500).json({ success: false, message: '导入失败：' + error.message });
+  }
+});
+
+// 10.3. 更新用户在职状态（active / inactive），用于软删除离职员工
+app.post('/api/users/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, operatorId } = req.body || {};
+
+    if (!status || !['active', 'inactive'].includes(status)) {
+      return res.status(400).json({ error: 'status 必须是 active 或 inactive' });
+    }
+    if (!operatorId) {
+      return res.status(400).json({ error: 'operatorId 必填' });
+    }
+
+    const connection = await mysql.createConnection(dbConfig);
+
+    // 检查操作人是否存在且在职
+    const [opRows] = await connection.execute(
+      'SELECT role FROM users WHERE id = ? AND status = "active"',
+      [operatorId]
+    );
+    if (opRows.length === 0) {
+      await connection.end();
+      return res.status(403).json({ error: '操作人不存在或已离职' });
+    }
+    const opRole = opRows[0].role;
+    if (opRole !== 'admin' && opRole !== 'manager') {
+      await connection.end();
+      return res.status(403).json({ error: '只有管理员或经理可以修改员工在职状态' });
+    }
+
+    // 检查被操作用户是否存在
+    const [userRows] = await connection.execute(
+      'SELECT id, username, name FROM users WHERE id = ?',
+      [id]
+    );
+    if (userRows.length === 0) {
+      await connection.end();
+      return res.status(404).json({ error: '用户不存在' });
+    }
+
+    // 更新用户状态（active=在职, inactive=离职）
+    await connection.execute(
+      'UPDATE users SET status = ? WHERE id = ?',
+      [status, id]
+    );
+
+    await connection.end();
+    res.json({ success: true, message: `用户状态已更新为 ${status}` });
+  } catch (error) {
+    console.error('更新用户状态失败:', error);
+    res.status(500).json({ error: '更新用户状态失败：' + error.message });
   }
 });
 
@@ -1875,6 +2049,9 @@ app.post('/api/tasks/import', upload.single('file'), async (req, res) => {
         continue;
       }
 
+      // H列：是否库存（根据单元格内容是否包含“库存”判断）
+      const inventoryRaw = row[7] ? String(row[7]).trim() : ''; // H列：是否库存提示
+
       // 跳过已完成或已交货的任务
       if (orderStatus && (orderStatus.includes('已完成') || orderStatus.includes('已交货') || orderStatus.includes('完成') || orderStatus.includes('交货'))) {
         console.log(`跳过第${i + 1}行：任务状态为"${orderStatus}"，已跳过`);
@@ -1901,6 +2078,9 @@ app.post('/api/tasks/import', upload.single('file'), async (req, res) => {
       // 解析E列：是否非标（"是"→1，"否"→0，其他→0）
       const isNonStandard = nonStandardRaw === '是' ? 1 : 0;
 
+      // 解析H列：是否库存（单元格内容包含“库存”→1，否则0）
+      const isInventory = inventoryRaw.includes('库存') ? 1 : 0;
+
       // 生成任务名称
       const taskName = `${deviceNumber} - ${productModel}`;
 
@@ -1912,6 +2092,7 @@ app.post('/api/tasks/import', upload.single('file'), async (req, res) => {
         device_number: deviceNumber,
         product_model: productModel,
         order_status: orderStatus,
+        is_inventory: isInventory,
         production_time: productionTime,
         promised_completion_time: promisedCompletionTime,
         is_non_standard: isNonStandard,
@@ -1941,8 +2122,8 @@ app.post('/api/tasks/import', upload.single('file'), async (req, res) => {
     const insertResults = await Promise.all(
       tasks.map(task => {
         return connection.execute(
-          `INSERT INTO tasks (name, description, status, priority, device_number, product_model, order_status, production_time, promised_completion_time, is_non_standard, created_by) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO tasks (name, description, status, priority, device_number, product_model, order_status, delivery_plan_note, is_inventory, production_time, promised_completion_time, is_non_standard, created_by) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             task.name,
             task.description,
@@ -1951,6 +2132,8 @@ app.post('/api/tasks/import', upload.single('file'), async (req, res) => {
             task.device_number,
             task.product_model,
             task.order_status,
+            null, // 导入时暂不设置交货计划备注
+            task.is_inventory,
             task.production_time,
             task.promised_completion_time,
             task.is_non_standard,
@@ -2199,7 +2382,7 @@ app.get('/api/attendance/admin', async (req, res) => {
               ar.standard_hours, ar.overtime_minutes, ar.leave_minutes, ar.adjustment_note,
               ar.adjusted_by, ar.adjusted_at, adjuster.name as adjuster_name
        FROM attendance_records ar
-       JOIN users u ON u.id = ar.user_id
+       JOIN users u ON u.id = ar.user_id AND u.status = 'active'
        LEFT JOIN users adjuster ON adjuster.id = ar.adjusted_by
        ${whereSql}
        ORDER BY ar.clock_in DESC
@@ -2299,7 +2482,7 @@ app.get('/api/attendance/stats', async (req, res) => {
       ${whereSql}
     `, params);
     
-    // 获取按用户分组的统计
+    // 获取按用户分组的统计（仅在职员工）
     const [userStatsRows] = await connection.execute(`
       SELECT 
         ar.user_id,
@@ -2312,7 +2495,7 @@ app.get('/api/attendance/stats', async (req, res) => {
         AVG(ar.overtime_minutes) as avg_overtime_minutes,
         AVG(ar.leave_minutes) as avg_leave_minutes
       FROM attendance_records ar
-      JOIN users u ON u.id = ar.user_id
+      JOIN users u ON u.id = ar.user_id AND u.status = 'active'
       ${whereSql}
       GROUP BY ar.user_id, u.name
       ORDER BY u.name
@@ -2393,7 +2576,8 @@ app.get('/api/daily-attendance', async (req, res) => {
     }
     
     const params = [startDate, endDate];
-    let userFilterSql = 'u.role = \"worker\"';
+    // 只统计在职工人：role=worker 且 status='active'
+    let userFilterSql = 'u.role = \"worker\" AND u.status = \"active\"';
     if (userId) {
       userFilterSql += ' AND u.id = ?';
       // userId参数将在SQL执行时正确插入
@@ -4130,6 +4314,47 @@ app.post('/api/tasks/:taskId/phases/:phaseKey/start', async (req, res) => {
       return res.status(400).json({ error: '该阶段已完成' });
     }
     
+    // 检查该用户是否有其他正在进行的任务（阶段已开始且未暂停且未完成）
+    const [activeTasks] = await connection.execute(`
+      SELECT id, name, current_phase,
+             machining_start_time, machining_paused_at, machining_phase,
+             electrical_start_time, electrical_paused_at, electrical_phase,
+             pre_assembly_start_time, pre_assembly_paused_at, pre_assembly_phase,
+             post_assembly_start_time, post_assembly_paused_at, post_assembly_phase,
+             debugging_start_time, debugging_paused_at, debugging_phase
+      FROM tasks
+      WHERE (
+        (machining_assignee = ? AND machining_start_time IS NOT NULL AND machining_paused_at IS NULL AND machining_phase != 1) OR
+        (electrical_assignee = ? AND electrical_start_time IS NOT NULL AND electrical_paused_at IS NULL AND electrical_phase != 1) OR
+        (pre_assembly_assignee = ? AND pre_assembly_start_time IS NOT NULL AND pre_assembly_paused_at IS NULL AND pre_assembly_phase != 1) OR
+        (post_assembly_assignee = ? AND post_assembly_start_time IS NOT NULL AND post_assembly_paused_at IS NULL AND post_assembly_phase != 1) OR
+        (debugging_assignee = ? AND debugging_start_time IS NOT NULL AND debugging_paused_at IS NULL AND debugging_phase != 1)
+      )
+      AND id != ?
+      AND status != 'completed'
+    `, [userId, userId, userId, userId, userId, taskId]);
+    
+    if (activeTasks.length > 0) {
+      const activeTask = activeTasks[0];
+      // 确定正在进行的阶段名称
+      let activePhaseName = '';
+      if (activeTask.machining_start_time && !activeTask.machining_paused_at && activeTask.machining_phase != 1) {
+        activePhaseName = '机加';
+      } else if (activeTask.electrical_start_time && !activeTask.electrical_paused_at && activeTask.electrical_phase != 1) {
+        activePhaseName = '电控';
+      } else if (activeTask.pre_assembly_start_time && !activeTask.pre_assembly_paused_at && activeTask.pre_assembly_phase != 1) {
+        activePhaseName = '总装前段';
+      } else if (activeTask.post_assembly_start_time && !activeTask.post_assembly_paused_at && activeTask.post_assembly_phase != 1) {
+        activePhaseName = '总装后段';
+      } else if (activeTask.debugging_start_time && !activeTask.debugging_paused_at && activeTask.debugging_phase != 1) {
+        activePhaseName = '调试';
+      }
+      await connection.end();
+      return res.status(400).json({ 
+        error: `您有任务"${activeTask.name}"的${activePhaseName}阶段正在进行中，无法开始新任务。请先暂停或完成当前任务。` 
+      });
+    }
+    
     // 更新阶段状态（根据新逻辑更新 current_phase）
     if (phaseKey === 'machining' || phaseKey === 'electrical') {
       // 机加或电控：如果机加未完成，允许并行，设置为对应阶段
@@ -4316,6 +4541,47 @@ app.post('/api/tasks/:taskId/phases/:phaseKey/resume', async (req, res) => {
     if (!task[`${phaseKey}_paused_at`]) {
       await connection.end();
       return res.status(400).json({ error: '该阶段未处于暂停状态' });
+    }
+    
+    // 检查该用户是否有其他正在进行的任务（阶段已开始且未暂停且未完成）
+    const [activeTasks] = await connection.execute(`
+      SELECT id, name, current_phase,
+             machining_start_time, machining_paused_at, machining_phase,
+             electrical_start_time, electrical_paused_at, electrical_phase,
+             pre_assembly_start_time, pre_assembly_paused_at, pre_assembly_phase,
+             post_assembly_start_time, post_assembly_paused_at, post_assembly_phase,
+             debugging_start_time, debugging_paused_at, debugging_phase
+      FROM tasks
+      WHERE (
+        (machining_assignee = ? AND machining_start_time IS NOT NULL AND machining_paused_at IS NULL AND machining_phase != 1) OR
+        (electrical_assignee = ? AND electrical_start_time IS NOT NULL AND electrical_paused_at IS NULL AND electrical_phase != 1) OR
+        (pre_assembly_assignee = ? AND pre_assembly_start_time IS NOT NULL AND pre_assembly_paused_at IS NULL AND pre_assembly_phase != 1) OR
+        (post_assembly_assignee = ? AND post_assembly_start_time IS NOT NULL AND post_assembly_paused_at IS NULL AND post_assembly_phase != 1) OR
+        (debugging_assignee = ? AND debugging_start_time IS NOT NULL AND debugging_paused_at IS NULL AND debugging_phase != 1)
+      )
+      AND id != ?
+      AND status != 'completed'
+    `, [userId, userId, userId, userId, userId, taskId]);
+    
+    if (activeTasks.length > 0) {
+      const activeTask = activeTasks[0];
+      // 确定正在进行的阶段名称
+      let activePhaseName = '';
+      if (activeTask.machining_start_time && !activeTask.machining_paused_at && activeTask.machining_phase != 1) {
+        activePhaseName = '机加';
+      } else if (activeTask.electrical_start_time && !activeTask.electrical_paused_at && activeTask.electrical_phase != 1) {
+        activePhaseName = '电控';
+      } else if (activeTask.pre_assembly_start_time && !activeTask.pre_assembly_paused_at && activeTask.pre_assembly_phase != 1) {
+        activePhaseName = '总装前段';
+      } else if (activeTask.post_assembly_start_time && !activeTask.post_assembly_paused_at && activeTask.post_assembly_phase != 1) {
+        activePhaseName = '总装后段';
+      } else if (activeTask.debugging_start_time && !activeTask.debugging_paused_at && activeTask.debugging_phase != 1) {
+        activePhaseName = '调试';
+      }
+      await connection.end();
+      return res.status(400).json({ 
+        error: `您有任务"${activeTask.name}"的${activePhaseName}阶段正在进行中，无法继续当前任务。请先暂停或完成当前任务。` 
+      });
     }
     
     // 更新阶段继续状态（清除暂停时间）

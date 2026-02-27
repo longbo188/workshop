@@ -205,9 +205,31 @@ export class ExceptionApprovalPage implements OnInit {
         // Staff角色：如果筛选状态为空，显示待责任部门确认和责任部门已确认；否则只显示选中的状态
         if (this.currentUser?.role === 'staff' && !this.filterStatus) {
           statusOk = report.status === 'pending_staff_confirmation' || report.status === 'staff_confirmed';
+        } else if (this.filterStatus === 'approved') {
+          // “已审批”视图：状态上放宽为 已批准 / 待责任部门确认 / 责任部门已确认
+          // 后面还会再通过“是否经过自己手”做第二层过滤
+          statusOk = report.status === 'approved' 
+            || report.status === 'pending_staff_confirmation'
+            || report.status === 'staff_confirmed';
         } else {
           statusOk = report.status === this.filterStatus;
         }
+      }
+
+      // “已审批”视图：只显示当前用户自己审批通过的记录
+      // 适用于主管、管理员、经理等角色，避免看到其他审批人的已批准记录
+      if (statusOk && this.filterStatus === 'approved' && this.currentUser?.id != null) {
+        const currentId = Number(this.currentUser.id);
+        const firstId = report.first_approver_id != null ? Number(report.first_approver_id) : null;
+        const secondId = report.second_approver_id != null ? Number(report.second_approver_id) : null;
+        const legacyApprovedId = report.approved_by != null ? Number(report.approved_by) : null; // 兼容旧数据
+
+        const isMyApprovedReport =
+          (firstId != null && firstId === currentId) ||
+          (secondId != null && secondId === currentId) ||
+          (legacyApprovedId != null && legacyApprovedId === currentId);
+
+        statusOk = isMyApprovedReport;
       }
       
       // 类型筛选：优先使用修改后的类型，如果没有则使用原始类型

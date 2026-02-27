@@ -407,7 +407,17 @@
                   [(ngModel)]="tableAssigneeFilter" 
                   (ngModelChange)="applyTableFilters()">
               </th>
-              <th></th>
+              <th>
+                <!-- 新增：按是否非标筛选 -->
+                <select 
+                  class="table-filter-select" 
+                  [(ngModel)]="tableNonStandardFilter" 
+                  (ngModelChange)="applyTableFilters()">
+                  <option value="">全部</option>
+                  <option value="non_standard">仅非标</option>
+                  <option value="standard">仅标准</option>
+                </select>
+              </th>
               <th></th>
               <th></th>
               <th>
@@ -719,6 +729,10 @@
                     {{ formatTime(exception.start_time || exception.exception_start_datetime || null) }} 
                     → 
                     {{ formatTime(exception.end_time || exception.exception_end_datetime || null) }}
+                  </p>
+                  <p class="exception-description" *ngIf="exception.description">
+                    <ion-icon name="document-text-outline"></ion-icon>
+                    {{ exception.description }}
                   </p>
                 </div>
               </div>

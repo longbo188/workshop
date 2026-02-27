@@ -55,6 +55,10 @@
         <ion-icon name="person-add-outline"></ion-icon>
         <ion-label class="ion-padding-start">导入员工</ion-label>
       </ion-button>
+      <ion-button *ngIf="currentUser?.role==='admin' || currentUser?.role==='manager'" (click)="openUserManageModal()" title="员工管理">
+        <ion-icon name="people-outline"></ion-icon>
+        <ion-label class="ion-padding-start">员工管理</ion-label>
+      </ion-button>
       <ion-button *ngIf="currentUser?.role==='admin'" (click)="openRollbackModal()" title="完工撤回">
         <ion-icon name="arrow-undo-outline"></ion-icon>
         <ion-label class="ion-padding-start">完工撤回</ion-label>
@@ -529,6 +533,77 @@
               取消
             </ion-button>
           </div>
+        </ion-card-content>
+      </ion-card>
+    </ion-content>
+  </ng-template>
+</ion-modal>
+
+<!-- 员工管理模态框（在职员工列表 + 标记离职） -->
+<ion-modal [isOpen]="isUserManageModalOpen" (didDismiss)="closeUserManageModal()">
+  <ng-template>
+    <ion-header>
+      <ion-toolbar>
+        <ion-title>员工管理</ion-title>
+        <ion-buttons slot="end">
+          <ion-button color="dark" style="color: #111827;" (click)="closeUserManageModal()">关闭</ion-button>
+        </ion-buttons>
+      </ion-toolbar>
+    </ion-header>
+    <ion-content class="ion-padding">
+      <ion-card>
+        <ion-card-content>
+          <p style="margin-bottom: 8px; color: #666; font-size: 14px;">
+            仅显示当前在职员工（active）。将员工标记为离职后，将不再出现在派工、考勤等列表中，但历史报工和任务记录会保留。
+          </p>
+          <ion-item>
+            <ion-label position="stacked">搜索</ion-label>
+            <ion-input
+              [(ngModel)]="userManageSearchKeyword"
+              placeholder="按姓名 / 用户名 / 部门 / 角色 搜索">
+            </ion-input>
+          </ion-item>
+          <ion-item class="ion-margin-top">
+            <ion-label>按角色筛选</ion-label>
+            <ion-select
+              interface="popover"
+              placeholder="全部角色"
+              [(ngModel)]="userManageFilterRole">
+              <ion-select-option value="">全部角色</ion-select-option>
+              <ion-select-option value="worker">工人</ion-select-option>
+              <ion-select-option value="supervisor">主管</ion-select-option>
+              <ion-select-option value="manager">经理</ion-select-option>
+              <ion-select-option value="admin">管理员</ion-select-option>
+              <ion-select-option value="staff">Staff</ion-select-option>
+            </ion-select>
+          </ion-item>
+        </ion-card-content>
+      </ion-card>
+
+      <ion-card>
+        <ion-card-header>
+          <ion-card-title>在职员工列表</ion-card-title>
+        </ion-card-header>
+        <ion-card-content>
+          <ion-list>
+            <ion-item *ngFor="let user of filteredUsersForManage">
+              <ion-label>
+                <h3>{{ user.name }}（{{ user.username }}）</h3>
+                <p>角色：{{ user.role }}；部门：{{ user.department || '无部门' }}；组：{{ user.user_group || '无组别' }}</p>
+              </ion-label>
+              <ion-button
+                slot="end"
+                color="danger"
+                fill="outline"
+                size="small"
+                (click)="setUserInactive(user)">
+                设为离职
+              </ion-button>
+            </ion-item>
+            <ion-item *ngIf="filteredUsersForManage.length === 0">
+              <ion-label>暂无匹配的在职员工</ion-label>
+            </ion-item>
+          </ion-list>
         </ion-card-content>
       </ion-card>
     </ion-content>

@@ -6,6 +6,7 @@ import { IonHeader, IonToolbar, IonTitle, IonContent, IonCard, IonCardHeader, Io
 import { environment } from '../../../environments/environment';
 import * as XLSX from 'xlsx';
 import { Router } from '@angular/router';
+import { Capacitor } from '@capacitor/core';
 
 @Component({
   selector: 'app-dispatch',
@@ -136,6 +137,23 @@ export class DispatchPage implements OnInit {
     this.router.navigate(['/home']);
   }
 
+  // 下载任务导入Excel模板
+  async downloadImportTemplate() {
+    try {
+      const isNative = Capacitor.isNativePlatform();
+      const base = isNative ? (environment.apiBase.replace('localhost', '10.0.2.2')) : environment.apiBase;
+      const url = `${base}/api/tasks/import/template`;
+      try {
+        window.open(url, '_blank');
+      } catch {
+        window.location.href = url;
+      }
+    } catch (error) {
+      console.error('下载任务导入模板失败:', error);
+      this.presentToast('下载任务导入模板失败');
+    }
+  }
+
   // 根据工位名称映射到对应的阶段 key（用于联动）
   private mapDepartmentToPhase(dept: string): string {
     const map: any = {
@@ -153,6 +171,7 @@ export class DispatchPage implements OnInit {
     index: true, // 序号列
     device: true,
     model: true,
+    inventory: true, // 新增：是否库存
     priority: true,
     status: true,
     currentPhase: true,
@@ -169,6 +188,7 @@ export class DispatchPage implements OnInit {
     { key: 'index', label: '序号' },
     { key: 'device', label: '设备号' },
     { key: 'model', label: '型号' },
+    { key: 'inventory', label: '是否库存' },
     { key: 'priority', label: '优先级' },
     { key: 'status', label: '状态' },
     { key: 'currentPhase', label: '当前阶段' },
@@ -184,6 +204,7 @@ export class DispatchPage implements OnInit {
   tableFilters = {
     device: '',
     model: '',
+    inventory: '',
     priority: '',
     status: '',
     phase: '',
@@ -247,6 +268,23 @@ export class DispatchPage implements OnInit {
     }
     
     this.loadData();
+  }
+
+  // 交货计划备注编辑失焦时保存
+  async onDeliveryPlanNoteBlur(task: any) {
+    if (!task || !task.id) return;
+
+    try {
+      const isNative = Capacitor.isNativePlatform();
+      const base = isNative ? (environment.apiBase.replace('localhost', '10.0.2.2')) : environment.apiBase;
+      await this.http.put(`${base}/api/tasks/${task.id}`, {
+        delivery_plan_note: task.delivery_plan_note || null
+      }).toPromise();
+      // 成功时不弹提示，避免频繁打扰
+    } catch (error) {
+      console.error('保存交货计划备注失败:', error);
+      this.presentToast('交货计划备注保存失败');
+    }
   }
 
   async loadData() {
@@ -1153,6 +1191,7 @@ export class DispatchPage implements OnInit {
     this.tableFilters = {
       device: '',
       model: '',
+      inventory: '',
       priority: '',
       status: '',
       phase: '',
@@ -1183,7 +1222,8 @@ export class DispatchPage implements OnInit {
 
   getVisibleTableColumnCount(): number {
     const visible = Object.values(this.tableColumnVisibility).filter(Boolean).length;
-    const operationsColumn = 1;
+    // 目前表格中有两个固定列：备注列 + 操作列
+    const operationsColumn = 2;
     return visible + operationsColumn;
   }
 
@@ -1202,8 +1242,10 @@ export class DispatchPage implements OnInit {
 
   resetColumnVisibility() {
     this.tableColumnVisibility = {
+      index: true,
       device: true,
       model: true,
+      inventory: true,
       priority: true,
       status: true,
       currentPhase: true,
@@ -2359,6 +2401,17 @@ export class DispatchPage implements OnInit {
         }
       }
 
+      // 是否库存筛选：'' 全部；'yes' 仅库存；'no' 仅非库存
+      if (this.tableFilters.inventory) {
+        const isInventory = Number(task.is_inventory) === 1;
+        if (this.tableFilters.inventory === 'yes' && !isInventory) {
+          return false;
+        }
+        if (this.tableFilters.inventory === 'no' && isInventory) {
+          return false;
+        }
+      }
+
       if (this.tableFilters.priority) {
         if (this.normalizePriorityValue(task.priority) !== this.tableFilters.priority) {
           return false;
@@ -3038,20 +3091,28 @@ export class DispatchPage implements OnInit {
         }
       } else {
       // 统一口径：当前有效阶段负责人为空才算待分配
-      const phase = this.getEffectivePhase(task);
-      
-      // 如果是数组（机加和电控并行），需要检查两个阶段是否都有 assignee
-      if (Array.isArray(phase)) {
-        // 只有当所有并行阶段都有 assignee 时，才从待分配列表中移除
-        const allAssigned = phase.every(p => {
-          const assignee = this.getAssigneeByPhase(task, p);
-          return assignee !== null && assignee !== undefined && assignee !== 0;
-        });
-        if (allAssigned) return false;
-      } else if (phase) {
-        // 单个阶段，使用原有逻辑
-        const assignee = this.getAssigneeByPhase(task, phase);
-        if (assignee) return false;
+      // 特殊处理：如果电控阶段未完成且未分配，即使其他阶段已分配，也应该显示
+      // 因为电控和机加是并行阶段，不应该被后续阶段的状态影响
+      if (task.electrical_phase === 0 && !task.electrical_assignee) {
+        // 电控未完成且未分配，应该显示在待分配列表中
+        // 继续后续筛选（设备号、型号、阶段筛选等）
+      } else {
+        // 如果不是电控未分配的情况，使用原有的 getEffectivePhase 逻辑
+        const phase = this.getEffectivePhase(task);
+        
+        // 如果是数组（机加和电控并行），需要检查两个阶段是否都有 assignee
+        if (Array.isArray(phase)) {
+          // 只有当所有并行阶段都有 assignee 时，才从待分配列表中移除
+          const allAssigned = phase.every(p => {
+            const assignee = this.getAssigneeByPhase(task, p);
+            return assignee !== null && assignee !== undefined && assignee !== 0;
+          });
+          if (allAssigned) return false;
+        } else if (phase) {
+          // 单个阶段，使用原有逻辑
+          const assignee = this.getAssigneeByPhase(task, phase);
+          if (assignee) return false;
+        }
       }
       }
 

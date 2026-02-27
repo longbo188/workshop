@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS users (
     name VARCHAR(100) NOT NULL,
     role ENUM('worker', 'supervisor', 'admin', 'manager', 'staff') DEFAULT 'worker',
     department VARCHAR(100),
+    status ENUM('active','inactive') NOT NULL DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
@@ -41,6 +42,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     device_number VARCHAR(100),
     product_model VARCHAR(100),
     order_status VARCHAR(50),
+    delivery_plan_note TEXT NULL COMMENT '交货计划备注（交货计划说明）',
+    is_inventory TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否库存任务（1=库存，0=非库存）',
     production_time DATETIME,
     promised_completion_time DATETIME,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

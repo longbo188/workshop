@@ -16,3 +16,4 @@ MODIFY COLUMN exception_type ENUM(
 
 -- 验证修改结果
 DESCRIBE exception_reports;
+

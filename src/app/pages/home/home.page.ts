@@ -147,11 +147,13 @@ export class HomePage implements OnInit, OnDestroy {
   selectedUserFile: File | null = null;
   isImportingUsers: boolean = false;
   importUserResult: any = null;
-  // 员工信息查询
+  // 员工信息查询（仅工人列表）
   isUserListModalOpen: boolean = false;
   userSearchKeyword: string = '';
-  // 用户管理模态框（用于导入员工）
-  isUserModalOpen: boolean = false;
+  // 员工管理模态框（在职/离职管理）
+  isUserManageModalOpen: boolean = false;
+  userManageSearchKeyword: string = '';
+  userManageFilterRole: string = '';
   
   // 导入标准工时相关属性
   isStdHoursModalOpen: boolean = false;
@@ -247,15 +249,17 @@ export class HomePage implements OnInit, OnDestroy {
     this.userSearchKeyword = '';
   }
 
-  // 用户管理模态框（导入员工）
-  openUserModal() {
-    this.isUserModalOpen = true;
+  // 员工管理模态框（在职/离职）
+  openUserManageModal() {
+    this.isUserManageModalOpen = true;
+    this.userManageSearchKeyword = '';
+    this.userManageFilterRole = '';
   }
 
-  closeUserModal() {
-    this.isUserModalOpen = false;
-    this.selectedUserFile = null;
-    this.importUserResult = null;
+  closeUserManageModal() {
+    this.isUserManageModalOpen = false;
+    this.userManageSearchKeyword = '';
+    this.userManageFilterRole = '';
   }
 
   get filteredUsersForModal() {
@@ -277,6 +281,65 @@ export class HomePage implements OnInit, OnDestroy {
         .toLowerCase();
       return text.includes(keyword);
     });
+  }
+
+  // 员工管理视图的筛选结果（展示所有角色，支持搜索和按角色过滤）
+  get filteredUsersForManage() {
+    const keyword = (this.userManageSearchKeyword || '').trim().toLowerCase();
+    const roleFilter = (this.userManageFilterRole || '').trim();
+    let list = this.users || [];
+
+    if (roleFilter) {
+      list = list.filter((u: any) => u.role === roleFilter);
+    }
+
+    if (!keyword) {
+      return list;
+    }
+
+    return list.filter((u: any) => {
+      const text = [
+        u.username,
+        u.name,
+        u.role,
+        u.department,
+        u.user_group,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return text.includes(keyword);
+    });
+  }
+
+  // 将员工标记为离职（inactive）
+  async setUserInactive(user: any) {
+    if (!this.currentUser?.id) {
+      await this.presentToast('当前登录用户信息缺失，无法操作');
+      return;
+    }
+
+    // 管理端简单保护：不允许操作自己
+    if (user.id === this.currentUser.id) {
+      await this.presentToast('不能修改自己的在职状态');
+      return;
+    }
+
+    const isNative = Capacitor.isNativePlatform();
+    const base = isNative ? (environment.apiBase.replace('localhost', '10.0.2.2')) : environment.apiBase;
+
+    try {
+      await this.http.post(`${base}/api/users/${user.id}/status`, {
+        status: 'inactive',
+        operatorId: this.currentUser.id,
+      }).toPromise();
+      await this.presentToast(`已将 ${user.name} 标记为离职`);
+      // 重新加载用户列表（只会返回在职用户，离职员工自然从列表中消失）
+      await this.loadUsersAndDepartments();
+    } catch (error) {
+      console.error('设置离职失败:', error);
+      await this.presentToast('设置离职失败');
+    }
   }
 
   async loadTasks(): Promise<void> {
@@ -461,8 +524,22 @@ export class HomePage implements OnInit, OnDestroy {
     // 调用异常报告的待审批API，传递当前用户ID进行过滤
     this.http.get(`${base}/api/exception-reports/pending?approverId=${this.currentUser.id}`).subscribe({
       next: (rows: any) => {
-        this.pendingExceptionReports = rows || [];
-        // 如果有待审批的异常报告，弹出提醒
+        const allRows = rows || [];
+        const role = this.currentUser?.role;
+
+        // 只保留“真正轮到当前角色处理”的异常
+        if (role === 'manager') {
+          // 经理：只看待二级审批
+          this.pendingExceptionReports = allRows.filter((r: any) => r.status === 'pending_second_approval');
+        } else if (role === 'supervisor' || role === 'admin') {
+          // 主管 / 管理员：只看待一级审批
+          this.pendingExceptionReports = allRows.filter((r: any) => r.status === 'pending');
+        } else {
+          // 其他角色目前不弹异常待审批
+          this.pendingExceptionReports = [];
+        }
+
+        // 如果有“当前角色需要处理”的异常报告，才弹出提醒
         if (this.pendingExceptionReports.length > 0) {
           this.showPendingExceptionReportsAlert();
         }
@@ -1363,6 +1440,7 @@ export class HomePage implements OnInit, OnDestroy {
   }
 
   // 查找当前正在进行的任务（阶段已开始且未暂停）
+  // 注意：这里不再受当前筛选条件影响，而是检查该员工所有任务，避免通过筛选绕过限制
   findCurrentActiveTask(excludeTask: any): any | null {
     // 只对工人和主管角色生效
     if (this.currentUser?.role !== 'worker' && this.currentUser?.role !== 'supervisor') {
@@ -1374,16 +1452,12 @@ export class HomePage implements OnInit, OnDestroy {
       return null;
     }
     
-    // 应用筛选条件，获取过滤后的任务列表
-    this.applyFilters();
-    
-    // 获取要排除的任务的阶段
+    // 获取要排除的任务的阶段（即准备操作的这条任务对应的阶段）
     const excludePhase = this.getTaskOperatePhase(excludeTask);
     
-    // 查找正在进行的任务（阶段已开始且未暂停）
-    // 检查：不同的任务，或者同一任务的不同阶段
-    const activeTask = this.filteredTasks.find(t => {
-      // 必须是分配给当前用户的任务
+    // 在所有任务中查找“当前员工已开工但未暂停、未完成”的其他任务/阶段
+    const activeTask = (this.tasks || []).find(t => {
+      // 只看分配给当前用户的任务（限定在该员工自己的任务中）
       if (!this.isTaskAssignedToUser(t)) return false;
       if (t.status === 'completed') return false;
       if (!this.isPhaseStarted(t)) return false;
@@ -1391,17 +1465,17 @@ export class HomePage implements OnInit, OnDestroy {
       if (this.isPhaseCompleted(t)) return false;
       if (!this.canOperateTask(t)) return false;
       
-      // 获取当前任务正在进行的阶段
+      // 当前任务正在进行的阶段
       const tPhase = this.getTaskOperatePhase(t);
       
-      // 如果是不同的任务，或者同一任务的不同阶段，则认为是冲突的
+      // 不同任务：说明该员工已经有另一条任务在进行
       if (t.id !== excludeTask.id) {
-        return true; // 不同任务正在运行
+        return true;
       }
       
-      // 同一任务，检查是否是不同阶段
+      // 同一任务但不同阶段：也视为有另一个阶段在进行
       if (tPhase && excludePhase && tPhase !== excludePhase) {
-        return true; // 同一任务的不同阶段正在运行
+        return true;
       }
       
       return false;

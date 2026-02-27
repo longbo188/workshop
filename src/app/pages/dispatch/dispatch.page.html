@@ -217,6 +217,7 @@
                   <col *ngIf="columnVisible('index')" class="col-index">
                   <col *ngIf="columnVisible('device')" class="col-device">
                   <col *ngIf="columnVisible('model')" class="col-model">
+                  <col *ngIf="columnVisible('inventory')" class="col-status">
                   <col *ngIf="columnVisible('priority')" class="col-priority">
                   <col *ngIf="columnVisible('status')" class="col-status">
                   <col *ngIf="columnVisible('currentPhase')" class="col-phase">
@@ -235,6 +236,7 @@
                     <th *ngIf="columnVisible('index')">序号</th>
                     <th *ngIf="columnVisible('device')">设备号</th>
                     <th *ngIf="columnVisible('model')">型号</th>
+                    <th *ngIf="columnVisible('inventory')">是否库存</th>
                     <th *ngIf="columnVisible('priority')">优先级</th>
                     <th *ngIf="columnVisible('status')">状态</th>
                     <th *ngIf="columnVisible('currentPhase')">当前阶段</th>
@@ -314,6 +316,8 @@
                         <span class="stat-not-completed">未完成: {{ getPhaseStats('debugging').notCompleted }}</span>
                       </div>
                     </th>
+                    <!-- 新增：备注列（交货计划），放在调试和操作之间 -->
+                    <th>备注：交货计划</th>
                     <th>操作</th>
                   </tr>
                   <tr class="filter-row">
@@ -331,6 +335,16 @@
                         placeholder="筛选型号" 
                         [(ngModel)]="tableFilters.model" 
                         (ngModelChange)="onTableFilterChange()">
+                    </th>
+                    <th *ngIf="columnVisible('inventory')">
+                      <select 
+                        class="table-filter-select" 
+                        [(ngModel)]="tableFilters.inventory" 
+                        (ngModelChange)="onTableFilterChange()">
+                        <option value="">全部</option>
+                        <option value="yes">仅库存</option>
+                        <option value="no">仅非库存</option>
+                      </select>
                     </th>
                     <th *ngIf="columnVisible('priority')">
                       <select 
@@ -442,6 +456,8 @@
                         <option value="not_completed">未完成</option>
                       </select>
                     </th>
+                    <!-- 新增备注列暂不提供筛选 -->
+                    <th></th>
                     <th></th>
                   </tr>
                 </thead>
@@ -457,6 +473,9 @@
                       </div>
                     </td>
                     <td *ngIf="columnVisible('model')">{{ t.product_model || '-' }}</td>
+                    <td *ngIf="columnVisible('inventory')">
+                      {{ t.is_inventory === 1 ? '是' : '否' }}
+                    </td>
                     <td *ngIf="columnVisible('priority')">
                       <span class="priority-tag" [class.urgent]="isUrgentPriority(t.priority)">
                         {{ getPriorityText(t.priority) }}
@@ -513,6 +532,15 @@
                           协助：{{ getAssistantNamesForPhase(t, 'debugging').join('、') }}
                         </span>
                       </div>
+                    </td>
+                    <!-- 新增备注列：交货计划（可编辑） -->
+                    <td>
+                      <ion-input
+                        [(ngModel)]="t.delivery_plan_note"
+                        (ionBlur)="onDeliveryPlanNoteBlur(t)"
+                        placeholder="填写交货计划"
+                        style="max-width: 180px; font-size: 13px;">
+                      </ion-input>
                     </td>
                     <td>
                       <div class="table-actions">
@@ -1072,6 +1100,7 @@
             <ul>
               <li><strong>C列：</strong>设备号（必填）</li>
               <li><strong>E列：</strong>是否非标（是/否）</li>
+              <li><strong>H列：</strong>是否库存（选填，单元格内容中包含“库存”两字的行识别为“是库存”，否则识别为“非库存”）</li>
               <li><strong>F列：</strong>产品型号（必填）</li>
               <li><strong>Q列：</strong>投产时间</li>
               <li><strong>O列：</strong>承诺完成时间（新增）</li>
@@ -1092,6 +1121,10 @@
 
         <ion-card>
           <ion-card-content>
+            <ion-button expand="block" fill="outline" color="primary" (click)="downloadImportTemplate()" style="margin-bottom: 8px;">
+              <ion-icon name="download-outline" slot="start"></ion-icon>
+              下载任务导入模板
+            </ion-button>
             <ion-item>
               <ion-label position="stacked">选择Excel文件</ion-label>
               <input type="file" #fileInput (change)="onFileSelected($event)" 
@@ -1404,6 +1437,10 @@
         </ion-card>
         <ion-card>
           <ion-card-content>
+            <ion-button expand="block" fill="outline" color="primary" (click)="downloadImportTemplate()" style="margin-bottom: 8px;">
+              <ion-icon name="download-outline" slot="start"></ion-icon>
+              下载任务导入模板
+            </ion-button>
             <ion-item>
               <ion-label position="stacked">选择Excel文件</ion-label>
               <input type="file" #createTaskFileInput (change)="onCreateTaskFileSelected($event)" 
