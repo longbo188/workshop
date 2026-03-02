@@ -165,6 +165,7 @@ export class HomePage implements OnInit, OnDestroy {
   isStandardHoursListModalOpen: boolean = false;
   standardHoursList: any[] = [];
   isLoadingStandardHours: boolean = false;
+  standardHoursSearchKeyword: string = '';
   
   // 完工撤回相关属性
   isRollbackModalOpen: boolean = false;
@@ -2553,6 +2554,17 @@ export class HomePage implements OnInit, OnDestroy {
     } finally {
       this.isLoadingStandardHours = false;
     }
+  }
+
+  // 标准工时列表（按产品型号关键字过滤）
+  get filteredStandardHoursList() {
+    const kw = (this.standardHoursSearchKeyword || '').trim().toLowerCase();
+    if (!kw) {
+      return this.standardHoursList;
+    }
+    return this.standardHoursList.filter(item =>
+      (item.product_model || '').toLowerCase().includes(kw)
+    );
   }
 
   // 打开编辑标准工时模态框

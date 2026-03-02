@@ -2576,8 +2576,8 @@ app.get('/api/daily-attendance', async (req, res) => {
     }
     
     const params = [startDate, endDate];
-    // 只统计在职工人：role=worker 且 status='active'
-    let userFilterSql = 'u.role = \"worker\" AND u.status = \"active\"';
+    // 统计在职工人和主管：role=worker 或 role=supervisor，且 status='active'
+    let userFilterSql = '(u.role = \"worker\" OR u.role = \"supervisor\") AND u.status = \"active\"';
     if (userId) {
       userFilterSql += ' AND u.id = ?';
       // userId参数将在SQL执行时正确插入
@@ -2978,7 +2978,8 @@ app.get('/api/daily-attendance/stats', async (req, res) => {
     }
     
     const params = [startDate, endDate];
-    let userFilterSql = 'u.role = \"worker\"';
+    // 统计在职工人和主管：role=worker 或 role=supervisor，且 status='active'
+    let userFilterSql = '(u.role = \"worker\" OR u.role = \"supervisor\") AND u.status = \"active\"';
     if (userId) {
       userFilterSql += ' AND u.id = ?';
       params.push(Number(userId));

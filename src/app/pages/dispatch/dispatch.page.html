@@ -1277,7 +1277,15 @@
             <p>暂无标准工时数据</p>
           </ion-card-content>
         </ion-card>
-        <div *ngIf="!isLoadingStandardHours && standardHoursList.length > 0" style="max-height: 70vh; overflow-y: auto;">
+        <!-- 搜索栏：按产品型号快速筛选 -->
+        <ion-item *ngIf="!isLoadingStandardHours && standardHoursList.length > 0">
+          <ion-label position="stacked">按产品型号搜索</ion-label>
+          <ion-input
+            [(ngModel)]="standardHoursSearchKeyword"
+            placeholder="输入型号关键字进行筛选">
+          </ion-input>
+        </ion-item>
+        <div *ngIf="!isLoadingStandardHours && filteredStandardHoursList.length > 0" style="max-height: 70vh; overflow-y: auto;">
           <table style="width: 100%; border-collapse: collapse; margin-top: 16px;">
             <thead>
               <tr style="background-color: #f5f5f5; border-bottom: 2px solid #ddd;">
@@ -1291,7 +1299,7 @@
             </tr>
           </thead>
           <tbody>
-            <tr *ngFor="let item of standardHoursList" style="border-bottom: 1px solid #ddd;">
+            <tr *ngFor="let item of filteredStandardHoursList" style="border-bottom: 1px solid #ddd;">
               <td style="padding: 12px; border: 1px solid #ddd; font-weight: 500;">{{ item.product_model }}</td>
               <td style="padding: 12px; text-align: center; border: 1px solid #ddd;">{{ item.machining_hours || 0 }}</td>
               <td style="padding: 12px; text-align: center; border: 1px solid #ddd;">{{ item.electrical_hours || 0 }}</td>

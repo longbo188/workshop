@@ -73,6 +73,7 @@ export class DispatchPage implements OnInit {
   isStandardHoursListModalOpen = false;
   standardHoursList: any[] = [];
   isLoadingStandardHours = false;
+  standardHoursSearchKeyword: string = '';
   
   // 编辑标准工时相关属性
   isEditStandardHoursModalOpen = false;
@@ -1082,6 +1083,17 @@ export class DispatchPage implements OnInit {
     } finally {
       this.isLoadingStandardHours = false;
     }
+  }
+
+  // 标准工时列表（按产品型号关键字过滤）
+  get filteredStandardHoursList() {
+    const kw = (this.standardHoursSearchKeyword || '').trim().toLowerCase();
+    if (!kw) {
+      return this.standardHoursList;
+    }
+    return this.standardHoursList.filter(item =>
+      (item.product_model || '').toLowerCase().includes(kw)
+    );
   }
 
   // 打开新增标准工时模态框
