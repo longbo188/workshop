@@ -294,23 +294,25 @@ export class AttendanceAdminPage implements OnInit {
     return totalOvertimeMinutes / 60; // 转换为小时
   }
 
-  // 计算当前调整的请假总时长
+  // 计算当前调整的请假总时长（按请假时间段 ∩ 作息窗口，自动扣除休息时间）
   calculateCurrentLeaveHours(): number {
+    // 必须有请假时间段
     if (!this.leaveStartTime || !this.leaveEndTime) {
       return 0;
     }
-    
-    const startTime = this.parseTimeString(this.leaveStartTime);
-    const endTime = this.parseTimeString(this.leaveEndTime);
-    
-    if (!startTime || !endTime) return 0;
-    
-    const startMinutes = startTime.hour * 60 + startTime.minute;
-    const endMinutes = endTime.hour * 60 + endTime.minute;
-    
-    if (startMinutes >= endMinutes) return 0;
-    
-    return (endMinutes - startMinutes) / 60; // 转换为小时
+
+    // 如果没有加载工作时间设置，无法准确扣除休息时间，直接返回0
+    //（保持与 calculateLeaveOverlapWithWorkWindows 中的防御性逻辑一致）
+    if (!this.workTimeSettings) {
+      console.warn('工作时间设置未加载，无法按作息窗口精确计算请假时长，返回0');
+      return 0;
+    }
+
+    // 使用「请假时间段 ∩ 作息窗口」的重叠时长，自动扣除午休和其它休息
+    return this.calculateLeaveOverlapWithWorkWindows(
+      this.leaveStartTime,
+      this.leaveEndTime
+    );
   }
 
   // 获取考勤类型（根据标准工作时长和加班时长判断）

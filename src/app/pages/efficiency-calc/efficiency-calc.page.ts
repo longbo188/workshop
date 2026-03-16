@@ -1411,7 +1411,7 @@ export class EfficiencyCalcPage implements OnInit {
     return merged;
   }
 
-  // 计算异常时间段与工作时间的重叠时长
+  // 计算异常时间段与工作时间的重叠时长（仅统计对实际出勤有影响的部分）
   private calculateExceptionOverlapHours(
     exceptionStart: string, 
     exceptionEnd: string, 
@@ -1430,6 +1430,7 @@ export class EfficiencyCalcPage implements OnInit {
     if (isNaN(exceptionStartTime.getTime()) || isNaN(exceptionEndTime.getTime())) return 0;
     
     let totalOverlapHours = 0;
+    let totalLeaveOverlapHours = 0; // 异常 ∩ 请假 ∩（作息/加班）总时长
     
     // 逐日计算异常时间段与工作时间的重叠
     const endOfLastDay = TimeUtils.createEndOfDay(phaseEnd);
@@ -1456,8 +1457,10 @@ export class EfficiencyCalcPage implements OnInit {
       
       // 获取该日的工作窗口
       const workWindows = this.getWorkWindowsForDay(workTimeSettings, currentDay);
+      // 获取该日的请假时段
+      const leavePeriods = this.getLeavePeriodsForDay(attendanceRecords, currentDay);
       
-      // 计算异常时间段与作息时间的重叠（限缩到阶段时间内）
+      // 1) 计算异常与作息时间的重叠（限缩到阶段时间内）
       workWindows.forEach(window => {
         const windowStart = TimeUtils.createLocalDateTime(currentDay, window.start);
         const windowEnd = TimeUtils.createLocalDateTime(currentDay, window.end);
@@ -1466,12 +1469,11 @@ export class EfficiencyCalcPage implements OnInit {
         const limitedWindowStart = new Date(Math.max(windowStart.getTime(), phaseStart.getTime()));
         const limitedWindowEnd = new Date(Math.min(windowEnd.getTime(), phaseEnd.getTime()));
         
-        // 如果限缩后的窗口无效，跳过
         if (limitedWindowEnd <= limitedWindowStart) {
           return;
         }
         
-        // 计算限缩后的异常时间段与限缩后的工作窗口的重叠
+        // 异常 ∩ 作息
         const overlap = TimeUtils.calculateOverlapHours(
           exceptionInPhaseStart,
           exceptionInPhaseEnd,
@@ -1479,13 +1481,33 @@ export class EfficiencyCalcPage implements OnInit {
           limitedWindowEnd
         );
         totalOverlapHours += overlap;
-        
+
+        // 异常 ∩ 请假 ∩ 作息（从上面的重叠中扣除）
+        leavePeriods.forEach(leave => {
+          const leaveStart = TimeUtils.createLocalDateTime(currentDay, leave.start);
+          const leaveEnd = TimeUtils.createLocalDateTime(currentDay, leave.end);
+
+          // 请假与该作息窗口的重叠
+          const leaveWindowStart = new Date(Math.max(leaveStart.getTime(), limitedWindowStart.getTime()));
+          const leaveWindowEnd = new Date(Math.min(leaveEnd.getTime(), limitedWindowEnd.getTime()));
+          if (leaveWindowEnd <= leaveWindowStart) {
+            return;
+          }
+
+          const leaveOverlap = TimeUtils.calculateOverlapHours(
+            exceptionInPhaseStart,
+            exceptionInPhaseEnd,
+            leaveWindowStart,
+            leaveWindowEnd
+          );
+          totalLeaveOverlapHours += leaveOverlap;
+        });
       });
       
       // 获取该日的加班时段
       const overtimePeriods = this.getOvertimePeriodsForDay(attendanceRecords, currentDay);
       
-      // 计算异常时间段与加班时间的重叠（限缩到阶段时间内）
+      // 2) 计算异常与加班时间的重叠（限缩到阶段时间内）
       overtimePeriods.forEach(overtime => {
         const overtimeStart = TimeUtils.createLocalDateTime(currentDay, overtime.start);
         const overtimeEnd = TimeUtils.createLocalDateTime(currentDay, overtime.end);
@@ -1494,12 +1516,11 @@ export class EfficiencyCalcPage implements OnInit {
         const limitedOvertimeStart = new Date(Math.max(overtimeStart.getTime(), phaseStart.getTime()));
         const limitedOvertimeEnd = new Date(Math.min(overtimeEnd.getTime(), phaseEnd.getTime()));
         
-        // 如果限缩后的时段无效，跳过
         if (limitedOvertimeEnd <= limitedOvertimeStart) {
           return;
         }
         
-        // 计算限缩后的异常时间段与限缩后的加班时段的重叠
+        // 异常 ∩ 加班
         const overlap = TimeUtils.calculateOverlapHours(
           exceptionInPhaseStart,
           exceptionInPhaseEnd,
@@ -1507,11 +1528,33 @@ export class EfficiencyCalcPage implements OnInit {
           limitedOvertimeEnd
         );
         totalOverlapHours += overlap;
-        
+
+        // 异常 ∩ 请假 ∩ 加班（从上面的重叠中扣除）
+        leavePeriods.forEach(leave => {
+          const leaveStart = TimeUtils.createLocalDateTime(currentDay, leave.start);
+          const leaveEnd = TimeUtils.createLocalDateTime(currentDay, leave.end);
+
+          // 请假与该加班时段的重叠
+          const leaveOvertimeStart = new Date(Math.max(leaveStart.getTime(), limitedOvertimeStart.getTime()));
+          const leaveOvertimeEnd = new Date(Math.min(leaveEnd.getTime(), limitedOvertimeEnd.getTime()));
+          if (leaveOvertimeEnd <= leaveOvertimeStart) {
+            return;
+          }
+
+          const leaveOverlap = TimeUtils.calculateOverlapHours(
+            exceptionInPhaseStart,
+            exceptionInPhaseEnd,
+            leaveOvertimeStart,
+            leaveOvertimeEnd
+          );
+          totalLeaveOverlapHours += leaveOverlap;
+        });
       });
     }
     
-    return totalOverlapHours;
+    // 只保留「异常 ∩（作息/加班）∩ 非请假」的部分
+    const effectiveExceptionHours = Math.max(0, totalOverlapHours - totalLeaveOverlapHours);
+    return effectiveExceptionHours;
   }
 
 
@@ -4009,8 +4052,8 @@ export class EfficiencyCalcPage implements OnInit {
     rows.forEach(entry => {
       const assignee = this.getTaskAssigneeName(entry.task, entry.phase) || '-';
       const effective = (entry.actualWorkHours || 0) - (entry.exceptionHours || 0) - (entry.assistHours || 0);
-      const efficiency = entry.standardHours > 0
-        ? ((effective / entry.standardHours) * 100)
+      const efficiency = effective > 0
+        ? ((entry.standardHours || 0) / effective) * 100
         : 0;
       const endDate = entry.phaseEndTime
         ? new Date(entry.phaseEndTime).toLocaleDateString('zh-CN')

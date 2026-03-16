@@ -7,3 +7,4 @@ ALTER TABLE users
 -- 兼容历史数据（如果已有 status 字段或已存在 NULL）
 UPDATE users SET status = 'active' WHERE status IS NULL;
 
+
