@@ -2335,8 +2335,9 @@ export class EfficiencyCalcPage implements OnInit {
       });
       
       
-      // 展示：仍展示当前阶段的全部异常；扣减：仅用 phaseExceptions（已按状态过滤）
+      // 展示：只展示 approved / pending_staff_confirmation（与扣减口径一致）
       const phaseExceptionsForDisplay = allExceptionReports.filter(ex => {
+        if (!this.isDeductibleExceptionStatus((ex as any).status)) return false;
         const exPhase = ex.phase || '';
         return exPhase === phase || !exPhase;
       });
