@@ -2093,6 +2093,10 @@ export class EfficiencyCalcPage implements OnInit {
     }
   }
 
+  private isDeductibleExceptionStatus(status: string | null | undefined): boolean {
+    return status === 'approved' || status === 'pending_staff_confirmation';
+  }
+
   private async calculateTaskEfficiencyWithAttendance(
     task: Task, 
     workReports: WorkReport[], 
@@ -2163,6 +2167,10 @@ export class EfficiencyCalcPage implements OnInit {
       }
     });
     const allExceptionReports = Array.from(allExceptionReportsMap.values());
+    // 扣减口径：仅 approved / pending_staff_confirmation
+    const deductibleExceptionReports = allExceptionReports.filter(ex =>
+      this.isDeductibleExceptionStatus((ex as any).status)
+    );
     
     if (!phaseStartTime || !phaseEndTime) {
       return [];
@@ -2235,7 +2243,7 @@ export class EfficiencyCalcPage implements OnInit {
       phaseStartTime, 
       phaseEndTime, 
       workTimeSettings,
-      allExceptionReports
+      deductibleExceptionReports
     );
     const actualWorkHours = workHoursResult.totalHours;
     const dailyCalculations = workHoursResult.dailyCalculations;
@@ -2278,7 +2286,7 @@ export class EfficiencyCalcPage implements OnInit {
     
     // 先收集所有属于该阶段的异常报告（去重）
     const phaseExceptionReportsMap = new Map<number, ExceptionReport>();
-    for (const exception of allExceptionReports) {
+    for (const exception of deductibleExceptionReports) {
       const exceptionPhase = exception.phase || '';
       
       
@@ -2327,8 +2335,12 @@ export class EfficiencyCalcPage implements OnInit {
       });
       
       
-      // 将所有异常报告添加到列表中（用于显示）
-      efficiency.exceptionReports.push(...phaseExceptions);
+      // 展示：仍展示当前阶段的全部异常；扣减：仅用 phaseExceptions（已按状态过滤）
+      const phaseExceptionsForDisplay = allExceptionReports.filter(ex => {
+        const exPhase = ex.phase || '';
+        return exPhase === phase || !exPhase;
+      });
+      efficiency.exceptionReports.push(...phaseExceptionsForDisplay);
       
       // 合并重叠的异常时间段
       const mergedPeriods = this.mergeOverlappingExceptionPeriods(phaseExceptions);
@@ -2413,7 +2425,7 @@ export class EfficiencyCalcPage implements OnInit {
           phaseEndTime,
           workTimeSettings,
           attendanceRecords,
-          allExceptionReports,
+          deductibleExceptionReports,
           task.id // 传递任务ID用于调试
         );
         totalAssistHours += assistHours;
@@ -2515,7 +2527,9 @@ export class EfficiencyCalcPage implements OnInit {
     });
     
     // 添加异常时间
-    exceptionReports.forEach(exception => {
+    exceptionReports
+      .filter(ex => this.isDeductibleExceptionStatus((ex as any).status))
+      .forEach(exception => {
       const exceptionPhase = exception.phase;
       
       if (exceptionPhase === targetPhase && efficiencyMap.has(targetPhase)) {
@@ -2539,7 +2553,7 @@ export class EfficiencyCalcPage implements OnInit {
         }
         efficiency.exceptionHours += durationHours;
       }
-    });
+      });
     
     // 计算效率
     efficiencyMap.forEach(efficiency => {
