@@ -682,7 +682,7 @@
               <h3>3️⃣ 实际工作小时计算</h3>
               <p class="calculation-info">
                 <ion-icon name="calculator-outline"></ion-icon>
-                计算公式: 作息∩阶段 + 加班∩阶段 - 请假∩作息 - 异常∩(作息+加班)
+                计算公式: 作息∩阶段 + 加班∩阶段 - 暂停∩(作息+加班) - 请假∩作息（异常仅展示不扣有效工时）
               </p>
               <p class="calculation-result">
                 <ion-icon name="checkmark-circle-outline"></ion-icon>
@@ -700,6 +700,7 @@
                   <div class="day-detail-breakdown">
                     <ion-chip color="primary" size="small">作息: {{ (dayDetail.workWindowOverlap || 0).toFixed(2) }}h</ion-chip>
                     <ion-chip color="secondary" size="small">加班: {{ (dayDetail.overtimeOverlap || 0).toFixed(2) }}h</ion-chip>
+                    <ion-chip color="medium" size="small">暂停: -{{ (dayDetail.pauseDeduction || 0).toFixed(2) }}h</ion-chip>
                     <ion-chip color="warning" size="small">请假: -{{ (dayDetail.leaveDeduction || 0).toFixed(2) }}h</ion-chip>
                     <ion-chip color="danger" size="small">异常: -{{ (dayDetail.exceptionDeduction || 0).toFixed(2) }}h</ion-chip>
                   </div>

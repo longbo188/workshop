@@ -154,6 +154,7 @@ interface EfficiencyData {
     effectiveHours: number; 
     workWindowOverlap?: number;
     overtimeOverlap?: number;
+    pauseDeduction?: number;
     leaveDeduction?: number;
     exceptionDeduction?: number;
     attendanceLimit?: number;
@@ -2097,6 +2098,67 @@ export class EfficiencyCalcPage implements OnInit {
     return status === 'approved' || status === 'pending_staff_confirmation';
   }
 
+  private mergeTimeRanges(
+    ranges: Array<{ start: Date; end: Date }>
+  ): Array<{ start: Date; end: Date }> {
+    if (!ranges.length) return [];
+    const sorted = ranges
+      .filter(r => r.end > r.start)
+      .sort((a, b) => a.start.getTime() - b.start.getTime());
+    if (!sorted.length) return [];
+
+    const merged: Array<{ start: Date; end: Date }> = [{ ...sorted[0] }];
+    for (let i = 1; i < sorted.length; i++) {
+      const current = sorted[i];
+      const last = merged[merged.length - 1];
+      if (current.start.getTime() <= last.end.getTime()) {
+        if (current.end.getTime() > last.end.getTime()) {
+          last.end = current.end;
+        }
+      } else {
+        merged.push({ ...current });
+      }
+    }
+    return merged;
+  }
+
+  private async loadPausePeriodsForPhase(
+    taskId: number,
+    phase: string,
+    userId: number,
+    phaseStartTime: string,
+    phaseEndTime: string
+  ): Promise<Array<{ start: Date; end: Date }>> {
+    try {
+      const base = this.getApiBase();
+      const params = new URLSearchParams({
+        userId: String(userId),
+        startTime: phaseStartTime,
+        endTime: phaseEndTime
+      });
+      const rows = await this.http.get<any[]>(
+        `${base}/api/tasks/${taskId}/phases/${phase}/pause-logs?${params.toString()}`
+      ).toPromise();
+
+      const phaseStart = TimeUtils.utcToLocalDate(phaseStartTime);
+      const phaseEnd = TimeUtils.utcToLocalDate(phaseEndTime);
+      const periods = (rows || []).map((row: any) => {
+        const pausedAt = row?.paused_at ? TimeUtils.utcToLocalDate(row.paused_at) : null;
+        const resumedAt = row?.resumed_at ? TimeUtils.utcToLocalDate(row.resumed_at) : phaseEnd;
+        if (!pausedAt || !resumedAt) return null;
+        const start = new Date(Math.max(pausedAt.getTime(), phaseStart.getTime()));
+        const end = new Date(Math.min(resumedAt.getTime(), phaseEnd.getTime()));
+        if (end <= start) return null;
+        return { start, end };
+      }).filter((v: { start: Date; end: Date } | null): v is { start: Date; end: Date } => !!v);
+
+      return this.mergeTimeRanges(periods);
+    } catch (error) {
+      console.error('加载阶段暂停日志失败:', { taskId, phase, userId, error });
+      return [];
+    }
+  }
+
   private async calculateTaskEfficiencyWithAttendance(
     task: Task, 
     workReports: WorkReport[], 
@@ -2236,6 +2298,15 @@ export class EfficiencyCalcPage implements OnInit {
         totalCalendarHours: 0
       }];
     }
+
+    // 加载暂停区间（用于从有效工时中扣减暂停时段）
+    const pausePeriods = await this.loadPausePeriodsForPhase(
+      task.id,
+      phase,
+      taskAssigneeId,
+      phaseStartTime,
+      phaseEndTime
+    );
     
     // 计算实际出勤时间（使用完整的作息+加班+请假+异常逻辑）
     const workHoursResult = await this.calculateActualWorkHoursWithShifts(
@@ -2243,7 +2314,8 @@ export class EfficiencyCalcPage implements OnInit {
       phaseStartTime, 
       phaseEndTime, 
       workTimeSettings,
-      deductibleExceptionReports
+      deductibleExceptionReports,
+      pausePeriods
     );
     const actualWorkHours = workHoursResult.totalHours;
     const dailyCalculations = workHoursResult.dailyCalculations;
@@ -3057,20 +3129,22 @@ export class EfficiencyCalcPage implements OnInit {
   }
 
   /**
-   * 计算实际工作小时数（包含作息、加班、请假、异常时段的完整逻辑）
-   * 公式：作息∩阶段 + 加班∩阶段 - 请假∩作息 - 异常∩(作息+加班)
+   * 计算实际工作小时数（包含作息、加班、暂停、请假、异常时段的完整逻辑）
+   * 公式：作息∩阶段 + 加班∩阶段 - 暂停∩(作息+加班) - 请假∩作息（异常仅记录展示）
    */
   private async calculateActualWorkHoursWithShifts(
     attendanceRecords: any[], 
     phaseStartTime: string, 
     phaseEndTime: string, 
     workTimeSettings: any,
-    exceptionReports: ExceptionReport[]
+    exceptionReports: ExceptionReport[],
+    pausePeriods: Array<{ start: Date; end: Date }> = []
   ): Promise<{ totalHours: number; dailyCalculations: { [date: string]: { 
     totalHours: number; 
     effectiveHours: number; 
     workWindowOverlap?: number;
     overtimeOverlap?: number;
+    pauseDeduction?: number;
     leaveDeduction?: number;
     exceptionDeduction?: number;
     attendanceLimit?: number;
@@ -3082,6 +3156,7 @@ export class EfficiencyCalcPage implements OnInit {
       effectiveHours: number; 
       workWindowOverlap?: number;
       overtimeOverlap?: number;
+      pauseDeduction?: number;
       leaveDeduction?: number;
       exceptionDeduction?: number;
       attendanceLimit?: number;
@@ -3178,6 +3253,57 @@ export class EfficiencyCalcPage implements OnInit {
         overtimeOverlapTotal += overtimeOverlap;
         dayPhaseOverlapHours += overtimeOverlap;
       });
+
+      // 2.5 扣减暂停区间（支持多次暂停/继续）
+      let pauseDeductionTotal = 0;
+      if (pausePeriods.length > 0) {
+        pausePeriods.forEach(period => {
+          // 仅处理当天有交集的暂停区间
+          const periodDay = TimeUtils.getLocalDateString(period.start);
+          if (periodDay !== currentDay) {
+            // 暂停区间可能跨天，仍需按当天边界裁剪再计算
+            const dayStart = new Date(`${currentDay}T00:00:00`);
+            const dayEnd = new Date(`${currentDay}T23:59:59.999`);
+            if (period.end <= dayStart || period.start >= dayEnd) return;
+          }
+
+          const pauseInPhaseStart = new Date(Math.max(period.start.getTime(), start.getTime()));
+          const pauseInPhaseEnd = new Date(Math.min(period.end.getTime(), end.getTime()));
+          if (pauseInPhaseEnd <= pauseInPhaseStart) return;
+
+          // 暂停只扣工作窗口/加班窗口内的有效部分
+          workWindows.forEach(window => {
+            const windowStart = new Date(`${currentDay}T${window.start}`);
+            const windowEnd = new Date(`${currentDay}T${window.end}`);
+            const limitedWindowStart = new Date(Math.max(windowStart.getTime(), start.getTime()));
+            const limitedWindowEnd = new Date(Math.min(windowEnd.getTime(), end.getTime()));
+            if (limitedWindowEnd <= limitedWindowStart) return;
+
+            pauseDeductionTotal += TimeUtils.calculateOverlapHours(
+              pauseInPhaseStart,
+              pauseInPhaseEnd,
+              limitedWindowStart,
+              limitedWindowEnd
+            );
+          });
+
+          overtimePeriods.forEach(overtime => {
+            const overtimeStart = new Date(`${currentDay}T${overtime.start}`);
+            const overtimeEnd = new Date(`${currentDay}T${overtime.end}`);
+            const limitedOvertimeStart = new Date(Math.max(overtimeStart.getTime(), start.getTime()));
+            const limitedOvertimeEnd = new Date(Math.min(overtimeEnd.getTime(), end.getTime()));
+            if (limitedOvertimeEnd <= limitedOvertimeStart) return;
+
+            pauseDeductionTotal += TimeUtils.calculateOverlapHours(
+              pauseInPhaseStart,
+              pauseInPhaseEnd,
+              limitedOvertimeStart,
+              limitedOvertimeEnd
+            );
+          });
+        });
+      }
+      dayPhaseOverlapHours -= pauseDeductionTotal;
       
       // 保存扣除请假前的值（用于调试）
       const beforeLeaveHours = dayPhaseOverlapHours;
@@ -3302,6 +3428,7 @@ export class EfficiencyCalcPage implements OnInit {
         effectiveHours: effectiveHours,    // 单日有效工时
         workWindowOverlap: initialWorkWindowHours, // 作息时间重叠
         overtimeOverlap: overtimeOverlapTotal, // 加班时间重叠
+        pauseDeduction: pauseDeductionTotal, // 暂停扣减
         leaveDeduction: leaveDeductionTotal, // 请假扣除
         exceptionDeduction: exceptionDeductionTotal, // 异常扣除（仅记录，不扣除）
         attendanceLimit: actualAttendanceHours, // 实际出勤时间限制
@@ -4262,6 +4389,7 @@ export class EfficiencyCalcPage implements OnInit {
           effectiveHours: dailyCalc.effectiveHours || 0, // 单日有效工时
           workWindowOverlap: dailyCalc.workWindowOverlap || 0, // 作息时间重叠
           overtimeOverlap: dailyCalc.overtimeOverlap || 0, // 加班时间重叠
+          pauseDeduction: dailyCalc.pauseDeduction || 0, // 暂停扣减
           leaveDeduction: dailyCalc.leaveDeduction || 0, // 请假扣除
           exceptionDeduction: dailyCalc.exceptionDeduction || 0, // 异常扣除
           attendanceLimit: dailyCalc.attendanceLimit || 0, // 实际出勤时间限制
@@ -4310,8 +4438,10 @@ export class EfficiencyCalcPage implements OnInit {
 
       dayDetails.push({
         date: currentDay,
+        totalHours: effectiveHours,
         workWindowOverlap: workWindowOverlap,
         overtimeOverlap: overtimeOverlap,
+        pauseDeduction: 0,
         leaveDeduction: leaveDeduction,
         exceptionDeduction: exceptionDeduction,
         effectiveHours: effectiveHours,

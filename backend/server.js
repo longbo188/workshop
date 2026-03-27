@@ -231,6 +231,27 @@ function normalizePriority(value) {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
     console.log('报工记录表校验完成');
+
+    // 创建阶段暂停日志表（支持多次暂停/继续的区间追踪）
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS task_phase_pause_logs (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        task_id INT NOT NULL,
+        phase_key VARCHAR(50) NOT NULL,
+        user_id INT NOT NULL,
+        paused_at DATETIME NOT NULL,
+        resumed_at DATETIME NULL,
+        pause_note TEXT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_task_phase_user (task_id, phase_key, user_id),
+        INDEX idx_paused_at (paused_at),
+        INDEX idx_resumed_at (resumed_at),
+        FOREIGN KEY (task_id) REFERENCES tasks(id),
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    console.log('阶段暂停日志表校验完成');
     
     // 任务表字段已在创建时包含，无需额外添加
     
@@ -4432,6 +4453,9 @@ app.post('/api/tasks/:taskId/phases/:phaseKey/pause', async (req, res) => {
     if (!userId) {
       return res.status(400).json({ error: '用户ID必填' });
     }
+    if (!isValidPhaseKey(phaseKey)) {
+      return res.status(400).json({ error: '无效的阶段标识' });
+    }
     
     const connection = await mysql.createConnection(dbConfig);
     
@@ -4478,23 +4502,58 @@ app.post('/api/tasks/:taskId/phases/:phaseKey/pause', async (req, res) => {
       return res.status(400).json({ error: '该阶段已处于暂停状态' });
     }
     
-    // 更新阶段暂停状态和备注
-    const updateFields = [`${phaseKey}_paused_at = NOW()`];
-    const updateValues = [];
-    
-    if (note !== undefined && note !== null) {
-      updateFields.push(`${phaseKey}_pause_note = ?`);
-      updateValues.push(note || null);
+    await connection.beginTransaction();
+    try {
+      // 防止重复写入未闭合的暂停日志
+      const [openPauseRows] = await connection.execute(
+        `
+        SELECT id FROM task_phase_pause_logs
+        WHERE task_id = ? AND phase_key = ? AND user_id = ? AND resumed_at IS NULL
+        ORDER BY paused_at DESC
+        LIMIT 1
+        `,
+        [taskId, phaseKey, userId]
+      );
+      if (openPauseRows.length > 0) {
+        await connection.rollback();
+        await connection.end();
+        return res.status(400).json({ error: '该阶段已有未结束的暂停记录' });
+      }
+
+      // 更新阶段暂停状态和备注（当前态）
+      const updateFields = [`${phaseKey}_paused_at = NOW()`];
+      const updateValues = [];
+      if (note !== undefined && note !== null) {
+        updateFields.push(`${phaseKey}_pause_note = ?`);
+        updateValues.push(note || null);
+      }
+      await connection.execute(
+        `
+        UPDATE tasks 
+        SET ${updateFields.join(', ')}
+        WHERE id = ?
+        `,
+        [...updateValues, taskId]
+      );
+
+      // 写入暂停日志（历史态）
+      await connection.execute(
+        `
+        INSERT INTO task_phase_pause_logs (
+          task_id, phase_key, user_id, paused_at, pause_note
+        ) VALUES (?, ?, ?, NOW(), ?)
+        `,
+        [taskId, phaseKey, userId, note || null]
+      );
+
+      await connection.commit();
+      await connection.end();
+      res.json({ success: true, message: `${getPhaseName(phaseKey)}阶段已暂停` });
+    } catch (txError) {
+      await connection.rollback();
+      await connection.end();
+      throw txError;
     }
-    
-    await connection.execute(`
-      UPDATE tasks 
-      SET ${updateFields.join(', ')}
-      WHERE id = ?
-    `, [...updateValues, taskId]);
-    
-    await connection.end();
-    res.json({ success: true, message: `${getPhaseName(phaseKey)}阶段已暂停` });
     
   } catch (error) {
     res.status(500).json({ error: '暂停阶段失败：' + error.message });
@@ -4509,6 +4568,9 @@ app.post('/api/tasks/:taskId/phases/:phaseKey/resume', async (req, res) => {
     
     if (!userId) {
       return res.status(400).json({ error: '用户ID必填' });
+    }
+    if (!isValidPhaseKey(phaseKey)) {
+      return res.status(400).json({ error: '无效的阶段标识' });
     }
     
     const connection = await mysql.createConnection(dbConfig);
@@ -4585,18 +4647,99 @@ app.post('/api/tasks/:taskId/phases/:phaseKey/resume', async (req, res) => {
       });
     }
     
-    // 更新阶段继续状态（清除暂停时间）
-    await connection.execute(`
-      UPDATE tasks 
-      SET ${phaseKey}_paused_at = NULL
-      WHERE id = ?
-    `, [taskId]);
-    
-    await connection.end();
-    res.json({ success: true, message: `${getPhaseName(phaseKey)}阶段已继续` });
+    await connection.beginTransaction();
+    try {
+      // 闭合最近一条未结束的暂停日志
+      const [openPauseRows] = await connection.execute(
+        `
+        SELECT id
+        FROM task_phase_pause_logs
+        WHERE task_id = ? AND phase_key = ? AND user_id = ? AND resumed_at IS NULL
+        ORDER BY paused_at DESC
+        LIMIT 1
+        `,
+        [taskId, phaseKey, userId]
+      );
+      if (openPauseRows.length === 0) {
+        await connection.rollback();
+        await connection.end();
+        return res.status(400).json({ error: '未找到可闭合的暂停记录' });
+      }
+
+      // 更新阶段继续状态（当前态）
+      await connection.execute(
+        `
+        UPDATE tasks 
+        SET ${phaseKey}_paused_at = NULL
+        WHERE id = ?
+        `,
+        [taskId]
+      );
+
+      // 闭合暂停日志（历史态）
+      await connection.execute(
+        `
+        UPDATE task_phase_pause_logs
+        SET resumed_at = NOW()
+        WHERE id = ?
+        `,
+        [openPauseRows[0].id]
+      );
+
+      await connection.commit();
+      await connection.end();
+      res.json({ success: true, message: `${getPhaseName(phaseKey)}阶段已继续` });
+    } catch (txError) {
+      await connection.rollback();
+      await connection.end();
+      throw txError;
+    }
     
   } catch (error) {
     res.status(500).json({ error: '继续阶段失败：' + error.message });
+  }
+});
+
+// 查询某任务某阶段的暂停日志（用于效率扣减暂停时段）
+app.get('/api/tasks/:taskId/phases/:phaseKey/pause-logs', async (req, res) => {
+  try {
+    const { taskId, phaseKey } = req.params;
+    const { userId, startTime, endTime } = req.query || {};
+
+    if (!isValidPhaseKey(phaseKey)) {
+      return res.status(400).json({ error: '无效的阶段标识' });
+    }
+    if (!userId) {
+      return res.status(400).json({ error: '用户ID必填' });
+    }
+
+    const connection = await mysql.createConnection(dbConfig);
+    const conditions = ['task_id = ?', 'phase_key = ?', 'user_id = ?'];
+    const params = [taskId, phaseKey, userId];
+
+    if (startTime) {
+      conditions.push('COALESCE(resumed_at, NOW()) > ?');
+      params.push(startTime);
+    }
+    if (endTime) {
+      conditions.push('paused_at < ?');
+      params.push(endTime);
+    }
+
+    const [rows] = await connection.execute(
+      `
+      SELECT id, task_id, phase_key, user_id, paused_at, resumed_at, pause_note
+      FROM task_phase_pause_logs
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY paused_at ASC
+      `,
+      params
+    );
+
+    await connection.end();
+    res.json(rows || []);
+  } catch (error) {
+    res.status(500).json({ error: '查询暂停日志失败：' + error.message });
   }
 });
 
@@ -5108,6 +5251,10 @@ function getPhaseName(phaseKey) {
     'debugging': '调试'
   };
   return phaseNames[phaseKey] || phaseKey;
+}
+
+function isValidPhaseKey(phaseKey) {
+  return ['machining', 'electrical', 'pre_assembly', 'post_assembly', 'debugging'].includes(phaseKey);
 }
 
 // ============= 协助人员管理API =============
