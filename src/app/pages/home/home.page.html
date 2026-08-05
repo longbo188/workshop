@@ -690,14 +690,31 @@
             <ion-item>
               <ion-label position="stacked">异常类型 *</ion-label>
               <ion-select [(ngModel)]="exceptionType" placeholder="请选择异常类型">
-                <ion-select-option value="缺料">缺料</ion-select-option>
-                <ion-select-option value="来料不良">来料不良</ion-select-option>
-                <ion-select-option value="改造类（研发售后或生产不良）">改造类（研发售后或生产不良）</ion-select-option>
-                <ion-select-option value="临时安排任务">临时安排任务</ion-select-option>
-                <ion-select-option value="设计问题">设计问题</ion-select-option>
-                <ion-select-option value="其他问题">其他问题</ion-select-option>
+                <ion-select-option *ngFor="let type of exceptionTypes" [value]="type.value">
+                  {{ type.label }}
+                </ion-select-option>
               </ion-select>
             </ion-item>
+            <ion-note *ngIf="exceptionType" color="medium" style="padding: 8px 16px; display: block;">
+              <strong>范围示例：</strong>{{ getExceptionScopeExample(exceptionType) }}
+            </ion-note>
+            <div class="exception-type-reference" *ngIf="currentUser?.role !== 'staff'">
+              <p class="exception-type-reference-title">异常类型说明（范围示例仅供参考，不可单独选择）</p>
+              <table class="exception-type-reference-table">
+                <thead>
+                  <tr>
+                    <th>异常类型</th>
+                    <th>范围示例</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr *ngFor="let type of exceptionTypes">
+                    <td>{{ type.label }}</td>
+                    <td>{{ type.scopeExample }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
             
             <ion-item>
               <ion-label position="stacked">审批人 *</ion-label>

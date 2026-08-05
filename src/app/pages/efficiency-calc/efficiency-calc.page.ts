@@ -433,6 +433,11 @@ export class EfficiencyCalcPage implements OnInit {
 
   // 工作时间设置（从后端加载）
   private workTimeSettings: WorkTimeSettings | null = null;
+  /** 效率计算过程中待落库的异常有效工时（导出口径：不限缩阶段） */
+  private pendingExceptionEffectiveHours = new Map<
+    number,
+    { start: string; end: string; userId: number }
+  >();
   
   // 节假日数据（用于工作日计算）
   private holidays: Set<string> = new Set(); // 存储节假日日期，格式: "YYYY-MM-DD"
@@ -972,8 +977,130 @@ export class EfficiencyCalcPage implements OnInit {
           })
         )
       );
+
+      await this.saveExceptionEffectiveHoursToBackend();
     } catch (error) {
       console.error('批量保存任务效率快照失败:', error);
+    }
+  }
+
+  private registerExceptionForEffectiveHours(exception: any): void {
+    if (!this.isDeductibleExceptionStatus(exception?.status)) {
+      return;
+    }
+    const startTime =
+      exception.modified_start_datetime ||
+      exception.exception_start_datetime ||
+      exception.start_time;
+    const endTime =
+      exception.modified_end_datetime ||
+      exception.exception_end_datetime ||
+      exception.end_time;
+    const userId = Number(exception.user_id);
+    if (!startTime || !endTime || !Number.isFinite(userId) || userId <= 0 || !exception.id) {
+      return;
+    }
+    this.pendingExceptionEffectiveHours.set(Number(exception.id), {
+      start: startTime,
+      end: endTime,
+      userId
+    });
+  }
+
+  private async loadAttendanceRecordsForUser(
+    base: string,
+    userId: number,
+    startDate: string,
+    endDate: string
+  ): Promise<any[]> {
+    const records: any[] = [];
+    let page = 1;
+    const pageSize = 200;
+    while (true) {
+      const url =
+        `${base}/api/daily-attendance?start=${startDate}&end=${endDate}` +
+        `&userId=${userId}&page=${page}&pageSize=${pageSize}`;
+      const response: any = await this.http.get(url).toPromise();
+      const list = response?.list || [];
+      records.push(...list);
+      if (list.length < pageSize) {
+        break;
+      }
+      page++;
+    }
+    return records;
+  }
+
+  private async saveExceptionEffectiveHoursToBackend(): Promise<void> {
+    if (this.pendingExceptionEffectiveHours.size === 0) {
+      return;
+    }
+
+    try {
+      const workTimeSettings = this.workTimeSettings || (await this.loadWorkTimeSettings());
+      if (!workTimeSettings) {
+        console.warn('未找到工作时间设置，跳过异常有效工时落库');
+        return;
+      }
+
+      const base = this.getApiBase();
+      const byUser = new Map<number, Array<{ id: number; start: string; end: string }>>();
+
+      this.pendingExceptionEffectiveHours.forEach((val, id) => {
+        if (!byUser.has(val.userId)) {
+          byUser.set(val.userId, []);
+        }
+        byUser.get(val.userId)!.push({ id, start: val.start, end: val.end });
+      });
+
+      const attendanceByUser = new Map<number, any[]>();
+      for (const [userId, items] of byUser.entries()) {
+        let minTime = Infinity;
+        let maxTime = -Infinity;
+        items.forEach((item) => {
+          const startMs = new Date(item.start).getTime();
+          const endMs = new Date(item.end).getTime();
+          if (Number.isFinite(startMs)) minTime = Math.min(minTime, startMs);
+          if (Number.isFinite(endMs)) maxTime = Math.max(maxTime, endMs);
+        });
+        if (!Number.isFinite(minTime) || !Number.isFinite(maxTime)) {
+          continue;
+        }
+        const startDate = TimeUtils.getLocalDateString(new Date(minTime));
+        const endDate = TimeUtils.getLocalDateString(new Date(maxTime));
+        const records = await this.loadAttendanceRecordsForUser(base, userId, startDate, endDate);
+        attendanceByUser.set(userId, records);
+      }
+
+      const payloadItems: Array<{ id: number; effectiveHours: number }> = [];
+      this.pendingExceptionEffectiveHours.forEach((val, id) => {
+        const attendanceRecords = attendanceByUser.get(val.userId) || [];
+        const hours = this.calculateExceptionOverlapHours(
+          val.start,
+          val.end,
+          val.start,
+          val.end,
+          workTimeSettings,
+          attendanceRecords
+        );
+        payloadItems.push({
+          id,
+          effectiveHours: Number(Math.max(0, hours).toFixed(2))
+        });
+      });
+
+      if (payloadItems.length === 0) {
+        this.pendingExceptionEffectiveHours.clear();
+        return;
+      }
+
+      await this.http
+        .post(`${base}/api/exception-reports/batch-effective-hours`, { items: payloadItems })
+        .toPromise();
+
+      this.pendingExceptionEffectiveHours.clear();
+    } catch (error) {
+      console.error('保存异常有效工时失败:', error);
     }
   }
 
@@ -1631,6 +1758,7 @@ export class EfficiencyCalcPage implements OnInit {
 
   async calculateAllCompletedPhases() {
     this.loading = true;
+    this.pendingExceptionEffectiveHours.clear();
     try {
       const base = this.getApiBase();
       
@@ -1877,6 +2005,7 @@ export class EfficiencyCalcPage implements OnInit {
     }
 
     this.loading = true;
+    this.pendingExceptionEffectiveHours.clear();
     try {
       const base = this.getApiBase();
       
@@ -2085,6 +2214,8 @@ export class EfficiencyCalcPage implements OnInit {
       if (duplicateCount.count > 0) {
         this.efficiencyData = Array.from(uniqueDataMap.values());
       }
+
+      await this.saveExceptionEffectiveHoursToBackend();
       
     } catch (error) {
       console.error('统计效率失败:', error);
@@ -2454,6 +2585,10 @@ export class EfficiencyCalcPage implements OnInit {
       });
       
       efficiency.exceptionHours = totalExceptionHours;
+    }
+
+    for (const exception of deductibleExceptionReports) {
+      this.registerExceptionForEffectiveHours(exception);
     }
     
     // 查询协助记录（该用户在该阶段时间范围内协助其他任务/其他阶段的记录）

@@ -41,6 +41,7 @@ import { Router } from '@angular/router';
 import { RouterLink } from '@angular/router';
 import { environment } from '../../../environments/environment';
 import { Capacitor } from '@capacitor/core';
+import { EXCEPTION_TYPES, getExceptionScopeExample } from '../../constants/exception-types';
 
 @Component({
   selector: 'app-home',
@@ -129,6 +130,7 @@ export class HomePage implements OnInit, OnDestroy {
   isSubmitting: boolean = false;
 
   // 异常上报相关属性
+  exceptionTypes = EXCEPTION_TYPES;
   isExceptionModalOpen: boolean = false;
   selectedTaskForException: any = null;
   exceptionType: string = '';
@@ -2214,6 +2216,10 @@ export class HomePage implements OnInit, OnDestroy {
   }
 
   // 格式化日期时间
+  getExceptionScopeExample(type: string): string {
+    return getExceptionScopeExample(type);
+  }
+
   formatExceptionDateTime(dateTimeStr: string): string {
     if (!dateTimeStr) return '-';
     try {

@@ -30,6 +30,7 @@ import { Router } from '@angular/router';
 import { RouterLink } from '@angular/router';
 import { environment } from '../../../environments/environment';
 import { Capacitor } from '@capacitor/core';
+import { EXCEPTION_TYPES } from '../../constants/exception-types';
 
 @Component({
   selector: 'app-exception-reports',
@@ -72,6 +73,7 @@ export class ExceptionReportsPage implements OnInit {
   currentUser: any = null;
   
   // 筛选条件
+  exceptionTypes = EXCEPTION_TYPES;
   filterStatus: string = '';
   filterType: string = '';
   
@@ -122,7 +124,8 @@ export class ExceptionReportsPage implements OnInit {
   applyFilters() {
     this.filteredReports = this.exceptionReports.filter(report => {
       const statusOk = this.filterStatus ? report.status === this.filterStatus : true;
-      const typeOk = this.filterType ? report.exception_type === this.filterType : true;
+      const reportType = report.modified_exception_type || report.exception_type;
+      const typeOk = this.filterType ? reportType === this.filterType : true;
       return statusOk && typeOk;
     });
   }

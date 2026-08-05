@@ -366,3 +366,42 @@ ion-list {
     }
   }
 }
+
+.exception-type-reference {
+  margin: 8px 16px 12px;
+  padding: 10px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+
+  .exception-type-reference-title {
+    margin: 0 0 8px;
+    font-size: 12px;
+    color: #6b7280;
+  }
+
+  .exception-type-reference-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+
+    th,
+    td {
+      border: 1px solid #e5e7eb;
+      padding: 6px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #f3f4f6;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    td:first-child {
+      width: 72px;
+      font-weight: 600;
+    }
+  }
+}

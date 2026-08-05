@@ -34,6 +34,36 @@ import { Router } from '@angular/router';
 import { environment } from '../../../environments/environment';
 import { Capacitor } from '@capacitor/core';
 import * as XLSX from 'xlsx';
+import { EXCEPTION_TYPES, getExceptionScopeExample } from '../../constants/exception-types';
+
+/** 导出异常工时时使用，与效率页 TimeUtils 口径一致 */
+class ExportTimeUtils {
+  static createLocalDateTime(dateStr: string, timeStr: string): Date {
+    return new Date(`${dateStr}T${timeStr}`);
+  }
+
+  static getLocalDateString(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  static createEndOfDay(endDate: Date): Date {
+    const endOfDay = new Date(endDate);
+    endOfDay.setHours(23, 59, 59, 999);
+    return endOfDay;
+  }
+
+  static calculateOverlapHours(start1: Date, end1: Date, start2: Date, end2: Date): number {
+    const overlapStartTime = Math.max(start1.getTime(), start2.getTime());
+    const overlapEndTime = Math.min(end1.getTime(), end2.getTime());
+    if (overlapStartTime >= overlapEndTime) {
+      return 0;
+    }
+    return (overlapEndTime - overlapStartTime) / (1000 * 60 * 60);
+  }
+}
 
 @Component({
   selector: 'app-exception-approval',
@@ -79,10 +109,12 @@ export class ExceptionApprovalPage implements OnInit {
   currentUser: any = null;
 
   // 筛选条件
+  exceptionTypes = EXCEPTION_TYPES;
   filterStatus: string = ''; // 默认根据用户角色自动设置
   filterType: string = '';
   exportStartDate: string = ''; // 导出用开始日期
   exportEndDate: string = '';   // 导出用结束日期
+  isExporting: boolean = false;
 
   // 审批模态框相关
   isApprovalModalOpen: boolean = false;
@@ -135,6 +167,10 @@ export class ExceptionApprovalPage implements OnInit {
 
   goHome() {
     this.router.navigate(['/home']);
+  }
+
+  getExceptionScopeExample(type: string): string {
+    return getExceptionScopeExample(type);
   }
 
   // 加载异常报告列表
@@ -298,7 +334,7 @@ export class ExceptionApprovalPage implements OnInit {
   }
 
   // 导出当前筛选条件下的异常报告（staff / supervisor / admin / manager）
-  exportExceptions() {
+  async exportExceptions() {
     const role = this.currentUser?.role;
     const dept = this.currentUser?.department;
 
@@ -337,89 +373,148 @@ export class ExceptionApprovalPage implements OnInit {
       return;
     }
 
-    const data: any[][] = [];
-    const header = [
-      '异常ID',
-      '任务名称',
-      '上报人',
-      '异常类型',
-      '最终异常类型',
-      '异常开始时间',
-      '异常结束时间',
-      '状态',
-      '提交时间',
-      '一级审批人',
-      '一级审批时间',
-      '一级备注',
-      '二级审批人',
-      '二级审批时间',
-      '二级备注',
-      '责任部门',
-      '责任部门确定时间',
-      '责任部门备注',
-      '图片链接',
-      '解决时间',
-      '解决备注'
-    ];
-    data.push(header);
+    this.isExporting = true;
+    try {
+      const base = this.getApiBase();
+      const needsEffectiveCalc = source.some(
+        (report: any) => !this.hasStoredEffectiveHours(report)
+      );
 
-    const toBjTime = (value: any): string => {
-      if (!value) return '';
-      try {
-        const d = new Date(value);
-        if (isNaN(d.getTime())) return String(value);
-        return d.toLocaleString('zh-CN', {
-          timeZone: 'Asia/Shanghai',
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit'
-        });
-      } catch {
-        return String(value);
+      let workTimeSettings: any | null = null;
+      let attendanceByUser = new Map<number, any[]>();
+
+      if (needsEffectiveCalc) {
+        workTimeSettings = await this.loadWorkTimeSettingsForExport(base);
+        if (!workTimeSettings) {
+          alert('部分异常缺少已存储的有效工时，且未找到工作时间设置，请先在考勤管理页面配置或重新计算效率');
+          return;
+        }
+        const missingReports = source.filter((report: any) => !this.hasStoredEffectiveHours(report));
+        const { startDate, endDate } = this.getExceptionExportDateRange(missingReports);
+        const userIds = [
+          ...new Set(
+            missingReports
+              .map((report: any) => Number(report.user_id))
+              .filter((id: number) => Number.isFinite(id) && id > 0)
+          )
+        ] as number[];
+        attendanceByUser = await this.loadAttendanceByUsers(base, userIds, startDate, endDate);
       }
-    };
 
-    source.forEach((report: any) => {
-      const imageUrl = report.image_path
-        ? `${environment.apiBase.replace('localhost', '10.0.2.2')}${report.image_path}`
-        : '';
+      const data: any[][] = [];
+      const header = [
+        '异常ID',
+        '任务名称',
+        '上报人',
+        '异常类型',
+        '最终异常类型',
+        '异常描述',
+        '异常开始时间',
+        '异常结束时间',
+        '日历工时(h)',
+        '有效异常工时(h)',
+        '状态',
+        '提交时间',
+        '一级审批人',
+        '一级审批时间',
+        '一级备注',
+        '二级审批人',
+        '二级审批时间',
+        '二级备注',
+        '责任部门',
+        '责任部门确定时间',
+        '责任部门备注',
+        '图片链接',
+        '解决时间',
+        '解决备注'
+      ];
+      data.push(header);
 
-      data.push([
-        report.id,
-        report.task_name || '',
-        report.user_name || '',
-        report.exception_type || '',
-        report.modified_exception_type || report.exception_type || '',
-        toBjTime(report.modified_start_datetime || report.exception_start_datetime),
-        toBjTime(report.modified_end_datetime || report.exception_end_datetime),
-        report.status || '',
-        toBjTime(report.submitted_at),
-        report.first_approver_name || '',
-        toBjTime(report.first_approved_at),
-        report.first_approval_note || '',
-        report.second_approver_name || '',
-        toBjTime(report.second_approved_at),
-        report.second_approval_note || '',
-        report.assigned_staff_name || '',
-        toBjTime(report.staff_confirmed_at),
-        report.staff_confirmation_note || '',
-        imageUrl ? `=HYPERLINK("${imageUrl}","查看图片")` : '',
-        toBjTime(report.resolved_at),
-        report.resolution_note || ''
-      ]);
-    });
+      const toBjTime = (value: any): string => {
+        if (!value) return '';
+        try {
+          const d = new Date(value);
+          if (isNaN(d.getTime())) return String(value);
+          return d.toLocaleString('zh-CN', {
+            timeZone: 'Asia/Shanghai',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+        } catch {
+          return String(value);
+        }
+      };
 
-    const ws: XLSX.WorkSheet = XLSX.utils.aoa_to_sheet(data);
-    const wb: XLSX.WorkBook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, '异常报告');
+      const isNative = Capacitor.isNativePlatform();
+      const imageBase = isNative
+        ? environment.apiBase.replace('localhost', '10.0.2.2')
+        : environment.apiBase;
 
-    const now = new Date();
-    const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(
-      now.getDate()
-    ).padStart(2, '0')}`;
-    XLSX.writeFile(wb, `异常报告_${dateStr}.xlsx`);
+      source.forEach((report: any) => {
+        const startDt = report.modified_start_datetime || report.exception_start_datetime;
+        const endDt = report.modified_end_datetime || report.exception_end_datetime;
+        const calendarHours = this.calculateCalendarHours(startDt, endDt);
+        const storedEffectiveHours = this.getStoredEffectiveHours(report);
+        let effectiveHours = storedEffectiveHours;
+        if (effectiveHours == null && workTimeSettings) {
+          const userId = Number(report.user_id);
+          const attendanceRecords = Number.isFinite(userId) ? attendanceByUser.get(userId) || [] : [];
+          effectiveHours = this.calculateExceptionEffectiveHours(
+            startDt,
+            endDt,
+            workTimeSettings,
+            attendanceRecords
+          );
+        }
+
+        const imageUrl = report.image_path ? `${imageBase}${report.image_path}` : '';
+
+        data.push([
+          report.id,
+          report.task_name || '',
+          report.user_name || '',
+          report.exception_type || '',
+          report.modified_exception_type || report.exception_type || '',
+          report.modified_description || report.description || '',
+          toBjTime(startDt),
+          toBjTime(endDt),
+          calendarHours > 0 ? Number(calendarHours.toFixed(2)) : '',
+          effectiveHours != null && effectiveHours > 0 ? Number(Number(effectiveHours).toFixed(2)) : '',
+          report.status || '',
+          toBjTime(report.submitted_at),
+          report.first_approver_name || '',
+          toBjTime(report.first_approved_at),
+          report.first_approval_note || '',
+          report.second_approver_name || '',
+          toBjTime(report.second_approved_at),
+          report.second_approval_note || '',
+          report.assigned_staff_name || '',
+          toBjTime(report.staff_confirmed_at),
+          report.staff_confirmation_note || '',
+          imageUrl ? `=HYPERLINK("${imageUrl}","查看图片")` : '',
+          toBjTime(report.resolved_at),
+          report.resolution_note || ''
+        ]);
+      });
+
+      const ws: XLSX.WorkSheet = XLSX.utils.aoa_to_sheet(data);
+      const wb: XLSX.WorkBook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, '异常报告');
+
+      const now = new Date();
+      const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(
+        now.getDate()
+      ).padStart(2, '0')}`;
+      XLSX.writeFile(wb, `异常报告_${dateStr}.xlsx`);
+    } catch (error) {
+      console.error('导出异常报告失败:', error);
+      alert('导出失败，请检查网络连接后重试');
+    } finally {
+      this.isExporting = false;
+    }
   }
 
   // 打包下载当前可见范围内的异常图片（方案3）
@@ -756,5 +851,296 @@ export class ExceptionApprovalPage implements OnInit {
   closeImageViewModal() {
     this.isImageViewModalOpen = false;
     this.selectedImageUrl = '';
+  }
+
+  private getApiBase(): string {
+    const isNative = Capacitor.isNativePlatform();
+    return isNative ? environment.apiBase.replace('localhost', '10.0.2.2') : environment.apiBase;
+  }
+
+  private hasStoredEffectiveHours(report: any): boolean {
+    return this.getStoredEffectiveHours(report) != null;
+  }
+
+  private getStoredEffectiveHours(report: any): number | null {
+    const raw = report?.effective_hours;
+    if (raw === null || raw === undefined || raw === '') {
+      return null;
+    }
+    const parsed = typeof raw === 'number' ? raw : parseFloat(String(raw));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  private async loadWorkTimeSettingsForExport(base: string): Promise<any | null> {
+    const response: any = await this.http.get(`${base}/api/work-time-settings`).toPromise();
+    if (response?.success && response?.settings) {
+      return response.settings;
+    }
+    return null;
+  }
+
+  private getExceptionExportDateRange(reports: any[]): { startDate: string; endDate: string } {
+    let minTime = Infinity;
+    let maxTime = -Infinity;
+
+    reports.forEach((report: any) => {
+      const startStr = report.modified_start_datetime || report.exception_start_datetime;
+      const endStr = report.modified_end_datetime || report.exception_end_datetime;
+      [startStr, endStr].forEach((value: string) => {
+        if (!value) return;
+        const time = new Date(value).getTime();
+        if (!Number.isFinite(time)) return;
+        minTime = Math.min(minTime, time);
+        maxTime = Math.max(maxTime, time);
+      });
+    });
+
+    if (!Number.isFinite(minTime) || !Number.isFinite(maxTime)) {
+      const today = ExportTimeUtils.getLocalDateString(new Date());
+      return { startDate: today, endDate: today };
+    }
+
+    return {
+      startDate: ExportTimeUtils.getLocalDateString(new Date(minTime)),
+      endDate: ExportTimeUtils.getLocalDateString(new Date(maxTime))
+    };
+  }
+
+  private async loadAttendanceByUsers(
+    base: string,
+    userIds: number[],
+    startDate: string,
+    endDate: string
+  ): Promise<Map<number, any[]>> {
+    const map = new Map<number, any[]>();
+    await Promise.all(
+      userIds.map(async (userId) => {
+        const records: any[] = [];
+        let page = 1;
+        const pageSize = 200;
+        while (true) {
+          const url =
+            `${base}/api/daily-attendance?start=${startDate}&end=${endDate}` +
+            `&userId=${userId}&page=${page}&pageSize=${pageSize}`;
+          const response: any = await this.http.get(url).toPromise();
+          const list = response?.list || [];
+          records.push(...list);
+          if (list.length < pageSize) {
+            break;
+          }
+          page++;
+        }
+        map.set(userId, records);
+      })
+    );
+    return map;
+  }
+
+  private calculateCalendarHours(startStr: string, endStr: string): number {
+    if (!startStr || !endStr) return 0;
+    const start = new Date(startStr);
+    const end = new Date(endStr);
+    if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start) {
+      return 0;
+    }
+    return (end.getTime() - start.getTime()) / (1000 * 60 * 60);
+  }
+
+  /** 与效率页 calculateExceptionOverlapHours 口径一致：异常∩(作息/加班)−请假 */
+  private calculateExceptionEffectiveHours(
+    exceptionStart: string,
+    exceptionEnd: string,
+    workTimeSettings: any,
+    attendanceRecords: any[]
+  ): number {
+    if (!exceptionStart || !exceptionEnd) return 0;
+
+    const exceptionStartTime = new Date(exceptionStart);
+    const exceptionEndTime = new Date(exceptionEnd);
+    if (isNaN(exceptionStartTime.getTime()) || isNaN(exceptionEndTime.getTime())) {
+      return 0;
+    }
+
+    const phaseStart = exceptionStartTime;
+    const phaseEnd = exceptionEndTime;
+    let totalOverlapHours = 0;
+    let totalLeaveOverlapHours = 0;
+
+    const endOfLastDay = ExportTimeUtils.createEndOfDay(phaseEnd);
+    const exceptionStartDate = ExportTimeUtils.getLocalDateString(exceptionStartTime);
+    const exceptionEndDate = ExportTimeUtils.getLocalDateString(exceptionEndTime);
+
+    for (let d = new Date(phaseStart); d <= endOfLastDay; d.setDate(d.getDate() + 1)) {
+      const currentDay = ExportTimeUtils.getLocalDateString(d);
+      if (exceptionStartDate > currentDay || exceptionEndDate < currentDay) {
+        continue;
+      }
+
+      const exceptionInPhaseStart = new Date(
+        Math.max(exceptionStartTime.getTime(), phaseStart.getTime())
+      );
+      const exceptionInPhaseEnd = new Date(
+        Math.min(exceptionEndTime.getTime(), phaseEnd.getTime())
+      );
+      if (exceptionInPhaseEnd <= exceptionInPhaseStart) {
+        continue;
+      }
+
+      const workWindows = this.getWorkWindowsForDay(workTimeSettings, currentDay);
+      const leavePeriods = this.getLeavePeriodsForDay(attendanceRecords, currentDay);
+
+      workWindows.forEach((window) => {
+        const windowStart = ExportTimeUtils.createLocalDateTime(currentDay, window.start);
+        const windowEnd = ExportTimeUtils.createLocalDateTime(currentDay, window.end);
+        const limitedWindowStart = new Date(Math.max(windowStart.getTime(), phaseStart.getTime()));
+        const limitedWindowEnd = new Date(Math.min(windowEnd.getTime(), phaseEnd.getTime()));
+        if (limitedWindowEnd <= limitedWindowStart) {
+          return;
+        }
+
+        totalOverlapHours += ExportTimeUtils.calculateOverlapHours(
+          exceptionInPhaseStart,
+          exceptionInPhaseEnd,
+          limitedWindowStart,
+          limitedWindowEnd
+        );
+
+        leavePeriods.forEach((leave) => {
+          const leaveStart = ExportTimeUtils.createLocalDateTime(currentDay, leave.start);
+          const leaveEnd = ExportTimeUtils.createLocalDateTime(currentDay, leave.end);
+          const leaveWindowStart = new Date(Math.max(leaveStart.getTime(), limitedWindowStart.getTime()));
+          const leaveWindowEnd = new Date(Math.min(leaveEnd.getTime(), limitedWindowEnd.getTime()));
+          if (leaveWindowEnd <= leaveWindowStart) {
+            return;
+          }
+          totalLeaveOverlapHours += ExportTimeUtils.calculateOverlapHours(
+            exceptionInPhaseStart,
+            exceptionInPhaseEnd,
+            leaveWindowStart,
+            leaveWindowEnd
+          );
+        });
+      });
+
+      const overtimePeriods = this.getOvertimePeriodsForDay(attendanceRecords, currentDay);
+      overtimePeriods.forEach((overtime) => {
+        const overtimeStart = ExportTimeUtils.createLocalDateTime(currentDay, overtime.start);
+        const overtimeEnd = ExportTimeUtils.createLocalDateTime(currentDay, overtime.end);
+        const limitedOvertimeStart = new Date(Math.max(overtimeStart.getTime(), phaseStart.getTime()));
+        const limitedOvertimeEnd = new Date(Math.min(overtimeEnd.getTime(), phaseEnd.getTime()));
+        if (limitedOvertimeEnd <= limitedOvertimeStart) {
+          return;
+        }
+
+        totalOverlapHours += ExportTimeUtils.calculateOverlapHours(
+          exceptionInPhaseStart,
+          exceptionInPhaseEnd,
+          limitedOvertimeStart,
+          limitedOvertimeEnd
+        );
+
+        leavePeriods.forEach((leave) => {
+          const leaveStart = ExportTimeUtils.createLocalDateTime(currentDay, leave.start);
+          const leaveEnd = ExportTimeUtils.createLocalDateTime(currentDay, leave.end);
+          const leaveOvertimeStart = new Date(Math.max(leaveStart.getTime(), limitedOvertimeStart.getTime()));
+          const leaveOvertimeEnd = new Date(Math.min(leaveEnd.getTime(), limitedOvertimeEnd.getTime()));
+          if (leaveOvertimeEnd <= leaveOvertimeStart) {
+            return;
+          }
+          totalLeaveOverlapHours += ExportTimeUtils.calculateOverlapHours(
+            exceptionInPhaseStart,
+            exceptionInPhaseEnd,
+            leaveOvertimeStart,
+            leaveOvertimeEnd
+          );
+        });
+      });
+    }
+
+    return Math.max(0, totalOverlapHours - totalLeaveOverlapHours);
+  }
+
+  private getWorkWindowsForDay(
+    workTimeSettings: any,
+    _dateStr: string
+  ): Array<{ start: string; end: string }> {
+    const startTime = workTimeSettings.start_time;
+    const endTime = workTimeSettings.end_time;
+    const lunchStart = workTimeSettings.lunch_start_time;
+    const lunchEnd = workTimeSettings.lunch_end_time;
+    const otherStart = workTimeSettings.other_break_start_time || '';
+    const otherEnd = workTimeSettings.other_break_end_time || '';
+
+    let windows = [
+      { start: startTime, end: lunchStart },
+      { start: lunchEnd, end: endTime }
+    ];
+
+    if (otherStart && otherEnd) {
+      windows = this.splitWindowsByBreak(windows, otherStart, otherEnd);
+    }
+
+    return windows;
+  }
+
+  private getOvertimePeriodsForDay(
+    attendanceRecords: any[],
+    dateStr: string
+  ): Array<{ start: string; end: string }> {
+    const periods: Array<{ start: string; end: string }> = [];
+    attendanceRecords.forEach((record) => {
+      const recordDate =
+        record.date instanceof Date
+          ? ExportTimeUtils.getLocalDateString(record.date)
+          : String(record.date).slice(0, 10);
+      if (recordDate === dateStr && record.overtime_start_time && record.overtime_end_time) {
+        periods.push({
+          start: record.overtime_start_time,
+          end: record.overtime_end_time
+        });
+      }
+    });
+    return periods;
+  }
+
+  private getLeavePeriodsForDay(
+    attendanceRecords: any[],
+    dateStr: string
+  ): Array<{ start: string; end: string }> {
+    const periods: Array<{ start: string; end: string }> = [];
+    attendanceRecords.forEach((record) => {
+      const recordDate =
+        record.date instanceof Date
+          ? ExportTimeUtils.getLocalDateString(record.date)
+          : String(record.date).slice(0, 10);
+      if (recordDate === dateStr && record.leave_start_time && record.leave_end_time) {
+        periods.push({
+          start: record.leave_start_time,
+          end: record.leave_end_time
+        });
+      }
+    });
+    return periods;
+  }
+
+  private splitWindowsByBreak(
+    windows: Array<{ start: string; end: string }>,
+    breakStart: string,
+    breakEnd: string
+  ): Array<{ start: string; end: string }> {
+    const result: Array<{ start: string; end: string }> = [];
+    windows.forEach((window) => {
+      if (breakStart >= window.end || breakEnd <= window.start) {
+        result.push(window);
+      } else {
+        if (breakStart > window.start) {
+          result.push({ start: window.start, end: breakStart });
+        }
+        if (breakEnd < window.end) {
+          result.push({ start: breakEnd, end: window.end });
+        }
+      }
+    });
+    return result;
   }
 }

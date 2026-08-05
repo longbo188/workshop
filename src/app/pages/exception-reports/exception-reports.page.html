@@ -30,12 +30,9 @@
         <ion-label>类型筛选</ion-label>
         <ion-select [(ngModel)]="filterType" (ionChange)="applyFilters()" placeholder="全部类型">
           <ion-select-option value="">全部类型</ion-select-option>
-          <ion-select-option value="缺料">缺料</ion-select-option>
-          <ion-select-option value="来料不良">来料不良</ion-select-option>
-          <ion-select-option value="改造类（研发售后或生产不良）">改造类（研发售后或生产不良）</ion-select-option>
-          <ion-select-option value="临时安排任务">临时安排任务</ion-select-option>
-          <ion-select-option value="设计问题">设计问题</ion-select-option>
-          <ion-select-option value="其他问题">其他问题</ion-select-option>
+          <ion-select-option *ngFor="let type of exceptionTypes" [value]="type.value">
+            {{ type.label }}
+          </ion-select-option>
         </ion-select>
       </ion-item>
       
