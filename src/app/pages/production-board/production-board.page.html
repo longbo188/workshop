@@ -1,0 +1,104 @@
+<ion-header class="board-toolbar">
+  <ion-toolbar class="board-ion-toolbar">
+    <ion-buttons slot="start">
+      <ion-button (click)="goBack()">
+        <ion-icon name="arrow-back-outline"></ion-icon>
+      </ion-button>
+    </ion-buttons>
+    <ion-title>生产任务看板</ion-title>
+    <ion-buttons slot="end">
+      <ion-button (click)="loadBoard()" title="立即刷新">刷新</ion-button>
+      <ion-button (click)="toggleFullscreen()" title="全屏">全屏</ion-button>
+    </ion-buttons>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content class="board-content" [scrollY]="false">
+  <div class="board-shell">
+    <div class="board-meta-bar" *ngIf="!isLoading">
+      <div class="board-meta-end">
+        <span class="board-legend">
+          <i class="swatch phase-completed"></i>已完成
+          <i class="swatch phase-in_progress"></i>进行中
+          <i class="swatch phase-paused"></i>已暂停
+          <i class="swatch phase-not_started"></i>未开工
+        </span>
+        <div class="board-month-metrics" *ngIf="!errorMsg">
+          <label class="board-metric-box board-metric-box--target">
+            <span class="board-metric-label">月度目标:</span>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              class="board-metric-input"
+              [(ngModel)]="monthlyTarget"
+              (ngModelChange)="saveMonthlyTarget()"
+              placeholder="0"
+              inputmode="numeric"
+            />
+            <span class="board-metric-suffix">台</span>
+          </label>
+          <div class="board-metric-box">
+            <span class="board-metric-label">当前已完成:</span>
+            <span class="board-metric-input board-metric-input--readonly">{{ monthAllPhasesCompletedCount }}</span>
+            <span class="board-metric-suffix">台</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div *ngIf="isLoading" class="loading-wrap">
+      <ion-spinner name="crescent"></ion-spinner>
+    </div>
+
+    <p *ngIf="errorMsg" class="error-msg">{{ errorMsg }}</p>
+
+    <!-- 上周+本周 14 天同一行，浅蓝表头 + 黑色网格 -->
+    <div class="board-grid" #boardGrid *ngIf="!isLoading && !errorMsg">
+      <div class="board-week-pane">
+        <div
+          *ngIf="visibleDayColumns.length > 0"
+          class="board-week-row"
+          [style.--board-visible-days]="visibleDayColumns.length">
+          <div
+            class="board-day"
+            *ngFor="let day of visibleDayColumns"
+            [class.board-day--today]="isToday(day)"
+            [class.board-day--week2-start]="isThisWeekStartDay(day)">
+            <div class="board-day-header">
+              <span class="board-day-weekday">{{ day.weekdayLabel }}</span>
+              <span class="board-day-date">{{ day.dateLabel }}</span>
+              <span class="board-day-count">{{ day.tasks.length }}</span>
+            </div>
+            <div class="board-day-body">
+              <!-- 左信息 + 右四阶段（单列竖排） -->
+              <div class="task-card" *ngFor="let t of day.tasks">
+                <div class="task-card-inner">
+                  <div class="task-info">
+                    <div class="task-device" [title]="t.device_number || ''">
+                      <span class="task-device-text">{{ t.device_number || '-' }}</span>
+                    </div>
+                    <div class="task-model" [title]="t.product_model || ''">{{ t.product_model || '-' }}</div>
+                    <div class="task-delivery">{{ formatDeliveryShort(t.promised_completion_time) }}</div>
+                  </div>
+                  <div class="task-phases">
+                    <div
+                      *ngFor="let col of phaseColumns"
+                      class="phase-slot"
+                      [ngClass]="phaseClass(t, col.key)"
+                      [title]="phaseSlotTitle(t, col.key, col.title)">
+                      {{ phaseAssigneeName(t, col.key) }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p *ngIf="visibleDayColumns.length === 0" class="board-empty-days">
+          暂无可展示任务（上周/本周或近30天内无四阶段未完成的任务）
+        </p>
+      </div>
+    </div>
+  </div>
+</ion-content>

@@ -8,6 +8,7 @@ import {
   IonCardContent,
   IonCardHeader,
   IonCardTitle,
+  IonCardSubtitle,
   IonList,
   IonItem,
   IonLabel,
@@ -57,6 +58,7 @@ import { EXCEPTION_TYPES, getExceptionScopeExample } from '../../constants/excep
     IonCardContent,
     IonCardHeader,
     IonCardTitle,
+    IonCardSubtitle,
     IonList,
     IonItem,
     IonLabel,
@@ -156,6 +158,22 @@ export class HomePage implements OnInit, OnDestroy {
   isUserManageModalOpen: boolean = false;
   userManageSearchKeyword: string = '';
   userManageFilterRole: string = '';
+  isEditUserModalOpen: boolean = false;
+  editingUserForManage: any = null;
+  editUserForm: {
+    name: string;
+    user_group: string;
+    role: string;
+    department: string;
+    username: string;
+  } = {
+    name: '',
+    user_group: '',
+    role: '',
+    department: '',
+    username: '',
+  };
+  isSavingUserEdit: boolean = false;
   
   // 导入标准工时相关属性
   isStdHoursModalOpen: boolean = false;
@@ -286,11 +304,53 @@ export class HomePage implements OnInit, OnDestroy {
     });
   }
 
+  private normalizeDepartment(dept: string | undefined | null): string {
+    return (dept || '').trim();
+  }
+
+  /** 员工管理：是否可对目标用户执行编辑/离职等操作 */
+  canOperateUserInManage(user: any): boolean {
+    if (!this.currentUser?.id || !user?.id) {
+      return false;
+    }
+    if (user.id === this.currentUser.id) {
+      return false;
+    }
+    if (this.currentUser.role === 'admin') {
+      return true;
+    }
+    if (this.currentUser.role === 'manager') {
+      if (user.role === 'admin') {
+        return false;
+      }
+      return (
+        this.normalizeDepartment(user.department) ===
+        this.normalizeDepartment(this.currentUser.department)
+      );
+    }
+    return false;
+  }
+
+  get isUserManageAdmin(): boolean {
+    return this.currentUser?.role === 'admin';
+  }
+
+  get isUserManageManagerOnly(): boolean {
+    return this.currentUser?.role === 'manager';
+  }
+
   // 员工管理视图的筛选结果（展示所有角色，支持搜索和按角色过滤）
   get filteredUsersForManage() {
     const keyword = (this.userManageSearchKeyword || '').trim().toLowerCase();
     const roleFilter = (this.userManageFilterRole || '').trim();
     let list = this.users || [];
+
+    if (this.currentUser?.role === 'manager') {
+      const dept = this.normalizeDepartment(this.currentUser.department);
+      list = list.filter(
+        (u: any) => this.normalizeDepartment(u.department) === dept
+      );
+    }
 
     if (roleFilter) {
       list = list.filter((u: any) => u.role === roleFilter);
@@ -315,6 +375,89 @@ export class HomePage implements OnInit, OnDestroy {
     });
   }
 
+  openEditUserModal(user: any) {
+    if (!this.canOperateUserInManage(user)) {
+      return;
+    }
+    this.editingUserForManage = user;
+    this.editUserForm = {
+      name: user.name || '',
+      user_group: user.user_group || '',
+      role: user.role || 'worker',
+      department: user.department || '',
+      username: user.username || '',
+    };
+    this.isEditUserModalOpen = true;
+  }
+
+  closeEditUserModal() {
+    this.isEditUserModalOpen = false;
+    this.editingUserForManage = null;
+    this.isSavingUserEdit = false;
+  }
+
+  async saveUserEdit() {
+    if (!this.currentUser?.id || !this.editingUserForManage?.id) {
+      await this.presentToast('无法保存：用户信息不完整');
+      return;
+    }
+    const name = (this.editUserForm.name || '').trim();
+    if (!name) {
+      await this.presentToast('请填写姓名');
+      return;
+    }
+
+    const isNative = Capacitor.isNativePlatform();
+    const base = isNative
+      ? environment.apiBase.replace('localhost', '10.0.2.2')
+      : environment.apiBase;
+
+    const body: {
+      operatorId: number;
+      name: string;
+      user_group: string;
+      role?: string;
+      department?: string;
+      username?: string;
+    } = {
+      operatorId: this.currentUser.id,
+      name,
+      user_group: (this.editUserForm.user_group || '').trim(),
+    };
+
+    if (this.isUserManageAdmin) {
+      body.role = this.editUserForm.role;
+      body.department = (this.editUserForm.department || '').trim();
+      body.username = (this.editUserForm.username || '').trim();
+    }
+
+    this.isSavingUserEdit = true;
+    try {
+      const res: any = await this.http
+        .put(`${base}/api/users/${this.editingUserForManage.id}`, body)
+        .toPromise();
+      await this.presentToast('员工信息已保存');
+      if (res?.user) {
+        const idx = (this.users || []).findIndex(
+          (u: any) => u.id === this.editingUserForManage.id
+        );
+        if (idx >= 0) {
+          this.users[idx] = { ...this.users[idx], ...res.user };
+        }
+      } else {
+        await this.loadUsersAndDepartments();
+      }
+      this.closeEditUserModal();
+    } catch (error: any) {
+      console.error('保存员工信息失败:', error);
+      const msg =
+        error?.error?.error || error?.message || '保存员工信息失败';
+      await this.presentToast(msg);
+    } finally {
+      this.isSavingUserEdit = false;
+    }
+  }
+
   // 将员工标记为离职（inactive）
   async setUserInactive(user: any) {
     if (!this.currentUser?.id) {
@@ -322,9 +465,8 @@ export class HomePage implements OnInit, OnDestroy {
       return;
     }
 
-    // 管理端简单保护：不允许操作自己
-    if (user.id === this.currentUser.id) {
-      await this.presentToast('不能修改自己的在职状态');
+    if (!this.canOperateUserInManage(user)) {
+      await this.presentToast('无权操作该员工');
       return;
     }
 

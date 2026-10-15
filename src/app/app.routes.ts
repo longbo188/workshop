@@ -27,6 +27,10 @@ export const routes: Routes = [
     loadComponent: () => import('./pages/dispatch/dispatch.page').then( m => m.DispatchPage)
   },
   {
+    path: 'production-board',
+    loadComponent: () => import('./pages/production-board/production-board.page').then(m => m.ProductionBoardPage)
+  },
+  {
     path: 'attendance-admin',
     loadComponent: () => import('./pages/attendance-admin/attendance-admin.page').then( m => m.AttendanceAdminPage)
   },

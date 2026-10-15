@@ -49,6 +49,17 @@
           currentUser?.role === 'supervisor' ||
           currentUser?.role === 'manager'
         "
+        (click)="openProductionBoard()"
+        fill="outline">
+        <ion-icon name="tv-outline"></ion-icon>
+        生产看板
+      </ion-button>
+      <ion-button
+        *ngIf="
+          currentUser?.role === 'admin' ||
+          currentUser?.role === 'supervisor' ||
+          currentUser?.role === 'manager'
+        "
         (click)="openVizModal()"
         fill="clear">
         <ion-icon name="stats-chart-outline"></ion-icon>

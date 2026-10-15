@@ -1863,6 +1863,10 @@ export class DispatchPage implements OnInit {
 
   // ========== 派工任务可视化相关方法 ==========
 
+  openProductionBoard() {
+    this.router.navigate(['/production-board']);
+  }
+
   async openVizModal() {
     this.isVizModalOpen = true;
     await this.loadVizData();
