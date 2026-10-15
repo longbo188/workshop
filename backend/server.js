@@ -44,6 +44,98 @@ const dbConfig = {
   database: 'workshop_db' // 你创建的数据库名
 };
 
+/** 异常类型 -> 责任部门（staff 确认）；生产/其他不转派 */
+const EXCEPTION_TYPE_DEPARTMENT_MAP = {
+  '工程': '工程部',
+  '研发': '研发部',
+  'PMC': 'PMC',
+  '仓库': '仓库',
+  '品质': '质量部',
+  '销售': '销售部'
+};
+
+const EXCEPTION_TYPES_NO_STAFF = ['生产', '其他'];
+
+/** 兼容旧版异常类型 */
+const LEGACY_EXCEPTION_TYPE_DEPARTMENT_MAP = {
+  '缺料': 'PMC',
+  '来料不良': '质量部',
+  '改造类（研发售后或生产不良）': 'PMC',
+  '改造类': '售后',
+  '设计问题': '研发部'
+};
+
+const LEGACY_EXCEPTION_TYPES_NO_STAFF = ['临时安排任务', '其他问题'];
+
+function getExceptionTargetDepartment(exceptionType) {
+  if (!exceptionType) return null;
+  if (EXCEPTION_TYPES_NO_STAFF.includes(exceptionType) || LEGACY_EXCEPTION_TYPES_NO_STAFF.includes(exceptionType)) {
+    return null;
+  }
+  return EXCEPTION_TYPE_DEPARTMENT_MAP[exceptionType]
+    || LEGACY_EXCEPTION_TYPE_DEPARTMENT_MAP[exceptionType]
+    || null;
+}
+
+/** 生产看板：上周周一 ~ 本周周日（14 天） */
+function getThisAndNextWeekProductionRange(now = new Date()) {
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const day = d.getDay();
+  const offsetToMonday = day === 0 ? 5 : day - 1;
+  const thisWeekMonday = new Date(d);
+  thisWeekMonday.setDate(d.getDate() - offsetToMonday);
+  const start = new Date(thisWeekMonday);
+  start.setDate(thisWeekMonday.getDate() - 7);
+  const end = new Date(thisWeekMonday);
+  end.setDate(thisWeekMonday.getDate() + 6);
+  const fmt = (x) => {
+    const y = x.getFullYear();
+    const m = String(x.getMonth() + 1).padStart(2, '0');
+    const dd = String(x.getDate()).padStart(2, '0');
+    return `${y}-${m}-${dd}`;
+  };
+  return { start: fmt(start), end: fmt(end) };
+}
+
+/** 看板拉取开工日：上周一 ~ 本周日，与「今天往前 30 天」取并集起点 */
+function getProductionBoardFetchRange(now = new Date()) {
+  const week = getThisAndNextWeekProductionRange(now);
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const thirtyAgo = new Date(d);
+  thirtyAgo.setDate(d.getDate() - 30);
+  const fmt = (x) => {
+    const y = x.getFullYear();
+    const m = String(x.getMonth() + 1).padStart(2, '0');
+    const dd = String(x.getDate()).padStart(2, '0');
+    return `${y}-${m}-${dd}`;
+  };
+  const thirtyStart = fmt(thirtyAgo);
+  const start = week.start < thirtyStart ? week.start : thirtyStart;
+  return { start, end: week.end };
+}
+
+function getCurrentYearMonthKey(now = new Date()) {
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  return `${y}-${m}`;
+}
+
+const KANBAN_PHASE_COMPLETE_SQL = (col) => `(
+  t.${col} = 1 OR t.${col} = '1'
+  OR LOWER(TRIM(CAST(t.${col} AS CHAR))) IN ('true','completed','complete','done','yes','y')
+)`;
+
+/** 当月总装后段已完成的台数（总装后段 complete_time 归属当月；以完成时间为准） */
+async function getProductionBoardMonthAllKanbanPhasesCompletedCount(connection, yearMonth) {
+  const [rows] = await connection.execute(
+    `SELECT COUNT(*) AS cnt FROM tasks t
+     WHERE t.post_assembly_complete_time IS NOT NULL
+       AND DATE_FORMAT(t.post_assembly_complete_time, '%Y-%m') = ?`,
+    [yearMonth]
+  );
+  return Number(rows[0]?.cnt || 0);
+}
+
 function normalizePriority(value) {
   if (!value && value !== 0) {
     return 'normal';
@@ -304,6 +396,59 @@ function normalizePriority(value) {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
     console.log('产品标准工时表校验完成');
+
+    // exception_reports：有效异常工时（效率计算时写入，导出直接读库）
+    try {
+      await connection.execute(`
+        ALTER TABLE exception_reports
+        ADD COLUMN effective_hours DECIMAL(10,2) NULL COMMENT '有效异常工时(作息/加班-请假)'
+      `);
+      console.log('exception_reports.effective_hours 字段添加完成');
+    } catch (error) {
+      if (!error.message.includes('Duplicate column name')) {
+        console.log('exception_reports.effective_hours 迁移跳过（可能已存在）');
+      }
+    }
+    try {
+      await connection.execute(`
+        ALTER TABLE exception_reports
+        ADD COLUMN effective_hours_calculated_at DATETIME NULL COMMENT '有效异常工时计算时间'
+      `);
+      console.log('exception_reports.effective_hours_calculated_at 字段添加完成');
+    } catch (error) {
+      if (!error.message.includes('Duplicate column name')) {
+        console.log('exception_reports.effective_hours_calculated_at 迁移跳过（可能已存在）');
+      }
+    }
+
+    // 异常类型：由旧 enum 迁移为 varchar，并映射到新分类
+    try {
+      await connection.execute(`
+        ALTER TABLE exception_reports
+        MODIFY COLUMN exception_type VARCHAR(100) NOT NULL
+      `);
+      console.log('exception_reports.exception_type 已迁移为 VARCHAR');
+    } catch (error) {
+      console.log('exception_reports.exception_type 迁移跳过:', error.message);
+    }
+    const legacyTypeMigrations = [
+      ["缺料", 'PMC'],
+      ['来料不良', '品质'],
+      ['改造类（研发售后或生产不良）', 'PMC'],
+      ['临时安排任务', '生产'],
+      ['设计问题', '研发'],
+      ['其他问题', '其他']
+    ];
+    for (const [oldType, newType] of legacyTypeMigrations) {
+      await connection.execute(
+        'UPDATE exception_reports SET exception_type = ? WHERE exception_type = ?',
+        [newType, oldType]
+      );
+      await connection.execute(
+        'UPDATE exception_reports SET modified_exception_type = ? WHERE modified_exception_type = ?',
+        [newType, oldType]
+      );
+    }
     
     await connection.end();
   } catch (e) {
@@ -504,6 +649,63 @@ app.get('/api/tasks', async (req, res) => {
     res.json(enrichedTasks);
   } catch (error) {
     res.status(500).json({ error: '获取任务失败：' + error.message });
+  }
+});
+
+// 5.0 生产看板：开工日期落在上周+本周的任务
+app.get('/api/dashboard/production-board', async (req, res) => {
+  try {
+    const { start, end } = getProductionBoardFetchRange();
+    const connection = await mysql.createConnection(dbConfig);
+    const [rows] = await connection.execute(`
+      SELECT
+        t.id,
+        t.name,
+        t.device_number,
+        t.product_model,
+        t.production_time,
+        t.promised_completion_time,
+        t.status,
+        t.machining_assignee, t.electrical_assignee, t.pre_assembly_assignee,
+        t.post_assembly_assignee, t.debugging_assignee,
+        u1.name AS machining_assignee_name,
+        u2.name AS electrical_assignee_name,
+        u3.name AS pre_assembly_assignee_name,
+        u4.name AS post_assembly_assignee_name,
+        u5.name AS debugging_assignee_name,
+        t.machining_phase, t.electrical_phase, t.pre_assembly_phase,
+        t.post_assembly_phase, t.debugging_phase,
+        t.machining_start_time, t.electrical_start_time, t.pre_assembly_start_time,
+        t.post_assembly_start_time, t.debugging_start_time,
+        t.machining_paused_at, t.electrical_paused_at, t.pre_assembly_paused_at,
+        t.post_assembly_paused_at, t.debugging_paused_at
+      FROM tasks t
+      LEFT JOIN users u1 ON t.machining_assignee = u1.id
+      LEFT JOIN users u2 ON t.electrical_assignee = u2.id
+      LEFT JOIN users u3 ON t.pre_assembly_assignee = u3.id
+      LEFT JOIN users u4 ON t.post_assembly_assignee = u4.id
+      LEFT JOIN users u5 ON t.debugging_assignee = u5.id
+      WHERE t.production_time IS NOT NULL
+        AND DATE(t.production_time) >= ?
+        AND DATE(t.production_time) <= ?
+      ORDER BY t.production_time ASC, t.device_number ASC, t.id ASC
+    `, [start, end]);
+    const monthStatsYearMonth = getCurrentYearMonthKey();
+    const monthAllPhasesCompletedCount = await getProductionBoardMonthAllKanbanPhasesCompletedCount(
+      connection,
+      monthStatsYearMonth
+    );
+    await connection.end();
+    res.json({
+      periodStart: start,
+      periodEnd: end,
+      refreshedAt: new Date().toISOString(),
+      monthStatsYearMonth,
+      monthAllPhasesCompletedCount,
+      tasks: rows || []
+    });
+  } catch (error) {
+    res.status(500).json({ error: '获取生产看板失败：' + error.message });
   }
 });
 
@@ -1628,13 +1830,31 @@ app.post('/api/users/:id/status', async (req, res) => {
     }
 
     // 检查被操作用户是否存在
+    const [opDeptRows] = await connection.execute(
+      'SELECT department FROM users WHERE id = ?',
+      [operatorId]
+    );
+    const operatorDepartment = opDeptRows[0]?.department || '';
+
     const [userRows] = await connection.execute(
-      'SELECT id, username, name FROM users WHERE id = ?',
+      'SELECT id, username, name, role, department FROM users WHERE id = ?',
       [id]
     );
     if (userRows.length === 0) {
       await connection.end();
       return res.status(404).json({ error: '用户不存在' });
+    }
+    const targetUser = userRows[0];
+
+    if (opRole === 'manager') {
+      if (!operatorDepartment || targetUser.department !== operatorDepartment) {
+        await connection.end();
+        return res.status(403).json({ error: '只能修改本部门员工的在职状态' });
+      }
+      if (targetUser.role === 'admin') {
+        await connection.end();
+        return res.status(403).json({ error: '不能修改管理员账号' });
+      }
     }
 
     // 更新用户状态（active=在职, inactive=离职）
@@ -1648,6 +1868,144 @@ app.post('/api/users/:id/status', async (req, res) => {
   } catch (error) {
     console.error('更新用户状态失败:', error);
     res.status(500).json({ error: '更新用户状态失败：' + error.message });
+  }
+});
+
+// 10.4. 更新员工信息（管理员全字段；经理仅本部门且不可改角色/部门/用户名）
+app.put('/api/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      operatorId,
+      name,
+      user_group,
+      role,
+      department,
+      username,
+    } = req.body || {};
+
+    if (!operatorId) {
+      return res.status(400).json({ error: 'operatorId 必填' });
+    }
+
+    const connection = await mysql.createConnection(dbConfig);
+
+    const [opRows] = await connection.execute(
+      'SELECT id, role, department FROM users WHERE id = ? AND status = "active"',
+      [operatorId]
+    );
+    if (opRows.length === 0) {
+      await connection.end();
+      return res.status(403).json({ error: '操作人不存在或已离职' });
+    }
+    const operator = opRows[0];
+    if (operator.role !== 'admin' && operator.role !== 'manager') {
+      await connection.end();
+      return res.status(403).json({ error: '只有管理员或经理可以修改员工信息' });
+    }
+
+    const [userRows] = await connection.execute(
+      'SELECT id, username, name, role, department, user_group FROM users WHERE id = ? AND status = "active"',
+      [id]
+    );
+    if (userRows.length === 0) {
+      await connection.end();
+      return res.status(404).json({ error: '用户不存在或已离职' });
+    }
+    const target = userRows[0];
+
+    if (Number(operatorId) === Number(id)) {
+      await connection.end();
+      return res.status(400).json({ error: '不能通过员工管理修改自己的信息' });
+    }
+
+    if (operator.role === 'manager') {
+      if (!operator.department || target.department !== operator.department) {
+        await connection.end();
+        return res.status(403).json({ error: '只能修改本部门员工信息' });
+      }
+      if (target.role === 'admin') {
+        await connection.end();
+        return res.status(403).json({ error: '不能修改管理员账号' });
+      }
+      if (role !== undefined || department !== undefined || username !== undefined) {
+        await connection.end();
+        return res.status(403).json({ error: '经理只能修改姓名和组别' });
+      }
+    }
+
+    const nextName = name !== undefined ? String(name).trim() : target.name;
+    if (!nextName) {
+      await connection.end();
+      return res.status(400).json({ error: '姓名不能为空' });
+    }
+
+    let nextUserGroup = target.user_group;
+    if (user_group !== undefined) {
+      const g = String(user_group).trim();
+      nextUserGroup = g ? g : null;
+    }
+
+    let nextRole = target.role;
+    let nextDepartment = target.department;
+    let nextUsername = target.username;
+
+    if (operator.role === 'admin') {
+      if (role !== undefined) {
+        if (!['worker', 'supervisor', 'admin', 'manager', 'staff'].includes(role)) {
+          await connection.end();
+          return res.status(400).json({ error: '角色无效' });
+        }
+        nextRole = role;
+      }
+      if (department !== undefined) {
+        const d = String(department).trim();
+        if (!d) {
+          await connection.end();
+          return res.status(400).json({ error: '部门不能为空' });
+        }
+        nextDepartment = d;
+      }
+      if (username !== undefined) {
+        const u = String(username).trim();
+        if (!u) {
+          await connection.end();
+          return res.status(400).json({ error: '用户名不能为空' });
+        }
+        if (u !== target.username) {
+          const [dup] = await connection.execute(
+            'SELECT id FROM users WHERE username = ? AND id <> ?',
+            [u, id]
+          );
+          if (dup.length > 0) {
+            await connection.end();
+            return res.status(400).json({ error: '用户名已存在' });
+          }
+        }
+        nextUsername = u;
+      }
+    }
+
+    await connection.execute(
+      `UPDATE users SET username = ?, name = ?, role = ?, department = ?, user_group = ? WHERE id = ?`,
+      [nextUsername, nextName, nextRole, nextDepartment, nextUserGroup, id]
+    );
+
+    await connection.end();
+    res.json({
+      success: true,
+      user: {
+        id: Number(id),
+        username: nextUsername,
+        name: nextName,
+        role: nextRole,
+        department: nextDepartment,
+        user_group: nextUserGroup,
+      },
+    });
+  } catch (error) {
+    console.error('更新员工信息失败:', error);
+    res.status(500).json({ error: '更新员工信息失败：' + error.message });
   }
 });
 
@@ -5915,6 +6273,14 @@ app.post('/api/exception-reports', upload.any(), async (req, res) => {
     if (!taskId || !userId || !exceptionType || !description || !exceptionStartDateTime || !exceptionEndDateTime || !approverId) {
       return res.status(400).json({ error: '必填字段不能为空' });
     }
+
+    const allowedExceptionTypes = [
+      ...EXCEPTION_TYPES_NO_STAFF,
+      ...Object.keys(EXCEPTION_TYPE_DEPARTMENT_MAP)
+    ];
+    if (!allowedExceptionTypes.includes(exceptionType)) {
+      return res.status(400).json({ error: '无效的异常类型' });
+    }
     
     const connection = await mysql.createConnection(dbConfig);
     
@@ -6070,6 +6436,56 @@ app.post('/api/exception-reports', upload.any(), async (req, res) => {
     
   } catch (error) {
     res.status(500).json({ error: '提交异常报告失败：' + error.message });
+  }
+});
+
+// 批量更新异常有效工时（效率页计算后写入）
+app.post('/api/exception-reports/batch-effective-hours', async (req, res) => {
+  const { items } = req.body || {};
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: 'items 必须为非空数组' });
+  }
+  if (items.length > 1000) {
+    return res.status(400).json({ error: '单次最多更新 1000 条异常记录' });
+  }
+
+  let connection;
+  try {
+    connection = await mysql.createConnection(dbConfig);
+    await connection.beginTransaction();
+
+    let updated = 0;
+    for (const item of items) {
+      const id = Number(item?.id);
+      const effectiveHours = Number(item?.effectiveHours);
+      if (!Number.isFinite(id) || id <= 0) continue;
+      if (!Number.isFinite(effectiveHours) || effectiveHours < 0) continue;
+
+      const [result] = await connection.execute(
+        `
+        UPDATE exception_reports
+        SET effective_hours = ?, effective_hours_calculated_at = NOW()
+        WHERE id = ?
+        `,
+        [Number(effectiveHours.toFixed(2)), id]
+      );
+      if (result.affectedRows > 0) {
+        updated += 1;
+      }
+    }
+
+    await connection.commit();
+    await connection.end();
+    return res.json({ success: true, updated });
+  } catch (error) {
+    if (connection) {
+      try {
+        await connection.rollback();
+      } catch (_) {}
+      await connection.end();
+    }
+    console.error('批量更新异常有效工时失败:', error);
+    return res.status(500).json({ error: '批量更新异常有效工时失败：' + error.message });
   }
 });
 
@@ -6308,6 +6724,16 @@ app.post('/api/exception-reports/:reportId/approve', async (req, res) => {
           }
         }
         
+        if (
+          updateFields.some(
+            (f) =>
+              f.includes('modified_start_datetime') || f.includes('modified_end_datetime')
+          )
+        ) {
+          updateFields.push('effective_hours = NULL');
+          updateFields.push('effective_hours_calculated_at = NULL');
+        }
+        
         updateValues.push(reportId);
         
         await connection.execute(`
@@ -6350,35 +6776,21 @@ app.post('/api/exception-reports/:reportId/approve', async (req, res) => {
         let assignedStaffId = null;
         let newStatus = 'approved'; // 默认直接批准
         
-        if (exceptionType !== '临时安排任务' && exceptionType !== '其他问题') {
-          // 需要转给责任部门确认
-          let targetDepartment = null;
+        const targetDepartment = getExceptionTargetDepartment(exceptionType);
+        if (targetDepartment) {
+          // 查找对应部门的staff用户
+          const [staffRows] = await connection.execute(`
+            SELECT id FROM users 
+            WHERE role = 'staff' AND department = ?
+            LIMIT 1
+          `, [targetDepartment]);
           
-          if (exceptionType === '缺料') {
-            targetDepartment = 'PMC';
-          } else if (exceptionType === '来料不良') {
-            targetDepartment = '质量部';
-          } else if (exceptionType === '改造类（研发售后或生产不良）' || exceptionType === '改造类') {
-            targetDepartment = '售后';
-          } else if (exceptionType === '设计问题') {
-            targetDepartment = '研发部';
-          }
-          
-          if (targetDepartment) {
-            // 查找对应部门的staff用户
-            const [staffRows] = await connection.execute(`
-              SELECT id FROM users 
-              WHERE role = 'staff' AND department = ?
-              LIMIT 1
-            `, [targetDepartment]);
-            
-            if (staffRows.length > 0) {
-              assignedStaffId = staffRows[0].id;
-              newStatus = 'pending_staff_confirmation';
-            } else {
-              // 如果没有找到对应的staff，记录警告但继续流程
-              console.warn(`警告：未找到${targetDepartment}部门的staff用户，异常报告将直接批准`);
-            }
+          if (staffRows.length > 0) {
+            assignedStaffId = staffRows[0].id;
+            newStatus = 'pending_staff_confirmation';
+          } else {
+            // 如果没有找到对应的staff，记录警告但继续流程
+            console.warn(`警告：未找到${targetDepartment}部门的staff用户，异常报告将直接批准`);
           }
         }
         
