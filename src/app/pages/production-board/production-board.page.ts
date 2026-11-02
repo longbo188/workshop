@@ -1,8 +1,11 @@
 import {
   AfterViewInit,
   Component,
+  Directive,
   ElementRef,
   HostListener,
+  Input,
+  OnChanges,
   OnDestroy,
   OnInit,
   ViewChild,
@@ -73,6 +76,103 @@ const TASK_ROW_MIN_PX = 96;
 const TASK_ROW_FLOOR_PX = 52;
 const MONTH_TARGET_STORAGE_PREFIX = 'production-board-month-target-';
 
+/** 单行放不下时：前三个数字或字母一行，其余字符一行 */
+function splitDeviceNumber(value: string): { head: string; tail: string } | null {
+  let alnum = 0;
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    const isAlnum =
+      (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+    if (!isAlnum) continue;
+    alnum++;
+    if (alnum === 3) {
+      const at = i + 1;
+      if (at >= value.length) return null;
+      return { head: value.slice(0, at), tail: value.slice(at) };
+    }
+  }
+  if (value.length <= 3) return null;
+  return { head: value.slice(0, 3), tail: value.slice(3) };
+}
+
+@Directive({
+  selector: '[deviceNumberFit]',
+  standalone: true
+})
+export class DeviceNumberFitDirective implements AfterViewInit, OnChanges, OnDestroy {
+  @Input() deviceNumberFit = '';
+
+  private readonly el = inject(ElementRef<HTMLElement>);
+  private resizeObserver?: ResizeObserver;
+  private renderedKey = '';
+
+  ngAfterViewInit(): void {
+    this.render();
+    if (typeof ResizeObserver === 'undefined') return;
+    this.resizeObserver = new ResizeObserver(() => this.render());
+    this.resizeObserver.observe(this.el.nativeElement);
+  }
+
+  ngOnChanges(): void {
+    this.render();
+  }
+
+  ngOnDestroy(): void {
+    this.resizeObserver?.disconnect();
+  }
+
+  private render(): void {
+    const el = this.el.nativeElement;
+    const text = this.deviceNumberFit?.trim() ? this.deviceNumberFit.trim() : '-';
+    if (el.clientWidth <= 0) {
+      if (this.renderedKey === `1:${text}`) return;
+      this.renderedKey = `1:${text}`;
+      el.classList.remove('is-split');
+      el.textContent = text;
+      return;
+    }
+
+    const parts = this.overflows(el, text) ? splitDeviceNumber(text) : null;
+    const key = parts ? `2:${parts.head}|${parts.tail}` : `1:${text}`;
+    if (key === this.renderedKey) return;
+    this.renderedKey = key;
+
+    if (!parts) {
+      el.classList.remove('is-split');
+      el.textContent = text;
+      return;
+    }
+
+    el.classList.add('is-split');
+    el.replaceChildren(this.makeLine(parts.head), this.makeLine(parts.tail));
+  }
+
+  private overflows(el: HTMLElement, text: string): boolean {
+    const probe = document.createElement('span');
+    probe.textContent = text;
+    probe.style.position = 'absolute';
+    probe.style.left = '0';
+    probe.style.visibility = 'hidden';
+    probe.style.whiteSpace = 'nowrap';
+    probe.style.pointerEvents = 'none';
+    el.appendChild(probe);
+    const tooWide = probe.scrollWidth > el.clientWidth + 1;
+    probe.remove();
+    return tooWide;
+  }
+
+  private makeLine(text: string): HTMLSpanElement {
+    const line = document.createElement('span');
+    line.textContent = text;
+    line.style.display = 'block';
+    line.style.overflow = 'hidden';
+    line.style.textOverflow = 'ellipsis';
+    line.style.whiteSpace = 'nowrap';
+    line.style.lineHeight = '1.05';
+    return line;
+  }
+}
+
 @Component({
   selector: 'app-production-board',
   templateUrl: './production-board.page.html',
@@ -88,7 +188,8 @@ const MONTH_TARGET_STORAGE_PREFIX = 'production-board-month-target-';
     IonButtons,
     IonIcon,
     IonSpinner,
-    FormsModule
+    FormsModule,
+    DeviceNumberFitDirective
   ]
 })
 export class ProductionBoardPage implements OnInit, AfterViewInit, OnDestroy {
@@ -401,6 +502,19 @@ export class ProductionBoardPage implements OnInit, AfterViewInit, OnDestroy {
     const d = new Date(value);
     if (isNaN(d.getTime())) return '-';
     return `${d.getMonth() + 1}.${d.getDate()}`;
+  }
+
+  /** 交货日早于后天（已过期、今天、明天）且四阶段未全部完成时标红 */
+  isDeliveryUrgent(task: any): boolean {
+    if (!task || areAllBoardKanbanPhasesCompleted(task)) return false;
+    const value = task.promised_completion_time as string | null;
+    if (!value) return false;
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return false;
+    const delivery = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const today = new Date(this.now.getFullYear(), this.now.getMonth(), this.now.getDate());
+    const diffDays = Math.round((delivery.getTime() - today.getTime()) / 86_400_000);
+    return diffDays < 2;
   }
 
   isToday(day: BoardDayColumn): boolean {

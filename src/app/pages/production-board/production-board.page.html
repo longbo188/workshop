@@ -5,7 +5,12 @@
         <ion-icon name="arrow-back-outline"></ion-icon>
       </ion-button>
     </ion-buttons>
-    <ion-title>生产任务看板</ion-title>
+    <ion-title>
+      <span class="board-title">
+        <span class="board-title-zh">生产任务看板</span>
+        <span class="board-title-en">Production Task Board</span>
+      </span>
+    </ion-title>
     <ion-buttons slot="end">
       <ion-button (click)="loadBoard()" title="立即刷新">刷新</ion-button>
       <ion-button (click)="toggleFullscreen()" title="全屏">全屏</ion-button>
@@ -71,25 +76,29 @@
               <span class="board-day-count">{{ day.tasks.length }}</span>
             </div>
             <div class="board-day-body">
-              <!-- 左信息 + 右四阶段（单列竖排） -->
+              <!-- 左信息（设备号、型号、交期）+ 右四阶段 -->
               <div class="task-card" *ngFor="let t of day.tasks">
                 <div class="task-card-inner">
                   <div class="task-info">
                     <div class="task-device" [title]="t.device_number || ''">
-                      <span class="task-device-text">{{ t.device_number || '-' }}</span>
+                      <span class="task-device-text" [deviceNumberFit]="t.device_number || '-'"></span>
                     </div>
                     <div class="task-model" [title]="t.product_model || ''">{{ t.product_model || '-' }}</div>
-                    <div class="task-delivery">{{ formatDeliveryShort(t.promised_completion_time) }}</div>
-                  </div>
-                  <div class="task-phases">
                     <div
-                      *ngFor="let col of phaseColumns"
-                      class="phase-slot"
-                      [ngClass]="phaseClass(t, col.key)"
-                      [title]="phaseSlotTitle(t, col.key, col.title)">
-                      {{ phaseAssigneeName(t, col.key) }}
+                      class="task-delivery"
+                      [class.task-delivery--urgent]="isDeliveryUrgent(t)">
+                      {{ formatDeliveryShort(t.promised_completion_time) }}
                     </div>
                   </div>
+                  <div class="task-phases">
+                      <div
+                        *ngFor="let col of phaseColumns"
+                        class="phase-slot"
+                        [ngClass]="phaseClass(t, col.key)"
+                        [title]="phaseSlotTitle(t, col.key, col.title)">
+                        {{ phaseAssigneeName(t, col.key) }}
+                      </div>
+                    </div>
                 </div>
               </div>
             </div>
