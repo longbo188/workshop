@@ -48,6 +48,27 @@
             <span class="board-metric-input board-metric-input--readonly">{{ monthAllPhasesCompletedCount }}</span>
             <span class="board-metric-suffix">台</span>
           </div>
+          <label class="board-metric-box" [class.board-metric-box--target]="isAdmin" title="一台标准机对应的小时数，只有管理员可以修改">
+            <span class="board-metric-label">标准机工时:</span>
+            <input
+              *ngIf="isAdmin"
+              type="number"
+              min="0.1"
+              max="1000"
+              step="0.1"
+              class="board-metric-input"
+              [(ngModel)]="standardMachineHours"
+              (blur)="saveStandardMachineHours()"
+              (keyup.enter)="saveStandardMachineHours()"
+            />
+            <span *ngIf="!isAdmin" class="board-metric-input board-metric-input--readonly">{{ standardMachineHours }}</span>
+            <span class="board-metric-suffix">小时</span>
+          </label>
+          <div class="board-metric-box" [title]="'本月总装后段完成设备的机加、电控、总装前段、总装后段标准工时之和 ÷ ' + standardMachineHours + '，四舍五入'">
+            <span class="board-metric-label">折算标准机:</span>
+            <span class="board-metric-input board-metric-input--readonly">{{ monthStandardMachineCount }}</span>
+            <span class="board-metric-suffix">台</span>
+          </div>
         </div>
       </div>
     </div>
@@ -79,14 +100,12 @@
               <!-- 左信息（设备号、型号、交期）+ 右四阶段 -->
               <div class="task-card" *ngFor="let t of day.tasks">
                 <div class="task-card-inner">
-                  <div class="task-info">
+                  <div class="task-info" [class.task-info--urgent]="isDeliveryUrgent(t)">
                     <div class="task-device" [title]="t.device_number || ''">
                       <span class="task-device-text" [deviceNumberFit]="t.device_number || '-'"></span>
                     </div>
                     <div class="task-model" [title]="t.product_model || ''">{{ t.product_model || '-' }}</div>
-                    <div
-                      class="task-delivery"
-                      [class.task-delivery--urgent]="isDeliveryUrgent(t)">
+                    <div class="task-delivery">
                       {{ formatDeliveryShort(t.promised_completion_time) }}
                     </div>
                   </div>

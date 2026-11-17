@@ -553,6 +553,15 @@ ion-content.viz-content {
     }
   }
 
+  &.phase-paused {
+    background-color: #f97316 !important;
+
+    .phase-assignee-text,
+    .phase-assistant-text {
+      color: #fff;
+    }
+  }
+
   .phase-check-content {
     display: flex;
     flex-direction: column;

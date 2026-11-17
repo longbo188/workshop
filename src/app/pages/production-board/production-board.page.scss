@@ -483,6 +483,14 @@
   border-right: 1px solid rgba(37, 99, 235, 0.35);
   text-align: left;
   overflow: hidden;
+
+  &--urgent {
+    .task-device-text,
+    .task-model,
+    .task-delivery {
+      color: #dc2626;
+    }
+  }
 }
 
 .task-device-text {
@@ -525,10 +533,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-
-  &--urgent {
-    color: #dc2626;
-  }
 }
 
 .task-phases {

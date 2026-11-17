@@ -105,6 +105,15 @@ export class DispatchPage implements OnInit {
   hiddenEmployeeIds: number[] = []; // 被隐藏的员工ID列表（避免已离职人员占用位置）
   showHiddenEmployees: boolean = false; // 是否显示被隐藏的员工（用于筛选时临时显示）
   unassignedTasks: any[] = []; // 待分配任务列表
+  /** 当前列表是否包含已完成任务。打开页面时默认不包含。 */
+  private tasksIncludeCompleted = false;
+  /** 结束超过这么多天的任务整行冻住，不再用新查到的数据重算。 */
+  private readonly frozenTaskDays = 14;
+  private frozenRowMemory: Record<string, { key: string; task: any }> = {};
+  private frozenListVersion = 0;
+  private frozenCount = 0;
+  private _frozenSorted: any[] | null = null;
+  private _frozenSortedKey = '';
   
   // 待分配任务筛选
   unassignedTaskFilters = {
@@ -131,7 +140,7 @@ export class DispatchPage implements OnInit {
   
   // 排序相关属性
   sortField: 'none' | 'production_time' | 'promised_completion_time' = 'production_time'; // 排序字段：无、开工日期、承诺交付日期（默认：开工日期）
-  sortOrder: 'asc' | 'desc' = 'asc'; // 排序方向：升序、降序（默认：升序）
+  sortOrder: 'asc' | 'desc' = 'desc'; // 排序方向：升序、降序（默认：开工日期降序）
 
   // 返回主页
   goHome() {
@@ -288,37 +297,26 @@ export class DispatchPage implements OnInit {
     }
   }
 
-  async loadData() {
+  async loadData(options?: { includeCompleted?: boolean }) {
+    const includeCompleted = options?.includeCompleted ?? this.tasksIncludeCompleted;
     try {
       this.isLoading = true;
       this.errorMsg = '';
+      const tasksUrl = `${environment.apiBase}/api/tasks?includeCompleted=${includeCompleted ? '1' : '0'}&freezeDays=${this.frozenTaskDays}`;
       const [users, tasks] = await Promise.all([
         this.http.get<any[]>(`${environment.apiBase}/api/users`).toPromise(),
-        this.http.get<any[]>(`${environment.apiBase}/api/tasks`).toPromise(),
+        this.http.get<any[]>(tasksUrl).toPromise(),
       ]);
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/91721043-712f-42a4-b142-8681d3f05f43',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-          sessionId:'debug-session',
-          runId:'supervisor-visibility',
-          hypothesisId:'H1',
-          location:'dispatch.page.ts:loadData',
-          message:'Loaded users for dispatch',
-          data:{
-            totalUsers:(users || []).length,
-            rolesCount:(users || []).reduce((acc:any,u:any)=>{acc[u.role]=(acc[u.role]||0)+1;return acc;},{}),
-          },
-          timestamp:Date.now()
-        })
-      }).catch(()=>{});
-      // #endregion
+      this.tasksIncludeCompleted = includeCompleted;
       this.users = users || [];
       this.managerUsers = this.users.filter(u => u.role === 'manager');
-      // 加载所有任务（包括已完成的），在筛选时再决定是否显示已完成任务
-      this.tasks = (tasks || [])
-        .map(task => this.decorateTask(task));
+      const loadedTasks = tasks || [];
+      await this.restoreFrozenRows(loadedTasks);
+      this.frozenCount = loadedTasks.reduce((count, task) => count + (task.frozen ? 1 : 0), 0);
+      this.frozenListVersion += 1;
+      this._frozenSorted = null;
+      this._frozenSortedKey = '';
+      this.tasks = loadedTasks.map(task => this.decorateTask(task));
       
       // 清除所有缓存，因为任务数据已更新
       this.clearAllCache();
@@ -350,6 +348,100 @@ export class DispatchPage implements OnInit {
       this.errorMsg = e?.error?.error || e?.message || '加载失败';
     } finally {
       this.isLoading = false;
+    }
+  }
+
+  private frozenRowKey(task: any): string {
+    return [
+      task?.updated_at || '',
+      task?.order_status || '',
+      task?.machining_complete_time || '',
+      task?.electrical_complete_time || '',
+      task?.pre_assembly_complete_time || '',
+      task?.post_assembly_complete_time || '',
+      task?.debugging_complete_time || ''
+    ].join('|');
+  }
+
+  private readFrozenRowCache(): void {
+    try {
+      const raw = localStorage.getItem('dispatchFrozenRowsV1');
+      this.frozenRowMemory = raw ? JSON.parse(raw) : {};
+    } catch {
+      this.frozenRowMemory = {};
+    }
+  }
+
+  private writeFrozenRowCache(): void {
+    try {
+      localStorage.setItem('dispatchFrozenRowsV1', JSON.stringify(this.frozenRowMemory));
+    } catch (error) {
+      console.warn('冻结任务整行缓存写入失败', error);
+    }
+  }
+
+  private rememberFrozenRow(task: any): void {
+    if (!task?.frozen || task.id == null) return;
+    const snapshot = { ...task, frozen: true };
+    delete snapshot._phases;
+    delete snapshot._currentPhaseDisplay;
+    delete snapshot._progressPercent;
+    this.frozenRowMemory[String(task.id)] = {
+      key: this.frozenRowKey(task),
+      task: snapshot
+    };
+  }
+
+  /**
+   * 结束超过 14 天的任务整行沿用上次快照。
+   * 更新时间、订单状态或阶段完成时间变了，才用本次查到的新行并补查协助人员。
+   */
+  private async restoreFrozenRows(tasks: any[]): Promise<void> {
+    this.readFrozenRowCache();
+    const missing = new Set<number>();
+    const frozenIds = new Set<string>();
+
+    for (let i = 0; i < tasks.length; i++) {
+      const task = tasks[i];
+      if (!task?.frozen) continue;
+      const id = String(task.id);
+      frozenIds.add(id);
+      const key = this.frozenRowKey(task);
+      const cached = this.frozenRowMemory[id];
+      if (cached?.task && cached.key === key) {
+        tasks[i] = { ...cached.task, frozen: true };
+      } else {
+        missing.add(Number(task.id));
+      }
+    }
+
+    if (missing.size > 0) {
+      try {
+        const map: Record<string, any[]> = {};
+        const ids = [...missing];
+        const chunkSize = 400;
+        for (let i = 0; i < ids.length; i += chunkSize) {
+          const data = await this.http.post<Record<string, any[]>>(
+            `${environment.apiBase}/api/tasks/assistants-batch`,
+            { ids: ids.slice(i, i + chunkSize) }
+          ).toPromise();
+          Object.assign(map, data || {});
+        }
+        for (const task of tasks) {
+          if (!task?.frozen || !missing.has(Number(task.id))) continue;
+          task.assistants = map[String(task.id)] || [];
+          this.rememberFrozenRow(task);
+        }
+      } catch (error) {
+        console.error('加载冻结任务整行失败', error);
+      }
+    }
+
+    for (const id of Object.keys(this.frozenRowMemory)) {
+      if (!frozenIds.has(id)) delete this.frozenRowMemory[id];
+    }
+    if (frozenIds.size > 0) {
+      this.writeFrozenRowCache();
     }
   }
 
@@ -518,7 +610,10 @@ export class DispatchPage implements OnInit {
       return this._cachedDisplayTasks;
     }
     
-    const filtered = this.getFilteredTasks();
+    const liveSource = this.frozenCount > 0
+      ? (this.tasks || []).filter(t => !t.frozen)
+      : (this.tasks || []);
+    const filtered = this.filterTaskList(liveSource);
     
     let result: any[];
     if (this.selectedView === 'unassigned') {
@@ -532,9 +627,23 @@ export class DispatchPage implements OnInit {
       result = this.applyTableFilters(filtered);
     }
     
-    // 应用排序
+    // 进行中的任务才重排；冻结任务沿用按当前排序整理过的快照
     if (this.sortField !== 'none') {
       result = this.applySorting(result);
+    }
+
+    if (this.frozenCount > 0) {
+      let frozen = this.filterTaskList(this.getFrozenSorted());
+      if (this.selectedView === 'unassigned') {
+        frozen = frozen.filter(t => !this.isTaskAssigned(t));
+      } else if (this.selectedView === 'assigned') {
+        frozen = frozen.filter(t => this.isTaskAssigned(t));
+      } else if (this.selectedView === 'urgent') {
+        frozen = frozen.filter(t => t.priority === 'urgent');
+      } else {
+        frozen = this.applyTableFilters(frozen);
+      }
+      result = this.mergeSortedTasks(result, frozen);
     }
     
     // 更新缓存
@@ -604,10 +713,61 @@ export class DispatchPage implements OnInit {
     this.clearAllCache();
   }
 
+  // 结束超过 14 天的任务只排序一次，筛选变化时按原顺序过滤
+  private getFrozenSorted(): any[] {
+    const key = `${this.frozenListVersion}|${this.sortField}|${this.sortOrder}`;
+    if (this._frozenSorted && this._frozenSortedKey === key) {
+      return this._frozenSorted;
+    }
+    const frozen = (this.tasks || []).filter(t => t.frozen);
+    this._frozenSorted = this.sortField === 'none' ? frozen : this.applySorting(frozen);
+    this._frozenSortedKey = key;
+    return this._frozenSorted;
+  }
+
+  private taskSortValue(task: any): number | null {
+    if (this.sortField !== 'production_time' && this.sortField !== 'promised_completion_time') {
+      return null;
+    }
+    const raw = task?.[this.sortField];
+    if (!raw) return null;
+    const ms = new Date(raw).getTime();
+    return Number.isNaN(ms) ? null : ms;
+  }
+
+  private mergeSortedTasks(live: any[], frozen: any[]): any[] {
+    if (!frozen.length) return live;
+    if (!live.length) return frozen;
+    if (this.sortField === 'none') return live.concat(frozen);
+
+    const desc = this.sortOrder === 'desc';
+    const merged: any[] = [];
+    let i = 0;
+    let j = 0;
+    while (i < live.length && j < frozen.length) {
+      const a = this.taskSortValue(live[i]);
+      const b = this.taskSortValue(frozen[j]);
+      let takeLive: boolean;
+      if (a == null && b == null) takeLive = true;
+      else if (a == null) takeLive = false;
+      else if (b == null) takeLive = true;
+      else takeLive = desc ? a >= b : a <= b;
+      if (takeLive) merged.push(live[i++]);
+      else merged.push(frozen[j++]);
+    }
+    while (i < live.length) merged.push(live[i++]);
+    while (j < frozen.length) merged.push(frozen[j++]);
+    return merged;
+  }
+
   // 获取筛选后的任务
   getFilteredTasks() {
+    return this.filterTaskList(this.tasks || []);
+  }
+
+  private filterTaskList(source: any[]) {
     // 在"全部任务"视图中显示所有任务（包括已完成的），其他视图过滤已完成任务
-    let filtered = (this.tasks || []);
+    let filtered = source;
     
     if (this.selectedView !== 'all') {
       // 非"全部任务"视图时，过滤已完成的任务
@@ -771,21 +931,12 @@ export class DispatchPage implements OnInit {
 
   async assignTask(taskId: number, userId: number | null, phaseKey?: string): Promise<any> {
     try {
-      this.isLoading = true;
       this.errorMsg = '';
       // 回滚：使用原有旧接口 /api/tasks/assign
       const requestBody: any = { taskId, userId: (userId == null ? 0 : userId) };
       if (phaseKey) {
         requestBody.phaseKey = phaseKey;
       }
-      
-      // 调试信息：记录发送到后端的参数
-      console.log('assignTask 调用 - 发送到后端:', {
-        taskId,
-        userId,
-        phaseKey,
-        requestBody
-      });
       
       const result: any = await this.http.post(`${environment.apiBase}/api/tasks/assign`, requestBody).toPromise();
       
@@ -794,19 +945,67 @@ export class DispatchPage implements OnInit {
         this.errorMsg = result.error || result.message || '分配失败';
         throw new Error(this.errorMsg);
       }
-      
-      // 单次轻量刷新
-      await this.loadData();
-      // 可视化数据后台刷新，确保面板实时更新且不阻塞UI
-      try { this.loadVizData && this.loadVizData(); } catch {}
+
+      if (phaseKey) {
+        this.applyLocalAssignment(taskId, userId, phaseKey);
+      }
       
       return result;
     } catch (e: any) {
       this.errorMsg = e?.error?.error || e?.error?.message || e?.message || '分配失败';
       throw e; // 重新抛出错误，让调用者处理
-    } finally {
-      this.isLoading = false;
     }
+  }
+
+  /** 分配或取消后只改本地这一条任务，避免重新下载全部任务 */
+  private applyLocalAssignment(taskId: number, userId: number | null, phaseKey: string) {
+    const index = this.tasks.findIndex(t => t.id === taskId);
+    if (index < 0) return;
+
+    const task = { ...this.tasks[index] };
+    const assigned = userId != null && Number(userId) > 0 ? Number(userId) : null;
+    const assigneeField = `${phaseKey}_assignee`;
+    const nameField = `${phaseKey}_assignee_name`;
+    const orderField = `${phaseKey}_order`;
+    task[assigneeField] = assigned;
+
+    if (assigned) {
+      const user = this.users.find(u => Number(u.id) === assigned);
+      task[nameField] = user?.name || null;
+      let maxOrder = -1;
+      for (const item of this.tasks) {
+        if (Number(item[assigneeField]) !== assigned) continue;
+        const order = Number(item[orderField]);
+        if (Number.isFinite(order)) maxOrder = Math.max(maxOrder, order);
+      }
+      task[orderField] = maxOrder + 1;
+    } else {
+      task[nameField] = null;
+      task[orderField] = null;
+    }
+
+    const notDone = (value: any) => value === 0 || value === '0';
+    const done = (value: any) => value === 1 || value === '1';
+    const hasAssignee = (value: any) => value != null && value !== '' && value !== 0 && value !== '0';
+    if (phaseKey === 'machining' && notDone(task.machining_phase)) {
+      task.current_phase = 'machining';
+    } else if (phaseKey === 'electrical' && notDone(task.machining_phase)) {
+      task.current_phase = 'electrical';
+    } else if (phaseKey === 'pre_assembly' && done(task.machining_phase) && notDone(task.pre_assembly_phase)) {
+      task.current_phase = 'pre_assembly';
+    } else if (phaseKey === 'post_assembly' && hasAssignee(task.pre_assembly_assignee) && notDone(task.post_assembly_phase)) {
+      task.current_phase = 'post_assembly';
+    } else if (phaseKey === 'debugging' && hasAssignee(task.post_assembly_assignee) && notDone(task.debugging_phase)) {
+      task.current_phase = 'debugging';
+    }
+
+    this.tasks[index] = this.decorateTask(task);
+    this.tasks = [...this.tasks];
+    if (this.selectedTaskForAssign?.id === taskId) {
+      this.selectedTaskForAssign = this.tasks[index];
+    }
+    this.clearAllCache();
+    this.rebuildVizFromLoaded();
   }
 
   // ========== 以下为任务分配交互 ==========
@@ -820,25 +1019,6 @@ export class DispatchPage implements OnInit {
     let filtered = this.users;
     // 剔除管理员，仅显示工人和主管（可被派工人员）
     filtered = filtered.filter(u => u.role === 'worker' || u.role === 'supervisor');
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/91721043-712f-42a4-b142-8681d3f05f43',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        sessionId:'debug-session',
-        runId:'supervisor-visibility',
-        hypothesisId:'H2',
-        location:'dispatch.page.ts:getFilteredUsers',
-        message:'Filtered users for dispatch candidates',
-        data:{
-          totalUsers:(this.users || []).length,
-          filteredCount:filtered.length,
-          rolesCount:(this.users || []).reduce((acc:any,u:any)=>{acc[u.role]=(acc[u.role]||0)+1;return acc;},{}),
-        },
-        timestamp:Date.now()
-      })
-    }).catch(()=>{});
-    // #endregion
     
     // 搜索筛选
     if (this.userSearchKeyword) {
@@ -1185,11 +1365,13 @@ export class DispatchPage implements OnInit {
   onFilterChange() {
     this.currentPage = 1; // 重置到第一页
     this.clearAllCache(); // 清除缓存，因为筛选条件改变
+    this.syncCompletedTasks();
   }
 
   onTableFilterChange() {
     this.currentPage = 1;
     this.clearAllCache();
+    this.syncCompletedTasks();
   }
 
   clearFilters() {
@@ -1219,6 +1401,15 @@ export class DispatchPage implements OnInit {
     };
     this.currentPage = 1;
     this.clearAllCache(); // 清除缓存
+    this.syncCompletedTasks();
+  }
+
+  /** 只有筛选「已完成」时才把已完成任务拉回来 */
+  private syncCompletedTasks() {
+    const wantsCompleted = this.selectedStatus === 'completed' || this.tableFilters?.status === 'completed';
+    if (wantsCompleted !== this.tasksIncludeCompleted) {
+      this.loadData({ includeCompleted: wantsCompleted });
+    }
   }
 
   // 清除所有筛选（包括视图和阶段筛选）
@@ -1230,6 +1421,7 @@ export class DispatchPage implements OnInit {
     this.selectedAssignmentStatus = '';
     this.selectedView = 'all';
     this.currentPage = 1;
+    this.syncCompletedTasks();
   }
 
   getVisibleTableColumnCount(): number {
@@ -1458,8 +1650,8 @@ export class DispatchPage implements OnInit {
   isPhaseStarted(task: any, phaseKey: string): boolean {
     if (!task || !phaseKey) return false;
     
-    // 如果已完成，不算已开工（已完成用绿色）
-    if (this.isPhaseCompleted(task, phaseKey)) {
+    // 如果已完成或已暂停，不算已开工（已完成用绿色，暂停用橙色）
+    if (this.isPhaseCompleted(task, phaseKey) || this.isPhasePaused(task, phaseKey)) {
       return false;
     }
     
@@ -1477,6 +1669,13 @@ export class DispatchPage implements OnInit {
     
     // 有开始时间且未完成，表示已开工但未完成
     return !!task[startTimeField];
+  }
+
+  /** 阶段已暂停且未完成 */
+  isPhasePaused(task: any, phaseKey: string): boolean {
+    if (!task || !phaseKey || this.isPhaseCompleted(task, phaseKey)) return false;
+    const pausedAt = task[`${phaseKey}_paused_at`];
+    return pausedAt != null && pausedAt !== '';
   }
 
   // 已撤回可视化徽章颜色使用
@@ -1987,16 +2186,24 @@ export class DispatchPage implements OnInit {
     }
   }
 
+  private rebuildVizFromLoaded() {
+    this.rebuildVizFromArrays(this.tasks || [], this.users || []);
+  }
+
   async loadVizData() {
     try {
-      // 获取所有任务和用户
       const [tasks, users] = await Promise.all([
-        this.http.get<any[]>(`${environment.apiBase}/api/tasks`).toPromise(),
+        this.http.get<any[]>(`${environment.apiBase}/api/tasks?includeCompleted=0&freezeDays=${this.frozenTaskDays}`).toPromise(),
         this.http.get<any[]>(`${environment.apiBase}/api/users`).toPromise()
       ]);
+      this.rebuildVizFromArrays(tasks || [], users || []);
+    } catch (error: any) {
+      console.error('加载可视化数据失败:', error);
+      this.vizData = [];
+    }
+  }
 
-      const tasksArray = tasks || [];
-      const usersArray = users || [];
+  private rebuildVizFromArrays(tasksArray: any[], usersArray: any[]) {
       
       // 加载待分配任务（动态口径：当前有效阶段负责人为空）
       this.unassignedTasks = tasksArray.filter(task => {
@@ -2132,11 +2339,6 @@ export class DispatchPage implements OnInit {
       // 取前 N 个（可调）
       const limit = Math.max(1, Number(this.vizEmployeeLimit) || 10);
       this.vizData = employeeData.slice(0, limit);
-
-    } catch (error: any) {
-      console.error('加载可视化数据失败:', error);
-      this.vizData = [];
-    }
   }
 
   // 保存员工上限设置并刷新
@@ -2645,10 +2847,7 @@ export class DispatchPage implements OnInit {
       await this.http.put(`${environment.apiBase}/api/tasks/${task.id}`, updateData).toPromise();
       
       this.presentToast('任务重新分配成功');
-      
-      // 重新加载数据（包括主任务列表和可视化数据）
-      await this.loadData();
-      await this.loadVizData();
+      this.applyLocalAssignment(task.id, toEmployeeId, englishPhase);
       
     } catch (error: any) {
       console.error('重新分配任务失败:', error);
@@ -2811,8 +3010,6 @@ export class DispatchPage implements OnInit {
           
           await this.assignTask(task.id, null, phaseToUnassign);
           this.presentToast('已取消分配，任务回到待分配');
-          // 后台更新可视化
-          try { this.loadVizData && this.loadVizData(); } catch {}
         } catch (e) {
           this.presentToast('取消分配失败');
         }
@@ -3298,14 +3495,6 @@ export class DispatchPage implements OnInit {
       }
       
       this.presentToast('任务分配成功');
-      // assignTask 内部会调用 loadData() 和 loadVizData()
-      // 但为了确保待派工列表正确更新，我们再次刷新可视化数据
-      // 因为 getFilteredUnassignedTasks() 是从 this.tasks 动态计算的
-      setTimeout(async () => {
-        if (this.loadVizData) {
-          await this.loadVizData();
-        }
-      }, 500);
     } catch (error: any) {
       console.error('分配任务失败:', error);
       const errorMessage = error.error?.error || error.error?.message || error.message || '未知错误';

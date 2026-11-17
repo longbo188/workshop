@@ -496,12 +496,11 @@ export class HomePage implements OnInit, OnDestroy {
     const base = isNative ? (environment.apiBase.replace('localhost', '10.0.2.2')) : environment.apiBase;
     
     let url: string;
-    if (this.currentUser?.role === 'manager') {
-      // 经理始终看全部任务（不区分完成状态，由前端过滤）
-      url = `${base}/api/tasks`;
-    } else if (this.currentUser?.role === 'admin' && this.viewScope === 'all') {
-      // 管理员选择查看全部
-      url = `${base}/api/tasks`;
+    if (this.currentUser?.role === 'manager' || (this.currentUser?.role === 'admin' && this.viewScope === 'all')) {
+      // 打开页面只拉当前视图需要的任务，不把进行中和已完成一起下载
+      url = this.taskViewMode === 'completed'
+        ? `${base}/api/tasks?status=completed`
+        : `${base}/api/tasks?includeCompleted=0`;
     } else {
       // 工人、主管和管理员看自己
       if (this.taskViewMode === 'completed') {
@@ -542,6 +541,7 @@ export class HomePage implements OnInit, OnDestroy {
           }
           
           this.applyFilters();
+          this.loadProductStandardHours();
           this.isLoading = false;
           resolve();
         },
@@ -552,6 +552,46 @@ export class HomePage implements OnInit, OnDestroy {
         }
       });
     });
+  }
+
+  private standardHoursByModel = new Map<string, any>();
+  private readonly phaseStandardHourFields: Record<string, { est: string; catalog: string }> = {
+    machining: { est: 'machining_hours_est', catalog: 'machining_hours' },
+    electrical: { est: 'electrical_hours_est', catalog: 'electrical_hours' },
+    pre_assembly: { est: 'pre_assembly_hours_est', catalog: 'pre_assembly_hours' },
+    post_assembly: { est: 'post_assembly_hours_est', catalog: 'post_assembly_hours' },
+    debugging: { est: 'debugging_hours_est', catalog: 'debugging_hours' }
+  };
+
+  private loadProductStandardHours(): void {
+    const isNative = Capacitor.isNativePlatform();
+    const base = isNative ? (environment.apiBase.replace('localhost', '10.0.2.2')) : environment.apiBase;
+    this.http.get<any[]>(`${base}/api/product-standard-hours`).subscribe({
+      next: (rows) => {
+        const map = new Map<string, any>();
+        for (const row of rows || []) {
+          const key = String(row?.product_model || '').trim().toUpperCase();
+          if (key) map.set(key, row);
+        }
+        this.standardHoursByModel = map;
+      },
+      error: (error) => {
+        console.error('加载标准工时失败', error);
+      }
+    });
+  }
+
+  phaseStandardHoursText(task: any, phase: string): string {
+    const fields = this.phaseStandardHourFields[phase];
+    if (!task || !fields) return '—';
+    let hours = parseFloat(task[fields.est]);
+    if (!(hours > 0) && task.product_model && !task.is_non_standard) {
+      const row = this.standardHoursByModel.get(String(task.product_model).trim().toUpperCase());
+      hours = parseFloat(row?.[fields.catalog]);
+    }
+    if (!Number.isFinite(hours) || hours <= 0) return '—';
+    const text = Math.round(hours * 100) / 100;
+    return `${text}h`;
   }
 
   doRefresh(event: any) {

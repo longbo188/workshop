@@ -353,24 +353,39 @@
           <span class="phase-step" 
                 [class.completed]="task.machining_phase === 1"
                 [class.current]="isCurrentPhase(task, 'machining')"
-                [class.assigned]="isCurrentPhase(task, 'machining') && task.machining_assignee">机加</span>
+                [class.assigned]="isCurrentPhase(task, 'machining') && task.machining_assignee">
+            <span>机加</span>
+            <span class="phase-step-hours">{{ phaseStandardHoursText(task, 'machining') }}</span>
+          </span>
           <span class="phase-separator">|</span>
           <span class="phase-step" 
                 [class.completed]="task.electrical_phase === 1"
                 [class.current]="isCurrentPhase(task, 'electrical')"
-                [class.assigned]="isCurrentPhase(task, 'electrical') && task.electrical_assignee">电控</span>
+                [class.assigned]="isCurrentPhase(task, 'electrical') && task.electrical_assignee">
+            <span>电控</span>
+            <span class="phase-step-hours">{{ phaseStandardHoursText(task, 'electrical') }}</span>
+          </span>
           <span class="phase-step" 
                 [class.completed]="task.pre_assembly_phase === 1"
                 [class.current]="task.current_phase === 'pre_assembly'"
-                [class.assigned]="task.current_phase === 'pre_assembly' && task.pre_assembly_assignee">总装前段</span>
+                [class.assigned]="task.current_phase === 'pre_assembly' && task.pre_assembly_assignee">
+            <span>总装前段</span>
+            <span class="phase-step-hours">{{ phaseStandardHoursText(task, 'pre_assembly') }}</span>
+          </span>
           <span class="phase-step" 
                 [class.completed]="task.post_assembly_phase === 1"
                 [class.current]="task.current_phase === 'post_assembly'"
-                [class.assigned]="task.current_phase === 'post_assembly' && task.post_assembly_assignee">总装后段</span>
+                [class.assigned]="task.current_phase === 'post_assembly' && task.post_assembly_assignee">
+            <span>总装后段</span>
+            <span class="phase-step-hours">{{ phaseStandardHoursText(task, 'post_assembly') }}</span>
+          </span>
           <span class="phase-step" 
                 [class.completed]="task.debugging_phase === 1"
                 [class.current]="task.current_phase === 'debugging'"
-                [class.assigned]="task.current_phase === 'debugging' && task.debugging_assignee">调试</span>
+                [class.assigned]="task.current_phase === 'debugging' && task.debugging_assignee">
+            <span>调试</span>
+            <span class="phase-step-hours">{{ phaseStandardHoursText(task, 'debugging') }}</span>
+          </span>
         </p>
         
         <!-- 已完成任务显示阶段完成状态 -->

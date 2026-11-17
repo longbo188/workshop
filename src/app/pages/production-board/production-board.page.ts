@@ -24,7 +24,7 @@ import {
   IonToolbar
 } from '@ionic/angular/standalone';
 import { HttpClient } from '@angular/common/http';
-import { forkJoin } from 'rxjs';
+import { firstValueFrom, forkJoin } from 'rxjs';
 import { Router } from '@angular/router';
 import { environment } from '../../../environments/environment';
 import { Capacitor } from '@capacitor/core';
@@ -225,6 +225,13 @@ export class ProductionBoardPage implements OnInit, AfterViewInit, OnDestroy {
   monthStatsYearMonth = '';
   /** 当月总装后段完成台数（post_assembly_complete_time 归属当月） */
   monthAllPhasesCompletedCount = 0;
+  /** 当月折算标准机：四阶段标准工时合计 / 标准机工时，四舍五入 */
+  monthStandardMachineCount = 0;
+  /** 一台标准机对应的小时数，仅管理员可改 */
+  standardMachineHours = 38.9;
+  isAdmin = false;
+  private currentUserId: number | null = null;
+  private savedStandardMachineHours = 38.9;
 
   get monthTargetTitle(): string {
     if (!this.monthTargetMonthKey) return '月度目标';
@@ -243,6 +250,8 @@ export class ProductionBoardPage implements OnInit, AfterViewInit, OnDestroy {
     const userStr = localStorage.getItem('currentUser') || sessionStorage.getItem('currentUser');
     const user = userStr ? JSON.parse(userStr) : null;
     const role = user?.role;
+    this.isAdmin = role === 'admin';
+    this.currentUserId = user?.id != null ? Number(user.id) : null;
     if (!user || !['admin', 'supervisor', 'manager'].includes(role)) {
       this.router.navigate(['/home']);
       return;
@@ -300,6 +309,33 @@ export class ProductionBoardPage implements OnInit, AfterViewInit, OnDestroy {
     this.loadMonthlyTarget();
   }
 
+  async saveStandardMachineHours(): Promise<void> {
+    if (!this.isAdmin || this.currentUserId == null) return;
+    const hours = Number(this.standardMachineHours);
+    if (!Number.isFinite(hours) || hours <= 0 || hours > 1000) {
+      this.standardMachineHours = this.savedStandardMachineHours;
+      return;
+    }
+    const rounded = Math.round(hours * 100) / 100;
+    this.standardMachineHours = rounded;
+    if (rounded === this.savedStandardMachineHours) return;
+    try {
+      const result = await firstValueFrom(this.http.put<any>(
+        `${this.getApiBase()}/api/dashboard/production-board/standard-machine-hours`,
+        { userId: this.currentUserId, hours: rounded }
+      ));
+      const saved = Number(result?.standardMachineHours);
+      if (Number.isFinite(saved) && saved > 0) {
+        this.standardMachineHours = saved;
+        this.savedStandardMachineHours = saved;
+      }
+      this.monthStandardMachineCount = Number(result?.monthStandardMachineCount) || 0;
+    } catch (error) {
+      console.error('保存标准机工时失败', error);
+      this.standardMachineHours = this.savedStandardMachineHours;
+    }
+  }
+
   saveMonthlyTarget(): void {
     const storageKey = `${MONTH_TARGET_STORAGE_PREFIX}${this.monthTargetMonthKey}`;
     if (this.monthlyTarget == null || (this.monthlyTarget as unknown) === '') {
@@ -339,6 +375,12 @@ export class ProductionBoardPage implements OnInit, AfterViewInit, OnDestroy {
         this.periodEnd = board?.periodEnd || '';
         this.monthStatsYearMonth = board?.monthStatsYearMonth || this.getMonthStorageKey();
         this.monthAllPhasesCompletedCount = Number(board?.monthAllPhasesCompletedCount) || 0;
+        this.monthStandardMachineCount = Number(board?.monthStandardMachineCount) || 0;
+        const hours = Number(board?.standardMachineHours);
+        if (Number.isFinite(hours) && hours > 0) {
+          this.standardMachineHours = hours;
+          this.savedStandardMachineHours = hours;
+        }
         const rawTasks = Array.isArray(board?.tasks) ? board.tasks : [];
         this.tasks = rawTasks.map((t: any) => this.enrichTaskAssigneeNames(t));
         this.refreshVisibleDayColumns();
@@ -504,7 +546,7 @@ export class ProductionBoardPage implements OnInit, AfterViewInit, OnDestroy {
     return `${d.getMonth() + 1}.${d.getDate()}`;
   }
 
-  /** 交货日早于后天（已过期、今天、明天）且四阶段未全部完成时标红 */
+  /** 交货日在后天及以前（已过期、今天、明天、后天）且四阶段未全部完成时，设备号、型号、交期标红 */
   isDeliveryUrgent(task: any): boolean {
     if (!task || areAllBoardKanbanPhasesCompleted(task)) return false;
     const value = task.promised_completion_time as string | null;
@@ -514,7 +556,7 @@ export class ProductionBoardPage implements OnInit, AfterViewInit, OnDestroy {
     const delivery = new Date(d.getFullYear(), d.getMonth(), d.getDate());
     const today = new Date(this.now.getFullYear(), this.now.getMonth(), this.now.getDate());
     const diffDays = Math.round((delivery.getTime() - today.getTime()) / 86_400_000);
-    return diffDays < 2;
+    return diffDays < 3;
   }
 
   isToday(day: BoardDayColumn): boolean {

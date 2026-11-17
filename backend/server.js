@@ -136,6 +136,57 @@ async function getProductionBoardMonthAllKanbanPhasesCompletedCount(connection, 
   return Number(rows[0]?.cnt || 0);
 }
 
+/** 一台标准机对应的标准工时默认值，管理员可在看板上修改 */
+const DEFAULT_STANDARD_MACHINE_HOURS = 38.9;
+
+async function ensureBoardSettings(connection) {
+  await connection.execute(`
+    CREATE TABLE IF NOT EXISTS board_settings (
+      id TINYINT PRIMARY KEY,
+      standard_machine_hours DECIMAL(10,2) NOT NULL DEFAULT 38.90
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+  await connection.execute(
+    `INSERT IGNORE INTO board_settings (id, standard_machine_hours) VALUES (1, ?)`,
+    [DEFAULT_STANDARD_MACHINE_HOURS]
+  );
+}
+
+async function getStandardMachineHours(connection) {
+  await ensureBoardSettings(connection);
+  const [rows] = await connection.execute(
+    `SELECT standard_machine_hours FROM board_settings WHERE id = 1`
+  );
+  const hours = Number(rows[0]?.standard_machine_hours);
+  return Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_STANDARD_MACHINE_HOURS;
+}
+
+/**
+ * 折算标准机：当月总装后段完成的设备，按型号标准工时
+ * （机加+电控+总装前段+总装后段，不含调试）求和后除以管理员设定的小时数，四舍五入取整。
+ */
+async function getProductionBoardMonthStandardMachineCount(connection, yearMonth, hoursPerMachine) {
+  const divisor = Number(hoursPerMachine);
+  if (!Number.isFinite(divisor) || divisor <= 0) return 0;
+  const [rows] = await connection.execute(
+    `SELECT COALESCE(SUM(
+        COALESCE(h.machining_hours, 0)
+        + COALESCE(h.electrical_hours, 0)
+        + COALESCE(h.pre_assembly_hours, 0)
+        + COALESCE(h.post_assembly_hours, 0)
+      ), 0) AS total_hours
+     FROM tasks t
+     LEFT JOIN product_standard_hours h
+       ON UPPER(TRIM(h.product_model)) = UPPER(TRIM(t.product_model))
+     WHERE t.post_assembly_complete_time IS NOT NULL
+       AND DATE_FORMAT(t.post_assembly_complete_time, '%Y-%m') = ?`,
+    [yearMonth]
+  );
+  const totalHours = Number(rows[0]?.total_hours || 0);
+  if (!Number.isFinite(totalHours) || totalHours <= 0) return 0;
+  return Math.round(totalHours / divisor);
+}
+
 function normalizePriority(value) {
   if (!value && value !== 0) {
     return 'normal';
@@ -577,10 +628,117 @@ app.post('/api/users/change-password', async (req, res) => {
   }
 });
 
+const FREEZE_PHASES = ['machining', 'electrical', 'pre_assembly', 'post_assembly'];
+
+function isTruthyPhaseComplete(raw) {
+  if (raw == null) return false;
+  const normalized = String(raw).trim().toLowerCase();
+  return ['1', 'true', 'completed', 'complete', 'done', 'yes', 'y'].includes(normalized);
+}
+
+function parseTimeMs(value) {
+  if (!value) return null;
+  const ms = new Date(value).getTime();
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function isOrderClosed(task) {
+  const status = String(task.order_status || '').trim().toLowerCase();
+  if (!status || status.includes('未完成') || status.includes('未交货')) return false;
+  return status.includes('已完成') || status.includes('已交货') || status.includes('已交付');
+}
+
+/** 四阶段都完成，或订单已完成/已交货，且结束时间早于截止时刻 */
+function isFrozenTask(task, freezeBeforeMs) {
+  if (!freezeBeforeMs) return false;
+  const allFour = FREEZE_PHASES.every((key) => isTruthyPhaseComplete(task[`${key}_phase`]));
+  const orderClosed = isOrderClosed(task);
+  if (!allFour && !orderClosed) return false;
+
+  const times = FREEZE_PHASES
+    .map((key) => parseTimeMs(task[`${key}_complete_time`]))
+    .filter((ms) => ms != null);
+
+  let endMs = null;
+  if (allFour && times.length === 4) {
+    endMs = Math.max(...times);
+  } else if (orderClosed) {
+    const candidates = times.slice();
+    const updated = parseTimeMs(task.updated_at);
+    const latest = parseTimeMs(task.latest_completion_created_at);
+    if (updated != null) candidates.push(updated);
+    if (latest != null) candidates.push(latest);
+    if (candidates.length) endMs = Math.max(...candidates);
+  }
+  return endMs != null && endMs < freezeBeforeMs;
+}
+
+async function loadAssistantsByTaskIds(connection, taskIds) {
+  const byTask = new Map();
+  if (!taskIds.length) return byTask;
+
+  const [assistColumn] = await connection.execute(`
+    SELECT COLUMN_NAME
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_NAME='work_reports'
+      AND TABLE_SCHEMA=DATABASE()
+      AND COLUMN_NAME='assist_start'
+  `);
+  const hasAssistColumns = assistColumn.length > 0;
+  const assistSelect = hasAssistColumns
+    ? 'wr.assist_start, wr.assist_end,'
+    : 'NULL as assist_start, NULL as assist_end,';
+
+  const chunkSize = 400;
+  for (let i = 0; i < taskIds.length; i += chunkSize) {
+    const chunk = taskIds.slice(i, i + chunkSize);
+    const placeholders = chunk.map(() => '?').join(',');
+    const [assistants] = await connection.execute(`
+      SELECT
+        wr.task_id,
+        wr.user_id as id,
+        u.name as name,
+        wr.quality_notes as reason,
+        wr.assist_phase,
+        ${assistSelect}
+        wr.created_at
+      FROM work_reports wr
+      JOIN users u ON wr.user_id = u.id
+      WHERE wr.task_id IN (${placeholders})
+        AND wr.work_type = 'assist'
+        AND wr.approval_status = 'approved'
+      ORDER BY wr.created_at DESC
+    `, chunk);
+    for (const row of assistants) {
+      const list = byTask.get(row.task_id) || [];
+      const { task_id, ...assistant } = row;
+      list.push(assistant);
+      byTask.set(task_id, list);
+    }
+  }
+  return byTask;
+}
+
 // 5. 获取所有生产任务
 app.get('/api/tasks', async (req, res) => {
+  let connection;
   try {
-    const connection = await mysql.createConnection(dbConfig);
+    connection = await mysql.createConnection(dbConfig);
+    const includeCompleted = String(req.query.includeCompleted ?? '1') !== '0';
+    const status = typeof req.query.status === 'string' ? req.query.status.trim() : '';
+    const freezeDaysRaw = parseInt(String(req.query.freezeDays ?? ''), 10);
+    const freezeDays = Number.isFinite(freezeDaysRaw) && freezeDaysRaw > 0 ? freezeDaysRaw : 0;
+    const freezeBeforeMs = freezeDays > 0 ? Date.now() - freezeDays * 24 * 60 * 60 * 1000 : 0;
+    const where = [];
+    const params = [];
+    if (!includeCompleted) {
+      where.push(`(t.status IS NULL OR t.status <> 'completed')`);
+    }
+    if (status) {
+      where.push('t.status = ?');
+      params.push(status);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const [rows] = await connection.execute(`
       SELECT t.*, 
              u1.name as machining_assignee_name,
@@ -610,45 +768,55 @@ app.get('/api/tasks', async (req, res) => {
         ) x
         JOIN work_reports w ON w.id = x.last_id
       ) wr ON wr.task_id = t.id
+      ${whereSql}
       ORDER BY t.created_at DESC
-    `);
-    
-    // 为每个任务添加协助人员信息
-    const enrichedTasks = [];
-    for (let task of rows) {
-      const [assistColumn] = await connection.execute(`
-        SELECT COLUMN_NAME 
-        FROM INFORMATION_SCHEMA.COLUMNS 
-        WHERE TABLE_NAME='work_reports' 
-          AND TABLE_SCHEMA=DATABASE()
-          AND COLUMN_NAME='assist_start'
-      `);
-      const hasAssistColumns = assistColumn.length > 0;
-      const [assistants] = await connection.execute(`
-        SELECT 
-          wr.user_id as id,
-          u.name as name,
-          wr.quality_notes as reason,
-          wr.assist_phase,
-          ${hasAssistColumns ? 'wr.assist_start, wr.assist_end,' : 'NULL as assist_start, NULL as assist_end,'}
-          wr.created_at
-        FROM work_reports wr
-        JOIN users u ON wr.user_id = u.id
-        WHERE wr.task_id = ? 
-          AND wr.work_type = 'assist' 
-          AND wr.approval_status = 'approved'
-        ORDER BY wr.created_at DESC
-      `, [task.id]);
-      enrichedTasks.push({
-        ...task,
-        assistants: assistants || []
-      });
+    `, params);
+
+    const liveIds = [];
+    for (const task of rows) {
+      task.frozen = isFrozenTask(task, freezeBeforeMs);
+      if (!task.frozen) liveIds.push(task.id);
     }
+    const assistantsByTask = await loadAssistantsByTaskIds(connection, liveIds);
+    const enrichedTasks = rows.map((task) => ({
+      ...task,
+      assistants: task.frozen ? [] : (assistantsByTask.get(task.id) || [])
+    }));
 
     await connection.end();
     res.json(enrichedTasks);
   } catch (error) {
+    if (connection) {
+      try { await connection.end(); } catch (e) { /* ignore */ }
+    }
     res.status(500).json({ error: '获取任务失败：' + error.message });
+  }
+});
+
+// 冻结任务的协助人员：只在本地没有快照时补一次
+app.post('/api/tasks/assistants-batch', async (req, res) => {
+  let connection;
+  try {
+    const ids = Array.isArray(req.body?.ids)
+      ? [...new Set(req.body.ids.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))].slice(0, 5000)
+      : [];
+    if (!ids.length) {
+      res.json({});
+      return;
+    }
+    connection = await mysql.createConnection(dbConfig);
+    const byTask = await loadAssistantsByTaskIds(connection, ids);
+    await connection.end();
+    const payload = {};
+    for (const id of ids) {
+      payload[String(id)] = byTask.get(id) || [];
+    }
+    res.json(payload);
+  } catch (error) {
+    if (connection) {
+      try { await connection.end(); } catch (e) { /* ignore */ }
+    }
+    res.status(500).json({ error: '获取协助人员失败：' + error.message });
   }
 });
 
@@ -695,6 +863,12 @@ app.get('/api/dashboard/production-board', async (req, res) => {
       connection,
       monthStatsYearMonth
     );
+    const standardMachineHours = await getStandardMachineHours(connection);
+    const monthStandardMachineCount = await getProductionBoardMonthStandardMachineCount(
+      connection,
+      monthStatsYearMonth,
+      standardMachineHours
+    );
     await connection.end();
     res.json({
       periodStart: start,
@@ -702,10 +876,58 @@ app.get('/api/dashboard/production-board', async (req, res) => {
       refreshedAt: new Date().toISOString(),
       monthStatsYearMonth,
       monthAllPhasesCompletedCount,
+      standardMachineHours,
+      monthStandardMachineCount,
       tasks: rows || []
     });
   } catch (error) {
     res.status(500).json({ error: '获取生产看板失败：' + error.message });
+  }
+});
+
+// 管理员修改一台标准机对应的小时数，并返回按新小时数折算的台数
+app.put('/api/dashboard/production-board/standard-machine-hours', async (req, res) => {
+  let connection;
+  try {
+    const userId = Number(req.body?.userId);
+    const hours = Number(req.body?.hours);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({ error: '缺少管理员身份' });
+    }
+    if (!Number.isFinite(hours) || hours <= 0 || hours > 1000) {
+      return res.status(400).json({ error: '请输入大于 0 且不超过 1000 的小时数' });
+    }
+    const roundedHours = Math.round(hours * 100) / 100;
+    connection = await mysql.createConnection(dbConfig);
+    const [users] = await connection.execute(
+      `SELECT role FROM users WHERE id = ?`,
+      [userId]
+    );
+    if (!users.length || users[0].role !== 'admin') {
+      await connection.end();
+      return res.status(403).json({ error: '只有管理员可以修改标准机工时' });
+    }
+    await ensureBoardSettings(connection);
+    await connection.execute(
+      `UPDATE board_settings SET standard_machine_hours = ? WHERE id = 1`,
+      [roundedHours]
+    );
+    const monthStatsYearMonth = getCurrentYearMonthKey();
+    const monthStandardMachineCount = await getProductionBoardMonthStandardMachineCount(
+      connection,
+      monthStatsYearMonth,
+      roundedHours
+    );
+    await connection.end();
+    res.json({
+      standardMachineHours: roundedHours,
+      monthStandardMachineCount
+    });
+  } catch (error) {
+    if (connection) {
+      try { await connection.end(); } catch (e) { /* ignore */ }
+    }
+    res.status(500).json({ error: '保存标准机工时失败：' + error.message });
   }
 });
 
