@@ -48,10 +48,9 @@
             <span class="board-metric-input board-metric-input--readonly">{{ monthAllPhasesCompletedCount }}</span>
             <span class="board-metric-suffix">台</span>
           </div>
-          <label class="board-metric-box" [class.board-metric-box--target]="isAdmin" title="一台标准机对应的小时数，只有管理员可以修改">
+          <label *ngIf="isAdmin" class="board-metric-box board-metric-box--target" title="一台标准机对应的小时数，只有管理员可以修改">
             <span class="board-metric-label">标准机工时:</span>
             <input
-              *ngIf="isAdmin"
               type="number"
               min="0.1"
               max="1000"
@@ -61,10 +60,9 @@
               (blur)="saveStandardMachineHours()"
               (keyup.enter)="saveStandardMachineHours()"
             />
-            <span *ngIf="!isAdmin" class="board-metric-input board-metric-input--readonly">{{ standardMachineHours }}</span>
             <span class="board-metric-suffix">小时</span>
           </label>
-          <div class="board-metric-box" [title]="'本月总装后段完成设备的机加、电控、总装前段、总装后段标准工时之和 ÷ ' + standardMachineHours + '，四舍五入'">
+          <div class="board-metric-box" [title]="isAdmin ? ('本月总装后段完成设备的机加、电控、总装前段、总装后段标准工时之和 ÷ ' + standardMachineHours + '，四舍五入') : '本月折算标准机台数'">
             <span class="board-metric-label">折算标准机:</span>
             <span class="board-metric-input board-metric-input--readonly">{{ monthStandardMachineCount }}</span>
             <span class="board-metric-suffix">台</span>

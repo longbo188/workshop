@@ -360,6 +360,7 @@ export class EfficiencyCalcPage implements OnInit {
   efficiencyData: EfficiencyData[] = [];
   filteredEfficiencyData: EfficiencyData[] = [];
   loading = false;
+  calculatingNewTasks = false;
   
   // 筛选条件（明细表）
   selectedPhase: string = '';
@@ -494,7 +495,9 @@ export class EfficiencyCalcPage implements OnInit {
       this.tableAssigneeFilter = this.currentUser.name;
       this.monthlyTableEmployeeFilter = this.currentUser.name;
     }
-    this.loadTasks();
+    if (!this.isWorker()) {
+      this.loadTasks();
+    }
     this.loadConfirmedTasks(); // 加载已确认的任务
     // 先加载节假日和工作时间设置，再统计效率
     Promise.all([
@@ -808,42 +811,12 @@ export class EfficiencyCalcPage implements OnInit {
     }
   }
 
-  // 保存已确认任务的数据（到 localStorage）
-  private saveConfirmedTasksData(): void {
-    try {
-      const confirmedData: { [key: string]: EfficiencyData[] } = {};
-      let savedCount = 0;
-      this.efficiencyData.forEach(data => {
-        const key = this.getTaskConfirmKey(data.task.id, data.phase);
-        if (this.confirmedTasks.has(key)) {
-          if (!confirmedData[key]) {
-            confirmedData[key] = [];
-          }
-          confirmedData[key].push(data);
-          savedCount++;
-        }
-      });
-      localStorage.setItem('confirmedEfficiencyTasksData', JSON.stringify(confirmedData));
-    } catch (error) {
-      console.error('保存已确认任务数据失败:', error);
-    }
-  }
-
-  // 加载已确认任务的数据（从 localStorage）
-  private loadConfirmedTasksData(): { [key: string]: EfficiencyData[] } {
-    try {
-      const confirmedDataStr = localStorage.getItem('confirmedEfficiencyTasksData');
-      if (confirmedDataStr) {
-        return JSON.parse(confirmedDataStr);
-      }
-    } catch (error) {
-      console.error('加载已确认任务数据失败:', error);
-    }
-    return {};
-  }
-
-  // 从数据库加载已确认任务的数据
-  private async loadConfirmedTasksDataFromDatabase(): Promise<Map<string, EfficiencyData[]>> {
+  // 从数据库加载已确认任务的数据。已有任务列表时不再重复请求全部任务。
+  // allowPlaceholder 时任务名单还没到也可以先显示已确认数字，稍后再补上任务名称。
+  private async loadConfirmedTasksDataFromDatabase(
+    existingTasks?: Task[] | null,
+    options?: { assigneeId?: number; allowPlaceholder?: boolean }
+  ): Promise<Map<string, EfficiencyData[]>> {
     const confirmedDataMap = new Map<string, EfficiencyData[]>();
     try {
       const base = this.getApiBase();
@@ -855,14 +828,14 @@ export class EfficiencyCalcPage implements OnInit {
         return confirmedDataMap;
       }
 
-      // 获取所有任务信息（用于构建 EfficiencyData）
-      const tasksResponse = await this.http.get<any>(`${base}/api/tasks`).toPromise();
-      const allTasks: Task[] = tasksResponse || [];
+      const allTasks: Task[] = existingTasks && existingTasks.length
+        ? existingTasks
+        : (options?.allowPlaceholder ? [] : await this.fetchTasksForEfficiency());
       const tasksMap = new Map<number, Task>();
       allTasks.forEach(task => {
         tasksMap.set(task.id, task);
       });
-      
+      const assigneeId = options?.assigneeId ? Number(options.assigneeId) : 0;
 
       let skippedCount = 0;
       const skippedTasks: number[] = [];
@@ -871,7 +844,17 @@ export class EfficiencyCalcPage implements OnInit {
 
       // 将数据库中的数据转换为 EfficiencyData 格式
       for (const row of response) {
-        const task = tasksMap.get(row.task_id);
+        const rowAssigneeId = row.assignee_id != null ? Number(row.assignee_id) : 0;
+        if (assigneeId && rowAssigneeId && rowAssigneeId !== assigneeId) {
+          continue;
+        }
+        let task = tasksMap.get(row.task_id);
+        if (!task && options?.allowPlaceholder) {
+          const assigneeName = assigneeId && rowAssigneeId === assigneeId
+            ? (this.currentUser?.name || '')
+            : '';
+          task = this.placeholderTask(row, assigneeName);
+        }
         if (!task) {
           skippedCount++;
           skippedTasks.push(row.task_id);
@@ -922,12 +905,20 @@ export class EfficiencyCalcPage implements OnInit {
     return confirmedDataMap;
   }
 
-  // 将当前内存中的效率结果保存到后端 task_efficiency 表
-  private async saveEfficiencySnapshotsToBackend(): Promise<void> {
+  // 只保存这次新算出来的阶段。onlyKeys 有值时只保存这些新确认的阶段，已在库里的已确认记录不写回。
+  private async saveEfficiencySnapshotsToBackend(onlyKeys?: Set<string>): Promise<void> {
     try {
       const base = this.getApiBase();
 
-      const payloads = this.efficiencyData.map(data => {
+      const payloads = this.efficiencyData
+        .filter(data => {
+          const key = this.getTaskConfirmKey(data.task.id, data.phase);
+          if (onlyKeys) {
+            return onlyKeys.has(key);
+          }
+          return !this.confirmedTasks.has(key);
+        })
+        .map(data => {
         const confirmKey = this.getTaskConfirmKey(data.task.id, data.phase);
         const isConfirmed = this.confirmedTasks.has(confirmKey);
 
@@ -970,13 +961,23 @@ export class EfficiencyCalcPage implements OnInit {
         };
       });
 
-      await Promise.all(
-        payloads.map(p =>
-          this.http.post(`${base}/api/task-efficiency`, p).toPromise().catch(err => {
-            console.error('保存任务效率快照失败:', p.taskId, p.phase, err);
-          })
-        )
-      );
+      if (payloads.length > 0) {
+        try {
+          await this.http.post(`${base}/api/task-efficiency/batch`, { items: payloads }).toPromise();
+        } catch (batchError) {
+          console.error('批量保存效率失败，改为分批逐条保存:', batchError);
+          const chunkSize = 20;
+          for (let i = 0; i < payloads.length; i += chunkSize) {
+            await Promise.all(
+              payloads.slice(i, i + chunkSize).map(p =>
+                this.http.post(`${base}/api/task-efficiency`, p).toPromise().catch(err => {
+                  console.error('保存任务效率快照失败:', p.taskId, p.phase, err);
+                })
+              )
+            );
+          }
+        }
+      }
 
       await this.saveExceptionEffectiveHoursToBackend();
     } catch (error) {
@@ -1054,22 +1055,38 @@ export class EfficiencyCalcPage implements OnInit {
       });
 
       const attendanceByUser = new Map<number, any[]>();
-      for (const [userId, items] of byUser.entries()) {
-        let minTime = Infinity;
-        let maxTime = -Infinity;
+      let rangeStart = '';
+      let rangeEnd = '';
+      for (const items of byUser.values()) {
         items.forEach((item) => {
-          const startMs = new Date(item.start).getTime();
-          const endMs = new Date(item.end).getTime();
-          if (Number.isFinite(startMs)) minTime = Math.min(minTime, startMs);
-          if (Number.isFinite(endMs)) maxTime = Math.max(maxTime, endMs);
+          const startDate = TimeUtils.getLocalDateString(new Date(item.start));
+          const endDate = TimeUtils.getLocalDateString(new Date(item.end));
+          if (startDate && (!rangeStart || startDate < rangeStart)) rangeStart = startDate;
+          if (endDate && (!rangeEnd || endDate > rangeEnd)) rangeEnd = endDate;
         });
-        if (!Number.isFinite(minTime) || !Number.isFinite(maxTime)) {
-          continue;
+      }
+      try {
+        const attendanceMap = await this.postAttendanceByUsers(base, [...byUser.keys()], rangeStart, rangeEnd);
+        attendanceMap.forEach((rows, userId) => attendanceByUser.set(userId, rows));
+      } catch (attendanceError) {
+        console.error('批量读取考勤失败，改为按人查询:', attendanceError);
+        for (const [userId, items] of byUser.entries()) {
+          let minTime = Infinity;
+          let maxTime = -Infinity;
+          items.forEach((item) => {
+            const startMs = new Date(item.start).getTime();
+            const endMs = new Date(item.end).getTime();
+            if (Number.isFinite(startMs)) minTime = Math.min(minTime, startMs);
+            if (Number.isFinite(endMs)) maxTime = Math.max(maxTime, endMs);
+          });
+          if (!Number.isFinite(minTime) || !Number.isFinite(maxTime)) {
+            continue;
+          }
+          const startDate = TimeUtils.getLocalDateString(new Date(minTime));
+          const endDate = TimeUtils.getLocalDateString(new Date(maxTime));
+          const records = await this.loadAttendanceRecordsForUser(base, userId, startDate, endDate);
+          attendanceByUser.set(userId, records);
         }
-        const startDate = TimeUtils.getLocalDateString(new Date(minTime));
-        const endDate = TimeUtils.getLocalDateString(new Date(maxTime));
-        const records = await this.loadAttendanceRecordsForUser(base, userId, startDate, endDate);
-        attendanceByUser.set(userId, records);
       }
 
       const payloadItems: Array<{ id: number; effectiveHours: number }> = [];
@@ -1294,16 +1311,7 @@ export class EfficiencyCalcPage implements OnInit {
         await this.loadHolidays();
       }
       
-      // 获取所有任务
-      const tasksResponse = await this.http.get<any>(`${base}/api/tasks`).toPromise();
-      if (!tasksResponse) {
-        if (!silent) {
-          this.presentToast('获取任务信息失败');
-        }
-        return;
-      }
-      
-      const allTasks: Task[] = tasksResponse || [];
+      const allTasks = await this.fetchTasksForEfficiency();
       const phases = ['machining', 'electrical', 'pre_assembly', 'post_assembly', 'debugging'];
       
       // 先找出需要确认的任务（7个工作日前的）
@@ -1364,14 +1372,12 @@ export class EfficiencyCalcPage implements OnInit {
         this.confirmedTasks.add(key);
       });
       
-      // 保存已确认的任务
+      // 只把这次新确认的阶段写进数据库，已确认的记录不再保存
       this.saveConfirmedTasks();
-      
-      // 保存已确认任务的数据到 localStorage
-      this.saveConfirmedTasksData();
-      
-      // 将确认状态保存到数据库
-      await this.saveEfficiencySnapshotsToBackend();
+      const newlyConfirmedKeys = new Set(
+        tasksToConfirm.map(({ taskId, phase }) => this.getTaskConfirmKey(taskId, phase))
+      );
+      await this.saveEfficiencySnapshotsToBackend(newlyConfirmedKeys);
       
       // 更新已确认任务数量
       this.confirmedTasksCount = this.confirmedTasks.size;
@@ -1686,16 +1692,161 @@ export class EfficiencyCalcPage implements OnInit {
   }
 
 
+  private tasksFetchPromise: Promise<Task[]> | null = null;
+  private workerTasksPromise: Promise<Task[]> | null = null;
+  /** 当前员工任务只来自未完成列表，已完成任务还要另拉 */
+  private workerTasksPartial = false;
+
+  private fetchTasksForEfficiency(force = false): Promise<Task[]> {
+    if (this.tasksFetchPromise) {
+      return this.tasksFetchPromise;
+    }
+    if (!force && this.tasks.length > 0 && !(this.isWorker() && this.workerTasksPartial)) {
+      return Promise.resolve(this.tasks);
+    }
+    if (this.isWorker() && this.currentUser?.id) {
+      return this.fetchTasksForWorker(Number(this.currentUser.id));
+    }
+    const base = this.getApiBase();
+    this.tasksFetchPromise = this.http.get<any>(`${base}/api/tasks?includeAssistants=0`).toPromise()
+      .then(response => {
+        this.tasks = response || [];
+        return this.tasks;
+      })
+      .finally(() => {
+        this.tasksFetchPromise = null;
+      });
+    return this.tasksFetchPromise;
+  }
+
+  /** 员工只取自己负责的任务。新接口没有部署时，先用未完成任务，避免整表下载。 */
+  private fetchTasksForWorker(userId: number): Promise<Task[]> {
+    if (this.workerTasksPromise) {
+      return this.workerTasksPromise;
+    }
+    const base = this.getApiBase();
+    this.workerTasksPromise = this.http.get<any>(`${base}/api/tasks/user/${userId}/efficiency`).toPromise()
+      .then(response => {
+        this.workerTasksPartial = false;
+        this.tasks = Array.isArray(response) ? response : [];
+        return this.tasks;
+      })
+      .catch(async () => {
+        this.workerTasksPartial = true;
+        const pending = await this.http.get<any>(`${base}/api/tasks?includeCompleted=0&includeAssistants=0`).toPromise();
+        const list: Task[] = Array.isArray(pending) ? pending : [];
+        this.tasks = list.filter(task => this.taskAssignedTo(task, userId));
+        return this.tasks;
+      })
+      .finally(() => {
+        this.workerTasksPromise = null;
+      });
+    return this.workerTasksPromise;
+  }
+
+  private fetchAllTasksRaw(): Promise<Task[]> {
+    const base = this.getApiBase();
+    return this.http.get<any>(`${base}/api/tasks?includeAssistants=0`).toPromise()
+      .then(response => Array.isArray(response) ? response : []);
+  }
+
+  private taskAssignedTo(task: Task, userId: number): boolean {
+    return [
+      task.machining_assignee,
+      task.electrical_assignee,
+      task.pre_assembly_assignee,
+      task.post_assembly_assignee,
+      task.debugging_assignee
+    ].some(id => id != null && Number(id) === userId);
+  }
+
+  private phaseAssignedTo(task: Task, phase: string, userId: number, userName: string): boolean {
+    const assigneeId = this.phaseAssigneeId(task, phase);
+    if (assigneeId != null && Number(assigneeId) === userId) {
+      return true;
+    }
+    const name = (this.getTaskAssigneeName(task, phase) || '').trim();
+    return !!userName && name === userName.trim();
+  }
+
+  private placeholderTask(row: any, assigneeName: string): Task {
+    const task: any = {
+      id: Number(row.task_id),
+      name: '任务' + row.task_id,
+      description: '',
+      product_model: '',
+      current_phase: row.phase || '',
+      phase_progress: 0,
+      start_date: '',
+      end_date: '',
+      department: '',
+      status: '',
+      priority: '',
+      created_at: '',
+      updated_at: '',
+      machining_start_time: null,
+      electrical_start_time: null,
+      pre_assembly_start_time: null,
+      post_assembly_start_time: null,
+      debugging_start_time: null,
+      machining_complete_time: null,
+      electrical_complete_time: null,
+      pre_assembly_complete_time: null,
+      post_assembly_complete_time: null,
+      debugging_complete_time: null,
+      machining_hours_est: null,
+      electrical_hours_est: null,
+      pre_assembly_hours_est: null,
+      post_assembly_hours_est: null,
+      debugging_hours_est: null,
+      machining_assignee: null,
+      electrical_assignee: null,
+      pre_assembly_assignee: null,
+      post_assembly_assignee: null,
+      debugging_assignee: null,
+      machining_assignee_name: null,
+      electrical_assignee_name: null,
+      pre_assembly_assignee_name: null,
+      post_assembly_assignee_name: null,
+      debugging_assignee_name: null
+    };
+    const phase = String(row.phase || '');
+    const assigneeId = row.assignee_id != null ? Number(row.assignee_id) : null;
+    if (phase === 'machining') {
+      task.machining_assignee = assigneeId;
+      task.machining_assignee_name = assigneeName || null;
+    } else if (phase === 'electrical') {
+      task.electrical_assignee = assigneeId;
+      task.electrical_assignee_name = assigneeName || null;
+    } else if (phase === 'pre_assembly') {
+      task.pre_assembly_assignee = assigneeId;
+      task.pre_assembly_assignee_name = assigneeName || null;
+    } else if (phase === 'post_assembly') {
+      task.post_assembly_assignee = assigneeId;
+      task.post_assembly_assignee_name = assigneeName || null;
+    } else if (phase === 'debugging') {
+      task.debugging_assignee = assigneeId;
+      task.debugging_assignee_name = assigneeName || null;
+    }
+    return task as Task;
+  }
+
+  private hydrateEfficiencyTasks(tasks: Task[]): void {
+    const tasksMap = new Map<number, Task>();
+    tasks.forEach(task => tasksMap.set(Number(task.id), task));
+    this.efficiencyData.forEach(row => {
+      const real = tasksMap.get(Number(row.task?.id));
+      if (real) {
+        row.task = real;
+      }
+    });
+  }
+
   async loadTasks() {
     this.loading = true;
     try {
-      const base = this.getApiBase();
-      const response = await this.http.get<any>(`${base}/api/tasks`).toPromise();
-      
-      if (response) {
-        this.tasks = response || [];
-        this.updateAvailableOptions();
-      }
+      await this.fetchTasksForEfficiency(true);
+      this.updateAvailableOptions();
     } catch (error) {
       console.error('加载任务失败:', error);
     } finally {
@@ -1756,205 +1907,353 @@ export class EfficiencyCalcPage implements OnInit {
     this.availableModels = Array.from(models);
   }
 
+  private phaseAssigneeId(task: Task, phase: string): number | null {
+    if (phase === 'machining') return task.machining_assignee || null;
+    if (phase === 'electrical') return task.electrical_assignee || null;
+    if (phase === 'pre_assembly') return task.pre_assembly_assignee || null;
+    if (phase === 'post_assembly') return task.post_assembly_assignee || null;
+    if (phase === 'debugging') return task.debugging_assignee || null;
+    return null;
+  }
+
+  private async calculatePhaseTasksInBatches(base: string, tasks: Task[], phase: string): Promise<void> {
+    await this.calculatePhaseGroups(base, [{ phase, tasks }]);
+  }
+
+  /** 所有未确认阶段共用一次报工、异常、考勤、暂停和协助查询。 */
+  private async calculatePhaseGroups(base: string, groups: Array<{ phase: string; tasks: Task[] }>): Promise<void> {
+    const pending = groups.filter(group => group.tasks.length > 0);
+    if (!pending.length) return;
+    try {
+      await this.calculatePhaseGroupsFromBatch(base, pending);
+    } catch (error) {
+      console.error('批量取数失败，改为逐条计算:', error);
+      for (const group of pending) {
+        await this.calculatePhaseTasksOneByOne(base, group.tasks, group.phase);
+      }
+    }
+  }
+
+  private async calculatePhaseGroupsFromBatch(base: string, groups: Array<{ phase: string; tasks: Task[] }>): Promise<void> {
+    interface PendingJob {
+      task: Task;
+      phase: string;
+      userId: number;
+      start: string;
+      end: string;
+      startDate: string;
+      endDate: string;
+    }
+    const jobs: PendingJob[] = [];
+    for (const group of groups) {
+      for (const task of group.tasks) {
+        const userId = this.phaseAssigneeId(task, group.phase);
+        const start = this.getPhaseStartTime(task, group.phase);
+        const end = this.getPhaseEndTime(task, group.phase);
+        if (!userId || !start || !end) continue;
+        jobs.push({
+          task,
+          phase: group.phase,
+          userId,
+          start,
+          end,
+          startDate: this.toLocalDateKey(start),
+          endDate: this.toLocalDateKey(end)
+        });
+      }
+    }
+    if (!jobs.length) return;
+
+    const taskIds = jobs.map(job => job.task.id);
+    const userIds = jobs.map(job => job.userId);
+    const startDate = jobs.reduce((min, job) => job.startDate < min ? job.startDate : min, jobs[0].startDate);
+    const endDate = jobs.reduce((max, job) => job.endDate > max ? job.endDate : max, jobs[0].endDate);
+    const [workMap, exceptionMap, attendanceMap, pauseMap, assistMap] = await Promise.all([
+      this.postRowsByIds(`${base}/api/work-reports/by-tasks`, taskIds),
+      this.postRowsByIds(`${base}/api/exception-reports/by-tasks`, taskIds),
+      this.postAttendanceByUsers(base, userIds, startDate, endDate),
+      this.postRowsByIds(`${base}/api/tasks/pause-logs/by-tasks`, taskIds),
+      this.postAssistByUsers(base, userIds, startDate, endDate)
+    ]);
+
+    for (let index = 0; index < jobs.length; index++) {
+      const job = jobs[index];
+      try {
+        const exceptionReports: ExceptionReport[] = (exceptionMap.get(job.task.id) || []).map((report: any) => ({
+          ...report,
+          phase: report.phase ?? ''
+        }));
+        const attendance = (attendanceMap.get(job.userId) || []).filter(record => {
+          const date = this.normalizeDateKey(record?.date);
+          return !!date && date >= job.startDate && date <= job.endDate;
+        });
+        const rows = await this.calculateTaskEfficiencyWithAttendance(
+          job.task,
+          workMap.get(job.task.id) || [],
+          exceptionReports,
+          attendance,
+          job.phase,
+          {
+            skipApprovedFetch: true,
+            pausePeriods: this.pausePeriodsFromRows(pauseMap.get(job.task.id) || [], job),
+            assistReports: this.assistReportsForJob(assistMap.get(job.userId) || [], job)
+          }
+        );
+        this.efficiencyData.push(...rows);
+      } catch (error) {
+        console.error(`统计任务 ${job.task.id} 的 ${job.phase} 阶段效率失败:`, error);
+      }
+      if (index % 20 === 19) {
+        this.applyFilters();
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+    }
+  }
+
+  private async postRowsByIds(url: string, ids: number[]): Promise<Map<number, any[]>> {
+    const map = new Map<number, any[]>();
+    const unique = [...new Set(ids.filter(id => Number.isInteger(id) && id > 0))];
+    const chunkSize = 400;
+    for (let i = 0; i < unique.length; i += chunkSize) {
+      const data = await this.http.post<Record<string, any[]>>(url, {
+        ids: unique.slice(i, i + chunkSize)
+      }).toPromise();
+      Object.entries(data || {}).forEach(([id, rows]) => {
+        const key = Number(id);
+        map.set(key, (map.get(key) || []).concat(rows || []));
+      });
+    }
+    return map;
+  }
+
+  private async postAttendanceByUsers(base: string, userIds: number[], start: string, end: string): Promise<Map<number, any[]>> {
+    const map = new Map<number, any[]>();
+    const unique = [...new Set(userIds.filter(id => Number.isInteger(id) && id > 0))];
+    if (!unique.length || !start || !end) return map;
+    const chunkSize = 400;
+    for (let i = 0; i < unique.length; i += chunkSize) {
+      const data = await this.http.post<Record<string, any[]>>(
+        `${base}/api/daily-attendance/confirmed-by-users`,
+        { userIds: unique.slice(i, i + chunkSize), start, end }
+      ).toPromise();
+      Object.entries(data || {}).forEach(([id, rows]) => {
+        const key = Number(id);
+        map.set(key, (map.get(key) || []).concat(rows || []));
+      });
+    }
+    return map;
+  }
+
+  private async postAssistByUsers(base: string, userIds: number[], start: string, end: string): Promise<Map<number, any[]>> {
+    const map = new Map<number, any[]>();
+    const unique = [...new Set(userIds.filter(id => Number.isInteger(id) && id > 0))];
+    if (!unique.length || !start || !end) return map;
+    const chunkSize = 400;
+    for (let i = 0; i < unique.length; i += chunkSize) {
+      const data = await this.http.post<Record<string, any[]>>(
+        `${base}/api/work-records/assist-batch`,
+        { userIds: unique.slice(i, i + chunkSize), start, end }
+      ).toPromise();
+      Object.entries(data || {}).forEach(([id, rows]) => {
+        const key = Number(id);
+        map.set(key, (map.get(key) || []).concat(rows || []));
+      });
+    }
+    return map;
+  }
+
+  private toLocalDateKey(value: string): string {
+    const date = new Date(value);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  private normalizeDateKey(value: any): string {
+    if (!value) return '';
+    if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+    const parsed = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return this.toLocalDateKey(parsed.toISOString());
+  }
+
+  private pausePeriodsFromRows(
+    rows: any[],
+    job: { phase: string; userId: number; start: string; end: string }
+  ): Array<{ start: Date; end: Date }> {
+    const phaseStart = TimeUtils.utcToLocalDate(job.start);
+    const phaseEnd = TimeUtils.utcToLocalDate(job.end);
+    const periods = (rows || []).map((row: any) => {
+      if (String(row?.phase_key || '') !== job.phase || Number(row?.user_id) !== job.userId) return null;
+      const pausedAt = row?.paused_at ? TimeUtils.utcToLocalDate(row.paused_at) : null;
+      const resumedAt = row?.resumed_at ? TimeUtils.utcToLocalDate(row.resumed_at) : phaseEnd;
+      if (!pausedAt || !resumedAt) return null;
+      const start = new Date(Math.max(pausedAt.getTime(), phaseStart.getTime()));
+      const end = new Date(Math.min(resumedAt.getTime(), phaseEnd.getTime()));
+      if (end <= start) return null;
+      return { start, end };
+    }).filter((value: { start: Date; end: Date } | null): value is { start: Date; end: Date } => !!value);
+    return this.mergeTimeRanges(periods);
+  }
+
+  private assistReportsForJob(
+    rows: any[],
+    job: { task: Task; phase: string; startDate: string; endDate: string }
+  ): any[] {
+    const rangeStart = new Date(`${job.startDate}T00:00:00`).getTime();
+    const rangeEnd = new Date(`${job.endDate}T23:59:59`).getTime();
+    return (rows || []).filter((record: any) => {
+      if (record.work_type !== 'assist' || record.approval_status !== 'approved') return false;
+      if (Number(record.task_id) === job.task.id && record.assist_phase === job.phase) return false;
+      if (!record.assist_start) return false;
+      const assistStart = new Date(record.assist_start).getTime();
+      const assistEnd = record.assist_end ? new Date(record.assist_end).getTime() : Number.POSITIVE_INFINITY;
+      return assistStart <= rangeEnd && assistEnd >= rangeStart;
+    });
+  }
+
+  /** 批量接口不可用时，退回逐条查询。 */
+  private async calculatePhaseTasksOneByOne(base: string, tasks: Task[], phase: string): Promise<void> {
+    const batchSize = 15;
+    for (let i = 0; i < tasks.length; i += batchSize) {
+      const batch = tasks.slice(i, i + batchSize);
+      const batchResults = await Promise.all(batch.map(async (task) => {
+        try {
+          const taskAssigneeId = this.phaseAssigneeId(task, phase);
+          if (!taskAssigneeId) return [];
+
+          const [workReportsResponse, exceptionResponse] = await Promise.all([
+            this.http.get<any>(`${base}/api/work-reports/by-task/${task.id}`).toPromise(),
+            this.http.get<any>(`${base}/api/exception-reports/by-task/${task.id}`).toPromise()
+          ]);
+          const workReports: WorkReport[] = workReportsResponse || [];
+          const exceptionReports: ExceptionReport[] = (exceptionResponse || []).map((report: any) => ({
+            ...report,
+            phase: report.phase ?? ''
+          }));
+
+          const phaseStartTime = this.getPhaseStartTime(task, phase);
+          const phaseEndTime = this.getPhaseEndTime(task, phase);
+          if (!phaseStartTime || !phaseEndTime) return [];
+
+          const startDate = this.toLocalDateKey(phaseStartTime);
+          const endDate = this.toLocalDateKey(phaseEndTime);
+          const attendanceResponse = await this.http.get<any>(
+            `${base}/api/daily-attendance?start=${startDate}&end=${endDate}&pageSize=1000&userId=${taskAssigneeId}`
+          ).toPromise();
+          return await this.calculateTaskEfficiencyWithAttendance(
+            task,
+            workReports,
+            exceptionReports,
+            attendanceResponse?.list || [],
+            phase
+          );
+        } catch (error) {
+          console.error(`统计任务 ${task.id} 的 ${phase} 阶段效率失败:`, error);
+          return [];
+        }
+      }));
+      batchResults.forEach(rows => this.efficiencyData.push(...rows));
+      this.applyFilters();
+    }
+  }
+
+  private async calculatePendingPhases(
+    base: string,
+    allTasks: Task[],
+    confirmedDataMap: Map<string, EfficiencyData[]>,
+    workerId: number,
+    workerName: string
+  ): Promise<void> {
+    if (!allTasks.length) {
+      return;
+    }
+    await this.loadStandardHoursForTasks(allTasks);
+    const phases = ['machining', 'electrical', 'pre_assembly', 'post_assembly', 'debugging'];
+    const pendingGroups: Array<{ phase: string; tasks: Task[] }> = [];
+    for (const phase of phases) {
+      const completedTasks = this.filterCompletedTasksByPhase(allTasks, phase);
+      const pendingTasks = completedTasks.filter(task => {
+        if (workerId && !this.phaseAssignedTo(task, phase, workerId, workerName)) {
+          return false;
+        }
+        const confirmKey = this.getTaskConfirmKey(task.id, phase);
+        if (this.confirmedTasks.has(confirmKey) && confirmedDataMap.has(confirmKey)) {
+          return false;
+        }
+        return !this.efficiencyData.some(row => row.task?.id === task.id && row.phase === phase);
+      });
+      if (pendingTasks.length > 0) {
+        pendingGroups.push({ phase, tasks: pendingTasks });
+      }
+    }
+    if (pendingGroups.length > 0) {
+      this.loading = false;
+      this.calculatingNewTasks = true;
+      await this.calculatePhaseGroups(base, pendingGroups);
+    }
+  }
+
   async calculateAllCompletedPhases() {
     this.loading = true;
     this.pendingExceptionEffectiveHours.clear();
     try {
       const base = this.getApiBase();
-      
-      // 获取所有任务
-      const tasksResponse = await this.http.get<any>(`${base}/api/tasks`).toPromise();
-      if (!tasksResponse) {
-        console.error('获取任务信息失败');
-        return;
-      }
-      
-      const allTasks: Task[] = tasksResponse || [];
-      
-      // 直接优先从数据库加载已确认任务的数据（数据库是权威来源）
-      const confirmedDataMap = await this.loadConfirmedTasksDataFromDatabase();
-      // 更新 this.confirmedTasks 以确保一致性（基于数据库中的数据）
+      const workerId = this.isWorker() && this.currentUser?.id ? Number(this.currentUser.id) : 0;
+      const workerName = workerId ? (this.currentUser?.name || '') : '';
+      const tasksPromise = workerId
+        ? this.fetchTasksForWorker(workerId)
+        : this.fetchTasksForEfficiency();
+
+      // 已确认结果不依赖整份任务表，先显示
+      const confirmedDataMap = await this.loadConfirmedTasksDataFromDatabase(null, {
+        assigneeId: workerId || undefined,
+        allowPlaceholder: true
+      });
       this.confirmedTasks.clear();
-      confirmedDataMap.forEach((dataArray, key) => {
+      confirmedDataMap.forEach((_dataArray, key) => {
         this.confirmedTasks.add(key);
       });
       this.confirmedTasksCount = this.confirmedTasks.size;
-      
-      // 可选：将数据库数据同步到 localStorage 作为缓存（不作为数据源）
-      if (confirmedDataMap.size > 0) {
-        const confirmedDataForStorage: { [key: string]: EfficiencyData[] } = {};
-        confirmedDataMap.forEach((dataArray, key) => {
-          confirmedDataForStorage[key] = dataArray;
-        });
-        try {
-          localStorage.setItem('confirmedEfficiencyTasksData', JSON.stringify(confirmedDataForStorage));
-        } catch (e) {
-          console.error('同步已确认任务数据到 localStorage 失败:', e);
-        }
-      }
-      
-      // 批量加载所有任务的标准工时（在开始计算之前）
-      await this.loadStandardHoursForTasks(allTasks);
-      
-      // 计算所有阶段（只要该阶段为1且存在开始和结束时间）
+
       this.efficiencyData = [];
-      const phases = ['machining', 'electrical', 'pre_assembly', 'post_assembly', 'debugging'];
-      
-      for (const phase of phases) {
-        try {
-          
-          const completedTasks = this.filterCompletedTasksByPhase(allTasks, phase);
-          
-          
-        
-          for (const task of completedTasks) {
-            try {
-              // 检查任务是否已确认，如果已确认则跳过计算（会在后面统一恢复）
-              const confirmKey = this.getTaskConfirmKey(task.id, phase);
-              if (this.confirmedTasks.has(confirmKey) && confirmedDataMap.has(confirmKey)) {
-                continue;
-              }
-              
-              
-              // 获取任务负责人ID
-              let taskAssigneeId: number | null = null;
-              if (phase === 'machining' && task.machining_assignee) {
-                taskAssigneeId = task.machining_assignee;
-              } else if (phase === 'electrical' && task.electrical_assignee) {
-                taskAssigneeId = task.electrical_assignee;
-              } else if (phase === 'pre_assembly' && task.pre_assembly_assignee) {
-                taskAssigneeId = task.pre_assembly_assignee;
-              } else if (phase === 'post_assembly' && task.post_assembly_assignee) {
-                taskAssigneeId = task.post_assembly_assignee;
-              } else if (phase === 'debugging' && task.debugging_assignee) {
-                taskAssigneeId = task.debugging_assignee;
-              }
-              
-              // 如果阶段负责人为空，跳过此任务
-              if (!taskAssigneeId) {
-                continue;
-              }
-              
-              const workReportsResponse = await this.http.get<any>(`${base}/api/work-reports/by-task/${task.id}`).toPromise();
-              const workReports: WorkReport[] = workReportsResponse || [];
-              
-              
-              const exceptionResponse = await this.http.get<any>(`${base}/api/exception-reports/by-task/${task.id}`).toPromise();
-              const rawExceptionReports = exceptionResponse || [];
-              
-              // 直接使用后端返回的阶段信息，不做前端兜底
-              const exceptionReports: ExceptionReport[] = rawExceptionReports.map((report: any) => ({
-                ...report,
-                phase: report.phase ?? ''
-              }));
-              
-              
-              // 获取阶段时间范围内的考勤记录
-              const phaseStartTime = this.getPhaseStartTime(task, phase);
-              const phaseEndTime = this.getPhaseEndTime(task, phase);
-              
-              if (!phaseStartTime || !phaseEndTime) {
-                continue;
-              }
-              
-              // 计算阶段时间范围（转换为日期格式）
-              const startLocal = new Date(phaseStartTime);
-              const endLocal = new Date(phaseEndTime);
-              const startDate = `${startLocal.getFullYear()}-${String(startLocal.getMonth() + 1).padStart(2, '0')}-${String(startLocal.getDate()).padStart(2, '0')}`;
-              const endDate = `${endLocal.getFullYear()}-${String(endLocal.getMonth() + 1).padStart(2, '0')}-${String(endLocal.getDate()).padStart(2, '0')}`;
-              
-              // 构建API URL，只有当taskAssigneeId不为null时才添加userId参数
-              let apiUrl = `${base}/api/daily-attendance?start=${startDate}&end=${endDate}&pageSize=1000`;
-              if (taskAssigneeId !== null) {
-                apiUrl += `&userId=${taskAssigneeId}`;
-              }
-              const attendanceResponse = await this.http.get<any>(apiUrl).toPromise();
-              const allAttendanceRecords = attendanceResponse?.list || [];
-              
-              const taskEfficiencyData = await this.calculateTaskEfficiencyWithAttendance(
-                task, workReports, exceptionReports, allAttendanceRecords, phase
-              );
-              
-              this.efficiencyData.push(...taskEfficiencyData);
-            } catch (error) {
-              console.error(`统计任务 ${task.id} 的 ${phase} 阶段效率失败:`, error);
-              if (task.id === 846) {
-                console.error(`任务846效率计算失败详情:`, error);
-              }
-            }
-          }
-          
-          
-        } catch (error) {
-          console.error(`处理 ${this.getPhaseDisplayName(phase)} 阶段时发生错误:`, error);
-        }
-      }
-      
-      // 恢复已确认任务的数据（直接从数据库加载的数据中恢复）
-      let restoredCount = 0;
-      let skippedRestoreCount = 0;
-      const skippedRestoreKeys: string[] = [];
-      const restoredKeys: string[] = [];
-      
-      // 为已确认的任务阶段加载异常报告
-      const exceptionReportsPromises: Promise<void>[] = [];
-      
-      confirmedDataMap.forEach((dataArray, key) => {
-        // 检查是否已经存在相同的数据（防止重复添加）
-        const [taskIdStr, phase] = key.split('_');
-        const taskId = parseInt(taskIdStr, 10);
-          const existingData = this.efficiencyData.find(data => 
-            data.task.id === taskId && data.phase === phase
-          );
-        
-          if (!existingData) {
-          // 从数据库加载的数据中恢复
-            this.efficiencyData.push(...dataArray);
-            restoredCount += dataArray.length;
-          restoredKeys.push(key);
-          
-          // 为每个恢复的数据加载异常报告
-          dataArray.forEach(data => {
-            const loadExceptionReportsPromise = (async () => {
-              try {
-                const exceptionResponse = await this.http.get<any>(`${base}/api/exception-reports/by-task/${data.task.id}`).toPromise();
-                const rawExceptionReports = exceptionResponse || [];
-                const exceptionReports: ExceptionReport[] = rawExceptionReports.map((report: any) => ({
-                  ...report,
-                  phase: report.phase ?? ''
-                }));
-                
-                // 筛选属于当前阶段的异常报告
-                const phaseExceptions = exceptionReports.filter(ex => {
-                  const exceptionPhase = ex.phase || '';
-                  return exceptionPhase === data.phase || !exceptionPhase;
-                });
-                
-                // 将异常报告添加到数据中
-                data.exceptionReports.push(...phaseExceptions);
-              } catch (error) {
-                console.error(`加载任务${data.task.id}的异常报告失败:`, error);
-              }
-            })();
-            exceptionReportsPromises.push(loadExceptionReportsPromise);
-          });
-          } else {
-          skippedRestoreCount += dataArray.length;
-          skippedRestoreKeys.push(key);
-        }
+      confirmedDataMap.forEach((dataArray) => {
+        this.efficiencyData.push(...dataArray);
       });
-      
-      // 等待所有异常报告加载完成
-      if (exceptionReportsPromises.length > 0) {
-        await Promise.all(exceptionReportsPromises);
+      if (this.efficiencyData.length > 0) {
+        this.loading = false;
+        this.calculatingNewTasks = true;
+        this.applyFilters();
       }
-      
-      
-      // 保存已确认任务的数据到 localStorage（确保数据持久化）
-      if (confirmedDataMap.size > 0) {
-        this.saveConfirmedTasksData();
+
+      let allTasks = await tasksPromise;
+      this.hydrateEfficiencyTasks(allTasks);
+      this.updateAvailableOptions();
+      if (this.efficiencyData.length > 0) {
+        this.applyFilters();
       }
-      
+
+      await this.calculatePendingPhases(base, allTasks, confirmedDataMap, workerId, workerName);
+
+      // 旧接口没有按人过滤时，未完成任务先算完；已完成任务到了再补这个人剩下的阶段
+      if (workerId && this.workerTasksPartial) {
+        this.loading = false;
+        this.calculatingNewTasks = true;
+        const fullTasks = await this.fetchAllTasksRaw();
+        const knownIds = new Set(allTasks.map(task => Number(task.id)));
+        const extraTasks = fullTasks.filter(task => this.taskAssignedTo(task, workerId) && !knownIds.has(Number(task.id)));
+        allTasks = allTasks.concat(extraTasks);
+        this.tasks = allTasks;
+        this.workerTasksPartial = false;
+        this.hydrateEfficiencyTasks(allTasks);
+        this.updateAvailableOptions();
+        this.applyFilters();
+        if (extraTasks.length > 0) {
+          await this.calculatePendingPhases(base, extraTasks, confirmedDataMap, workerId, workerName);
+        }
+      }
+
       // 全局去重：移除重复的任务-阶段组合
       const beforeDedupCount = this.efficiencyData.length;
       const uniqueDataMap = new Map<string, EfficiencyData>();
@@ -1977,25 +2276,33 @@ export class EfficiencyCalcPage implements OnInit {
         this.efficiencyData = Array.from(uniqueDataMap.values());
       }
 
-      // 将当前效率结果落库到后端（task_efficiency），区分已确认 / 未确认
-      await this.saveEfficiencySnapshotsToBackend();
-      
+      this.loading = false;
+      this.calculatingNewTasks = false;
+      this.applyFilters();
+      if (!this.isAutoConfirming) {
+        this.persistNewEfficiencyResults();
+      }
       
     } catch (error) {
       console.error('统计效率失败:', error);
     } finally {
       this.loading = false;
-      // 计算完成后应用筛选
+      this.calculatingNewTasks = false;
       this.applyFilters();
-      
-      // 自动确认7个工作日前的任务（静默模式，不显示提示）
-      // 使用 setTimeout 避免阻塞 UI，并在下一个事件循环中执行
-      setTimeout(() => {
-        this.autoConfirmOldTasks(true).catch(err => {
-          console.error('自动确认任务失败:', err);
-        });
-      }, 100);
     }
+  }
+
+  /** 表格已经显示后再保存，保存完成再自动确认。 */
+  private persistNewEfficiencyResults(): void {
+    void this.saveEfficiencySnapshotsToBackend()
+      .catch(err => console.error('保存效率结果失败:', err))
+      .finally(() => {
+        setTimeout(() => {
+          this.autoConfirmOldTasks(true).catch(confirmError => {
+            console.error('自动确认任务失败:', confirmError);
+          });
+        }, 100);
+      });
   }
 
   async calculateEfficiency() {
@@ -2009,193 +2316,46 @@ export class EfficiencyCalcPage implements OnInit {
     try {
       const base = this.getApiBase();
       
-      // 获取所有任务
-      const tasksResponse = await this.http.get<any>(`${base}/api/tasks`).toPromise();
-      if (!tasksResponse) {
-        alert('获取任务信息失败');
-        return;
-      }
+      const allTasks = await this.fetchTasksForEfficiency();
+      const confirmedDataMap = await this.loadConfirmedTasksDataFromDatabase(allTasks);
+      confirmedDataMap.forEach((_rows, key) => this.confirmedTasks.add(key));
+      this.confirmedTasksCount = this.confirmedTasks.size;
       
-      const allTasks: Task[] = tasksResponse || [];
-      
-      
-      // 筛选今天以前已完成指定阶段的任务
+      // 已确认阶段不进入待计算列表
       const completedTasks = this.filterCompletedTasksByPhase(allTasks, this.selectedPhase);
+      const phaseConfirmedRows: EfficiencyData[] = [];
+      confirmedDataMap.forEach((rows, key) => {
+        const phase = key.slice(key.indexOf('_') + 1);
+        if (phase === this.selectedPhase) {
+          phaseConfirmedRows.push(...rows);
+        }
+      });
       
-      if (completedTasks.length === 0) {
+      if (completedTasks.length === 0 && phaseConfirmedRows.length === 0) {
         alert(`没有找到已完成${this.getPhaseDisplayName(this.selectedPhase)}的任务`);
         this.loading = false;
         return;
       }
       
-      // 加载已确认任务的缓存数据
-      const savedConfirmedData = this.loadConfirmedTasksData();
-      const confirmedDataMap = new Map<string, EfficiencyData[]>();
+      this.efficiencyData = [...phaseConfirmedRows];
       
-      // 从内存中获取已确认任务的数据
-      if (this.efficiencyData.length > 0) {
-        this.efficiencyData.forEach(data => {
-          const key = this.getTaskConfirmKey(data.task.id, data.phase);
-          if (this.confirmedTasks.has(key)) {
-            if (!confirmedDataMap.has(key)) {
-              confirmedDataMap.set(key, []);
-            }
-            confirmedDataMap.get(key)!.push(data);
-          }
-        });
+      const unconfirmedTasks = completedTasks.filter(task => {
+        const key = this.getTaskConfirmKey(task.id, this.selectedPhase);
+        return !this.confirmedTasks.has(key);
+      });
+
+      if (phaseConfirmedRows.length > 0) {
+        this.loading = false;
+        this.calculatingNewTasks = unconfirmedTasks.length > 0;
+        this.applyFilters();
       }
       
-      // 从 localStorage 加载已确认任务的数据
-      Object.keys(savedConfirmedData).forEach(key => {
-        if (!confirmedDataMap.has(key) && this.confirmedTasks.has(key)) {
-          confirmedDataMap.set(key, savedConfirmedData[key]);
-        }
-      });
-      
-      // 分离已确认和未确认的任务
-      const confirmedTasks: Task[] = [];
-      const unconfirmedTasks: Task[] = [];
-      
-      completedTasks.forEach(task => {
-        const key = this.getTaskConfirmKey(task.id, this.selectedPhase);
-        if (this.confirmedTasks.has(key) && confirmedDataMap.has(key)) {
-          confirmedTasks.push(task);
-        } else {
-          unconfirmedTasks.push(task);
-        }
-      });
-      
-      
-      // 初始化效率数据数组
-      this.efficiencyData = [];
-      
-      // 直接使用已确认任务的缓存数据
-      confirmedTasks.forEach(task => {
-        const key = this.getTaskConfirmKey(task.id, this.selectedPhase);
-        const cachedData = confirmedDataMap.get(key);
-        if (cachedData) {
-          this.efficiencyData.push(...cachedData);
-          
-        }
-      });
-      
-      // 只对未确认的任务进行API调用和计算（使用分批并行处理优化性能）
       if (unconfirmedTasks.length > 0) {
-        // 分批处理，每批15个任务并行处理，避免浏览器并发限制和服务器压力过大
-        const batchSize = 15;
-        const batches: Task[][] = [];
-        for (let i = 0; i < unconfirmedTasks.length; i += batchSize) {
-          batches.push(unconfirmedTasks.slice(i, i + batchSize));
+        if (phaseConfirmedRows.length > 0) {
+          this.loading = false;
+          this.calculatingNewTasks = true;
         }
-        
-        
-        // 逐批处理
-        for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-          const batch = batches[batchIndex];
-          
-          // 并行处理当前批次的所有任务
-          const batchPromises = batch.map(async (task) => {
-          try {
-            // 获取任务负责人ID
-            let taskAssigneeId: number | null = null;
-            if (this.selectedPhase === 'machining' && task.machining_assignee) {
-              taskAssigneeId = task.machining_assignee;
-            } else if (this.selectedPhase === 'electrical' && task.electrical_assignee) {
-              taskAssigneeId = task.electrical_assignee;
-            } else if (this.selectedPhase === 'pre_assembly' && task.pre_assembly_assignee) {
-              taskAssigneeId = task.pre_assembly_assignee;
-            } else if (this.selectedPhase === 'post_assembly' && task.post_assembly_assignee) {
-              taskAssigneeId = task.post_assembly_assignee;
-            } else if (this.selectedPhase === 'debugging' && task.debugging_assignee) {
-              taskAssigneeId = task.debugging_assignee;
-            }
-            
-            // 如果阶段负责人为空，跳过此任务
-            if (!taskAssigneeId) {
-              return [];
-            }
-            
-            // 并行获取三个API的数据
-            const [workReportsResponse, exceptionResponse, attendanceResponse] = await Promise.all([
-              this.http.get<any>(`${base}/api/work-reports/by-task/${task.id}`).toPromise().catch(err => {
-                console.error(`获取任务${task.id}的报工记录失败:`, err);
-                return [];
-              }),
-              this.http.get<any>(`${base}/api/exception-reports/by-task/${task.id}`).toPromise().catch(err => {
-                console.error(`获取任务${task.id}的异常报告失败:`, err);
-                return [];
-              }),
-              (async () => {
-                // 获取阶段时间范围内的考勤记录
-                const phaseStartTime = this.getPhaseStartTime(task, this.selectedPhase);
-                const phaseEndTime = this.getPhaseEndTime(task, this.selectedPhase);
-                
-                if (phaseStartTime && phaseEndTime) {
-                  // 计算阶段时间范围（转换为日期格式）
-                  const startLocal = new Date(phaseStartTime);
-                  const endLocal = new Date(phaseEndTime);
-                  const startDate = `${startLocal.getFullYear()}-${String(startLocal.getMonth() + 1).padStart(2, '0')}-${String(startLocal.getDate()).padStart(2, '0')}`;
-                  const endDate = `${endLocal.getFullYear()}-${String(endLocal.getMonth() + 1).padStart(2, '0')}-${String(endLocal.getDate()).padStart(2, '0')}`;
-                  
-                  // 构建API URL，只有当taskAssigneeId不为null时才添加userId参数
-                  let apiUrl = `${base}/api/daily-attendance?start=${startDate}&end=${endDate}&pageSize=1000`;
-                  if (taskAssigneeId !== null) {
-                    apiUrl += `&userId=${taskAssigneeId}`;
-                  }
-                  
-                  try {
-                    const response = await this.http.get<any>(apiUrl).toPromise();
-                    return response?.list || [];
-                  } catch (err) {
-                    console.error(`获取任务${task.id}的考勤记录失败:`, err);
-                    return [];
-                  }
-                }
-                return [];
-              })()
-            ]);
-            
-            const workReports: WorkReport[] = workReportsResponse || [];
-            const rawExceptionReports = exceptionResponse || [];
-            
-            // 直接使用后端返回的阶段信息，不再用当前选择的阶段兜底
-            const exceptionReports: ExceptionReport[] = rawExceptionReports.map((report: any) => ({
-              ...report,
-              // 直接使用后端返回的阶段信息，不做前端兜底
-              phase: report.phase ?? ''
-            }));
-            
-            const allAttendanceRecords: any[] = attendanceResponse || [];
-            
-            
-            // 统计该任务的效率
-            const taskEfficiencyData = await this.calculateTaskEfficiencyWithAttendance(
-              task, workReports, exceptionReports, allAttendanceRecords, this.selectedPhase
-            );
-            return taskEfficiencyData;
-          } catch (error) {
-            console.error(`统计任务 ${task.id} 效率失败:`, error);
-            return [];
-          }
-        });
-        
-        // 等待当前批次所有任务完成（使用 allSettled 避免部分失败导致全部失败）
-        const batchResults = await Promise.allSettled(batchPromises);
-        
-        // 处理批次结果
-        batchResults.forEach((result: PromiseSettledResult<EfficiencyData[]>, index: number) => {
-          if (result.status === 'fulfilled') {
-            this.efficiencyData.push(...result.value);
-          } else {
-            const task = batch[index];
-            console.error(`批次中任务 ${task?.id} 处理失败:`, result.reason);
-          }
-        });
-        
-        // 移除延迟，加快处理速度
-        // 批次之间不再添加延迟，连续处理以提高性能
-      }
-      } else {
+        await this.calculatePhaseTasksInBatches(base, unconfirmedTasks, this.selectedPhase);
       }
       
       
@@ -2215,13 +2375,16 @@ export class EfficiencyCalcPage implements OnInit {
         this.efficiencyData = Array.from(uniqueDataMap.values());
       }
 
-      await this.saveExceptionEffectiveHoursToBackend();
+      this.applyFilters();
+      void this.saveExceptionEffectiveHoursToBackend();
       
     } catch (error) {
       console.error('统计效率失败:', error);
       alert('统计效率失败: ' + (error instanceof Error ? error.message : String(error)));
     } finally {
       this.loading = false;
+      this.calculatingNewTasks = false;
+      this.applyFilters();
     }
   }
 
@@ -2295,7 +2458,12 @@ export class EfficiencyCalcPage implements OnInit {
     workReports: WorkReport[], 
     exceptionReports: ExceptionReport[], 
     allAttendanceRecords: any[],
-    targetPhase?: string
+    targetPhase?: string,
+    preloaded?: {
+      skipApprovedFetch?: boolean;
+      pausePeriods?: Array<{ start: Date; end: Date }>;
+      assistReports?: any[];
+    }
   ): Promise<EfficiencyData[]> {
     const efficiencyMap = new Map<string, EfficiencyData>();
     
@@ -2331,7 +2499,7 @@ export class EfficiencyCalcPage implements OnInit {
     
     // 获取已批准的异常报告
     let approvedExceptionReports: ExceptionReport[] = [];
-    if (taskAssigneeId && phaseStartTime && phaseEndTime) {
+    if (!preloaded?.skipApprovedFetch && taskAssigneeId && phaseStartTime && phaseEndTime) {
       try {
         approvedExceptionReports = await this.loadApprovedExceptionReports(
           task.id, 
@@ -2431,13 +2599,15 @@ export class EfficiencyCalcPage implements OnInit {
     }
 
     // 加载暂停区间（用于从有效工时中扣减暂停时段）
-    const pausePeriods = await this.loadPausePeriodsForPhase(
-      task.id,
-      phase,
-      taskAssigneeId,
-      phaseStartTime,
-      phaseEndTime
-    );
+    const pausePeriods = preloaded?.pausePeriods
+      ? preloaded.pausePeriods
+      : await this.loadPausePeriodsForPhase(
+          task.id,
+          phase,
+          taskAssigneeId,
+          phaseStartTime,
+          phaseEndTime
+        );
     
     // 计算实际出勤时间（使用完整的作息+加班+请假+异常逻辑）
     const workHoursResult = await this.calculateActualWorkHoursWithShifts(
@@ -2592,8 +2762,8 @@ export class EfficiencyCalcPage implements OnInit {
     }
     
     // 查询协助记录（该用户在该阶段时间范围内协助其他任务/其他阶段的记录）
-    let assistReports: any[] = [];
-    try {
+    let assistReports: any[] = preloaded?.assistReports ? [...preloaded.assistReports] : [];
+    if (!preloaded?.assistReports) try {
       const base = this.getApiBase();
       const startDateStr = TimeUtils.getLocalDateString(new Date(phaseStartTime));
       const endDateStr = TimeUtils.getLocalDateString(new Date(phaseEndTime));
@@ -2783,59 +2953,26 @@ export class EfficiencyCalcPage implements OnInit {
 
   // 批量加载标准工时（在计算效率之前调用）
   private async loadStandardHoursForTasks(tasks: Task[]): Promise<void> {
-    // 清空缓存
     this.standardHoursCache.clear();
-    
-    // 收集所有需要查询的产品型号（保留原始大小写用于API查询，但缓存键使用大写）
-    const productModels = new Set<string>();
-    const modelMap = new Map<string, string>(); // 大写 -> 原始值
+    const neededModels = new Set<string>();
     tasks.forEach(task => {
-      if (task.product_model && task.product_model.trim()) {
-        const originalModel = task.product_model.trim();
-        const upperModel = originalModel.toUpperCase();
-        productModels.add(upperModel);
-        // 保存原始值，用于API查询（后端会做大小写不敏感匹配）
-        if (!modelMap.has(upperModel)) {
-          modelMap.set(upperModel, originalModel);
-        }
-      }
+      const model = task.product_model?.trim();
+      if (model) neededModels.add(model.toUpperCase());
     });
-
-    if (productModels.size === 0) {
-      return;
-    }
+    if (neededModels.size === 0) return;
 
     try {
       const base = this.getApiBase();
-      // 批量查询所有产品型号的标准工时
-      const promises = Array.from(productModels).map(async (upperModel) => {
-        try {
-          // 使用原始值查询（后端会做大小写不敏感匹配）
-          const originalModel = modelMap.get(upperModel) || upperModel;
-          const response: any = await this.http.get<any>(
-            `${base}/api/product-standard-hours?productModel=${encodeURIComponent(originalModel)}`
-          ).toPromise();
-          
-          if (response) {
-            // 缓存各阶段的标准工时（使用大写作为键，确保匹配时一致）
-            const machining = response.machining_hours || 0;
-            const electrical = response.electrical_hours || 0;
-            const preAssembly = response.pre_assembly_hours || 0;
-            const postAssembly = response.post_assembly_hours || 0;
-            const debugging = response.debugging_hours || 0;
-            
-            this.standardHoursCache.set(`${upperModel}_machining`, machining);
-            this.standardHoursCache.set(`${upperModel}_electrical`, electrical);
-            this.standardHoursCache.set(`${upperModel}_pre_assembly`, preAssembly);
-            this.standardHoursCache.set(`${upperModel}_post_assembly`, postAssembly);
-            this.standardHoursCache.set(`${upperModel}_debugging`, debugging);
-          }
-        } catch (error) {
-          console.error(`查询产品型号 ${upperModel} 的标准工时失败:`, error);
-        }
+      const rows = await this.http.get<any[]>(`${base}/api/product-standard-hours`).toPromise();
+      (rows || []).forEach(response => {
+        const upperModel = String(response?.product_model || '').trim().toUpperCase();
+        if (!upperModel || !neededModels.has(upperModel)) return;
+        this.standardHoursCache.set(`${upperModel}_machining`, response.machining_hours || 0);
+        this.standardHoursCache.set(`${upperModel}_electrical`, response.electrical_hours || 0);
+        this.standardHoursCache.set(`${upperModel}_pre_assembly`, response.pre_assembly_hours || 0);
+        this.standardHoursCache.set(`${upperModel}_post_assembly`, response.post_assembly_hours || 0);
+        this.standardHoursCache.set(`${upperModel}_debugging`, response.debugging_hours || 0);
       });
-
-      await Promise.all(promises);
     } catch (error) {
       console.error('批量加载标准工时失败:', error);
     }

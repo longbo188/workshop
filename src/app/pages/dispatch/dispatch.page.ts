@@ -28,6 +28,9 @@ export class DispatchPage implements OnInit {
     private router = inject(Router);
     
   isLoading = true;
+  tasksLoadingMore = false;
+  private tasksFullyLoaded = false;
+  private taskLoadGeneration = 0;
   errorMsg = '';
 
   users: any[] = [];
@@ -297,58 +300,118 @@ export class DispatchPage implements OnInit {
     }
   }
 
-  async loadData(options?: { includeCompleted?: boolean }) {
-    const includeCompleted = options?.includeCompleted ?? this.tasksIncludeCompleted;
+  async loadData(_options?: { includeCompleted?: boolean }) {
+    const generation = ++this.taskLoadGeneration;
+    this.isLoading = true;
+    this.tasksLoadingMore = false;
+    this.tasksFullyLoaded = false;
+    this.tasks = [];
+    this.frozenCount = 0;
+    this.clearAllCache();
     try {
-      this.isLoading = true;
       this.errorMsg = '';
-      const tasksUrl = `${environment.apiBase}/api/tasks?includeCompleted=${includeCompleted ? '1' : '0'}&freezeDays=${this.frozenTaskDays}`;
-      const [users, tasks] = await Promise.all([
-        this.http.get<any[]>(`${environment.apiBase}/api/users`).toPromise(),
-        this.http.get<any[]>(tasksUrl).toPromise(),
+      this.tasksIncludeCompleted = true;
+      const usersPromise = this.http.get<any[]>(`${environment.apiBase}/api/users`).toPromise();
+      const activeUrl = `${environment.apiBase}/api/tasks?includeCompleted=0&freezeDays=${this.frozenTaskDays}`;
+      const [users, activeResponse] = await Promise.all([
+        usersPromise,
+        this.http.get<any>(activeUrl).toPromise()
       ]);
-      this.tasksIncludeCompleted = includeCompleted;
+      if (generation !== this.taskLoadGeneration) return;
       this.users = users || [];
       this.managerUsers = this.users.filter(u => u.role === 'manager');
-      const loadedTasks = tasks || [];
-      await this.restoreFrozenRows(loadedTasks);
-      this.frozenCount = loadedTasks.reduce((count, task) => count + (task.frozen ? 1 : 0), 0);
-      this.frozenListVersion += 1;
-      this._frozenSorted = null;
-      this._frozenSortedKey = '';
-      this.tasks = loadedTasks.map(task => this.decorateTask(task));
-      
-      // 清除所有缓存，因为任务数据已更新
-      this.clearAllCache();
-      
-      // 获取部门列表（从 worker + supervisor 两种角色中提取，去重并按指定顺序排序）
-      const preferredOrder = ['机加', '电控', '总装前段', '总装后段', '调试'];
-      const workerAndSupervisorUsers = this.users.filter(
-        u => u.role === 'worker' || u.role === 'supervisor'
-      );
-      this.departments = [...new Set(workerAndSupervisorUsers
-        .map(user => user.department)
-        .filter(dept => dept && dept.trim() !== '')
-        .filter(dept => dept !== 'IT部门' && dept !== '生产部')
-      )].sort((a, b) => {
-        const ia = preferredOrder.indexOf(a);
-        const ib = preferredOrder.indexOf(b);
-        const sa = ia === -1 ? Number.MAX_SAFE_INTEGER : ia;
-        const sb = ib === -1 ? Number.MAX_SAFE_INTEGER : ib;
-        if (sa !== sb) return sa - sb;
-        return a.localeCompare(b);
-      });
-      
-      // 获取组列表（去重并排序）
-      this.availableGroups = [...new Set(this.users
-        .map(user => user.user_group)
-        .filter(group => group && group.trim() !== '')
-      )].sort();
-    } catch (e: any) {
-      this.errorMsg = e?.error?.error || e?.message || '加载失败';
-    } finally {
+      this.refreshDispatchDirectories();
+
+      const activeTasks: any[] = Array.isArray(activeResponse) ? activeResponse : (activeResponse?.list || []);
+      await this.restoreFrozenRows(activeTasks, false);
+      if (generation !== this.taskLoadGeneration) return;
+      this.tasks = activeTasks.map(task => this.decorateTask(task));
+      this.markTaskListUpdated();
       this.isLoading = false;
+      this.tasksLoadingMore = true;
+
+      let afterOffset = 0;
+      while (generation === this.taskLoadGeneration) {
+        const completedUrl =
+          `${environment.apiBase}/api/tasks?status=completed&freezeDays=${this.frozenTaskDays}` +
+          `&paged=1&pageSize=${this.pageSize}&afterOffset=${afterOffset}` +
+          `&sortField=${this.sortField}&sortOrder=${this.sortOrder}`;
+        const response: any = await this.http.get<any>(completedUrl).toPromise();
+        if (generation !== this.taskLoadGeneration) return;
+
+        if (Array.isArray(response)) {
+          for (let index = 0; index < response.length; index += this.pageSize) {
+            if (generation !== this.taskLoadGeneration) return;
+            const slice = response.slice(index, index + this.pageSize);
+            await this.restoreFrozenRows(slice, false);
+            if (generation !== this.taskLoadGeneration) return;
+            this.tasks = this.tasks.concat(slice.map(task => this.decorateTask(task)));
+            this.markTaskListUpdated();
+            await this.yieldToUi();
+          }
+          break;
+        }
+
+        const pageTasks: any[] = response?.list || [];
+        if (pageTasks.length) {
+          await this.restoreFrozenRows(pageTasks, false);
+          if (generation !== this.taskLoadGeneration) return;
+          this.tasks = this.tasks.concat(pageTasks.map(task => this.decorateTask(task)));
+          this.markTaskListUpdated();
+        }
+        if (!response?.hasMore || !pageTasks.length) break;
+        afterOffset = Number(response?.nextOffset || 0);
+        await this.yieldToUi();
+      }
+      if (generation === this.taskLoadGeneration) {
+        this.tasksFullyLoaded = true;
+        this.pruneFrozenRowCache();
+      }
+    } catch (e: any) {
+      if (generation === this.taskLoadGeneration) {
+        this.errorMsg = e?.error?.error || e?.message || '加载失败';
+      }
+    } finally {
+      if (generation === this.taskLoadGeneration) {
+        this.isLoading = false;
+        this.tasksLoadingMore = false;
+      }
     }
+  }
+
+  private markTaskListUpdated(): void {
+    this.frozenCount = this.tasks.reduce((count, task) => count + (task.frozen ? 1 : 0), 0);
+    this.frozenListVersion += 1;
+    this._frozenSorted = null;
+    this._frozenSortedKey = '';
+    this.clearAllCache();
+  }
+
+  private yieldToUi(): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, 0));
+  }
+
+  private refreshDispatchDirectories(): void {
+    const preferredOrder = ['机加', '电控', '总装前段', '总装后段', '调试'];
+    const workerAndSupervisorUsers = this.users.filter(
+      u => u.role === 'worker' || u.role === 'supervisor'
+    );
+    this.departments = [...new Set(workerAndSupervisorUsers
+      .map(user => user.department)
+      .filter(dept => dept && dept.trim() !== '')
+      .filter(dept => dept !== 'IT部门' && dept !== '生产部')
+    )].sort((a, b) => {
+      const ia = preferredOrder.indexOf(a);
+      const ib = preferredOrder.indexOf(b);
+      const sa = ia === -1 ? Number.MAX_SAFE_INTEGER : ia;
+      const sb = ib === -1 ? Number.MAX_SAFE_INTEGER : ib;
+      if (sa !== sb) return sa - sb;
+      return a.localeCompare(b);
+    });
+    this.availableGroups = [...new Set(this.users
+      .map(user => user.user_group)
+      .filter(group => group && group.trim() !== '')
+    )].sort();
   }
 
   private frozenRowKey(task: any): string {
@@ -396,7 +459,7 @@ export class DispatchPage implements OnInit {
    * 结束超过 14 天的任务整行沿用上次快照。
    * 更新时间、订单状态或阶段完成时间变了，才用本次查到的新行并补查协助人员。
    */
-  private async restoreFrozenRows(tasks: any[]): Promise<void> {
+  private async restoreFrozenRows(tasks: any[], prune = true): Promise<void> {
     this.readFrozenRowCache();
     const missing = new Set<number>();
     const frozenIds = new Set<string>();
@@ -437,12 +500,30 @@ export class DispatchPage implements OnInit {
       }
     }
 
+    if (!prune) {
+      if (frozenIds.size > 0) this.writeFrozenRowCache();
+      return;
+    }
     for (const id of Object.keys(this.frozenRowMemory)) {
       if (!frozenIds.has(id)) delete this.frozenRowMemory[id];
     }
     if (frozenIds.size > 0) {
       this.writeFrozenRowCache();
     }
+  }
+
+  private pruneFrozenRowCache(): void {
+    const frozenIds = new Set(
+      (this.tasks || []).filter(task => task?.frozen).map(task => String(task.id))
+    );
+    let changed = false;
+    for (const id of Object.keys(this.frozenRowMemory)) {
+      if (!frozenIds.has(id)) {
+        delete this.frozenRowMemory[id];
+        changed = true;
+      }
+    }
+    if (changed || frozenIds.size > 0) this.writeFrozenRowCache();
   }
 
   // 获取当前应判定的阶段（新逻辑：机加未完成→机加和电控并行，机加完成→总装前段，前段完成→总装后段）
@@ -695,8 +776,11 @@ export class DispatchPage implements OnInit {
   
   // 切换排序
   onSortChange() {
-    // 清除缓存，触发重新计算
     this.clearAllCache();
+    if (!this.tasksFullyLoaded) {
+      this.currentPage = 1;
+      this.loadData();
+    }
   }
   
   // 切换排序字段和方向（点击列头时调用）
@@ -709,8 +793,11 @@ export class DispatchPage implements OnInit {
       this.sortField = field;
       this.sortOrder = 'asc';
     }
-    // 清除缓存，触发重新计算
     this.clearAllCache();
+    if (!this.tasksFullyLoaded) {
+      this.currentPage = 1;
+      this.loadData();
+    }
   }
 
   // 结束超过 14 天的任务只排序一次，筛选变化时按原顺序过滤
@@ -1404,12 +1491,8 @@ export class DispatchPage implements OnInit {
     this.syncCompletedTasks();
   }
 
-  /** 只有筛选「已完成」时才把已完成任务拉回来 */
+  /** 全部任务已包含已完成记录，状态筛选在本地完成，不再重新请求。 */
   private syncCompletedTasks() {
-    const wantsCompleted = this.selectedStatus === 'completed' || this.tableFilters?.status === 'completed';
-    if (wantsCompleted !== this.tasksIncludeCompleted) {
-      this.loadData({ includeCompleted: wantsCompleted });
-    }
   }
 
   // 清除所有筛选（包括视图和阶段筛选）

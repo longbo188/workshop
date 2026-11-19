@@ -334,10 +334,10 @@
   </ion-card>
 
   <!-- 加载状态 -->
-  <ion-card *ngIf="loading">
+  <ion-card *ngIf="loading || calculatingNewTasks">
     <ion-card-content class="ion-text-center">
       <ion-spinner></ion-spinner>
-      <p>正在统计效率...</p>
+      <p>{{ calculatingNewTasks && !loading ? '已确认结果已显示，正在计算新任务...' : '正在统计效率...' }}</p>
     </ion-card-content>
   </ion-card>
 

@@ -185,6 +185,7 @@
           <ion-badge color="primary" style="margin-left: 8px;">
             {{ getDisplayTasks().length }}
           </ion-badge>
+          <span *ngIf="tasksLoadingMore" style="margin-left: 8px; font-size: 13px; color: #64748b;">正在加载后续页...</span>
         </ion-card-title>
       </ion-card-header>
       <ion-card-content>

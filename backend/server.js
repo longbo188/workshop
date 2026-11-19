@@ -177,7 +177,7 @@ async function getProductionBoardMonthStandardMachineCount(connection, yearMonth
       ), 0) AS total_hours
      FROM tasks t
      LEFT JOIN product_standard_hours h
-       ON UPPER(TRIM(h.product_model)) = UPPER(TRIM(t.product_model))
+       ON TRIM(h.product_model) COLLATE utf8mb4_general_ci = TRIM(t.product_model) COLLATE utf8mb4_general_ci
      WHERE t.post_assembly_complete_time IS NOT NULL
        AND DATE_FORMAT(t.post_assembly_complete_time, '%Y-%m') = ?`,
     [yearMonth]
@@ -725,13 +725,15 @@ app.get('/api/tasks', async (req, res) => {
   try {
     connection = await mysql.createConnection(dbConfig);
     const includeCompleted = String(req.query.includeCompleted ?? '1') !== '0';
+    const includeFrozen = String(req.query.includeFrozen ?? '0') === '1';
     const status = typeof req.query.status === 'string' ? req.query.status.trim() : '';
     const freezeDaysRaw = parseInt(String(req.query.freezeDays ?? ''), 10);
     const freezeDays = Number.isFinite(freezeDaysRaw) && freezeDaysRaw > 0 ? freezeDaysRaw : 0;
     const freezeBeforeMs = freezeDays > 0 ? Date.now() - freezeDays * 24 * 60 * 60 * 1000 : 0;
+    const keepFrozenCompleted = !includeCompleted && includeFrozen && freezeDays > 0;
     const where = [];
     const params = [];
-    if (!includeCompleted) {
+    if (!includeCompleted && !keepFrozenCompleted) {
       where.push(`(t.status IS NULL OR t.status <> 'completed')`);
     }
     if (status) {
@@ -739,7 +741,7 @@ app.get('/api/tasks', async (req, res) => {
       params.push(status);
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const [rows] = await connection.execute(`
+    const selectSql = `
       SELECT t.*, 
              u1.name as machining_assignee_name,
              u2.name as electrical_assignee_name,
@@ -769,22 +771,77 @@ app.get('/api/tasks', async (req, res) => {
         JOIN work_reports w ON w.id = x.last_id
       ) wr ON wr.task_id = t.id
       ${whereSql}
-      ORDER BY t.created_at DESC
-    `, params);
+    `;
 
-    const liveIds = [];
-    for (const task of rows) {
-      task.frozen = isFrozenTask(task, freezeBeforeMs);
-      if (!task.frozen) liveIds.push(task.id);
+    const includeAssistants = String(req.query.includeAssistants ?? '1') !== '0';
+    const paged = String(req.query.paged || '') === '1';
+    let visibleRows = [];
+    let hasMore = false;
+    let nextOffset = 0;
+    if (!paged) {
+      const [rows] = await connection.execute(`${selectSql} ORDER BY t.created_at DESC`, params);
+      for (const task of rows) {
+        task.frozen = isFrozenTask(task, freezeBeforeMs);
+      }
+      visibleRows = keepFrozenCompleted
+        ? rows.filter((task) => String(task.status || '') !== 'completed' || task.frozen)
+        : rows;
+    } else {
+      const pageSizeRaw = parseInt(String(req.query.pageSize ?? ''), 10);
+      const pageSize = Number.isFinite(pageSizeRaw) ? Math.min(200, Math.max(1, pageSizeRaw)) : 50;
+      const afterRaw = parseInt(String(req.query.afterOffset ?? ''), 10);
+      let sqlOffset = Number.isFinite(afterRaw) && afterRaw > 0 ? afterRaw : 0;
+      const sortField = String(req.query.sortField || 'production_time');
+      const sortColumn = sortField === 'promised_completion_time'
+        ? 't.promised_completion_time'
+        : (sortField === 'created_at' || sortField === 'none')
+          ? 't.created_at'
+          : 't.production_time';
+      const sortOrder = String(req.query.sortOrder || 'desc').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+      const orderSql = ` ORDER BY (${sortColumn} IS NULL) ASC, ${sortColumn} ${sortOrder}, t.id DESC`;
+      const chunkSize = 100;
+      while (visibleRows.length < pageSize) {
+        const [chunk] = await connection.query(
+          `${selectSql}${orderSql} LIMIT ${chunkSize} OFFSET ${sqlOffset}`,
+          params
+        );
+        if (!chunk.length) break;
+        let consumed = 0;
+        for (const task of chunk) {
+          if (visibleRows.length >= pageSize) break;
+          consumed += 1;
+          task.frozen = isFrozenTask(task, freezeBeforeMs);
+          const completed = String(task.status || '') === 'completed';
+          if (!keepFrozenCompleted || !completed || task.frozen) visibleRows.push(task);
+        }
+        sqlOffset += consumed;
+        if (consumed < chunk.length) {
+          hasMore = true;
+          break;
+        }
+        if (chunk.length < chunkSize) break;
+        if (visibleRows.length >= pageSize) hasMore = true;
+      }
+      nextOffset = sqlOffset;
     }
-    const assistantsByTask = await loadAssistantsByTaskIds(connection, liveIds);
-    const enrichedTasks = rows.map((task) => ({
+    const liveIds = [];
+    for (const task of visibleRows) {
+      if (includeAssistants && !task.frozen) liveIds.push(task.id);
+    }
+    const assistantsByTask = includeAssistants
+      ? await loadAssistantsByTaskIds(connection, liveIds)
+      : new Map();
+    const enrichedTasks = visibleRows.map((task) => ({
       ...task,
-      assistants: task.frozen ? [] : (assistantsByTask.get(task.id) || [])
+      assistants: !includeAssistants || task.frozen ? [] : (assistantsByTask.get(task.id) || [])
     }));
 
     await connection.end();
-    res.json(enrichedTasks);
+    if (paged) {
+      res.json({ list: enrichedTasks, hasMore, nextOffset });
+    } else {
+      res.json(enrichedTasks);
+    }
   } catch (error) {
     if (connection) {
       try { await connection.end(); } catch (e) { /* ignore */ }
@@ -1285,6 +1342,46 @@ app.post('/api/work-reports', async (req, res) => {
   } catch (error) {
     console.error('创建报工记录失败:', error);
     res.status(500).json({ success: false, message: '创建报工记录失败' });
+  }
+});
+
+// 员工个人效率：只返回该员工作为阶段负责人的任务，不查报工汇总、不查协助人
+app.get('/api/tasks/user/:userId/efficiency', async (req, res) => {
+  let connection;
+  try {
+    const userId = parseInt(String(req.params.userId), 10);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(400).json({ error: '无效的用户' });
+    }
+    connection = await mysql.createConnection(dbConfig);
+    const [rows] = await connection.execute(
+      `
+      SELECT t.*,
+             u1.name as machining_assignee_name,
+             u2.name as electrical_assignee_name,
+             u3.name as pre_assembly_assignee_name,
+             u4.name as post_assembly_assignee_name,
+             u5.name as debugging_assignee_name
+      FROM tasks t
+      LEFT JOIN users u1 ON t.machining_assignee = u1.id
+      LEFT JOIN users u2 ON t.electrical_assignee = u2.id
+      LEFT JOIN users u3 ON t.pre_assembly_assignee = u3.id
+      LEFT JOIN users u4 ON t.post_assembly_assignee = u4.id
+      LEFT JOIN users u5 ON t.debugging_assignee = u5.id
+      WHERE t.machining_assignee = ?
+         OR t.electrical_assignee = ?
+         OR t.pre_assembly_assignee = ?
+         OR t.post_assembly_assignee = ?
+         OR t.debugging_assignee = ?
+      `,
+      [userId, userId, userId, userId, userId]
+    );
+    await connection.end();
+    return res.json(rows || []);
+  } catch (error) {
+    if (connection) await connection.end();
+    console.error('获取员工效率任务失败:', error);
+    return res.status(500).json({ error: '获取员工效率任务失败: ' + error.message });
   }
 });
 
@@ -1881,6 +1978,51 @@ app.get('/api/work-reports/by-task/:taskId', async (req, res) => {
     await connection.end();
     res.json(rows);
   } catch (error) {
+    res.status(500).json({ error: '获取任务历史失败：' + error.message });
+  }
+});
+
+function normalizeIdList(ids, limit = 5000) {
+  if (!Array.isArray(ids)) return [];
+  return [...new Set(ids.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))].slice(0, limit);
+}
+
+// 效率计算按任务编号一次取回报工，避免每个阶段各请求一次
+app.post('/api/work-reports/by-tasks', async (req, res) => {
+  let connection;
+  try {
+    const ids = normalizeIdList(req.body?.ids);
+    if (!ids.length) {
+      res.json({});
+      return;
+    }
+    connection = await mysql.createConnection(dbConfig);
+    const payload = {};
+    ids.forEach((id) => { payload[String(id)] = []; });
+    const chunkSize = 400;
+    for (let i = 0; i < ids.length; i += chunkSize) {
+      const chunk = ids.slice(i, i + chunkSize);
+      const placeholders = chunk.map(() => '?').join(',');
+      const [rows] = await connection.execute(`
+        SELECT wr.*, u.name as user_name
+        FROM work_reports wr
+        JOIN users u ON wr.user_id = u.id
+        WHERE wr.task_id IN (${placeholders})
+        ORDER BY wr.id DESC
+      `, chunk);
+      for (const row of rows) {
+        const key = String(row.task_id);
+        if (!payload[key]) payload[key] = [];
+        payload[key].push(row);
+      }
+    }
+    await connection.end();
+    res.json(payload);
+  } catch (error) {
+    if (connection) {
+      try { await connection.end(); } catch (e) { /* ignore */ }
+    }
+    console.error('批量获取报工记录失败:', error);
     res.status(500).json({ error: '获取任务历史失败：' + error.message });
   }
 });
@@ -3117,6 +3259,62 @@ app.get('/api/attendance/stats', async (req, res) => {
 
 // ============= 日考勤（小时） 独立模块 =============
 // 查询某天或区间的日考勤列表（可按用户过滤）
+// 效率计算按人一次读取已确认考勤，不生成空日期、不请求节假日
+app.post('/api/daily-attendance/confirmed-by-users', async (req, res) => {
+  let connection;
+  try {
+    const userIds = normalizeIdList(req.body?.userIds);
+    const start = String(req.body?.start || '').slice(0, 10);
+    const end = String(req.body?.end || '').slice(0, 10);
+    if (!userIds.length || !/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+      res.json({});
+      return;
+    }
+    connection = await mysql.createConnection(dbConfig);
+    const payload = {};
+    userIds.forEach((id) => { payload[String(id)] = []; });
+    const chunkSize = 400;
+    for (let i = 0; i < userIds.length; i += chunkSize) {
+      const chunk = userIds.slice(i, i + chunkSize);
+      const placeholders = chunk.map(() => '?').join(',');
+      const [rows] = await connection.execute(`
+        SELECT
+          da.id,
+          da.user_id,
+          DATE_FORMAT(da.date, '%Y-%m-%d') as date,
+          da.standard_attendance_hours,
+          COALESCE(da.overtime_hours, 0.00) as overtime_hours,
+          COALESCE(da.leave_hours, 0.00) as leave_hours,
+          da.overtime_start_time,
+          da.overtime_end_time,
+          da.leave_start_time,
+          da.leave_end_time,
+          da.is_confirmed,
+          da.actual_hours
+        FROM daily_attendance da
+        WHERE da.is_confirmed = 1
+          AND da.date >= ?
+          AND da.date <= ?
+          AND da.user_id IN (${placeholders})
+        ORDER BY da.date ASC
+      `, [start, end, ...chunk]);
+      for (const row of rows) {
+        const key = String(row.user_id);
+        if (!payload[key]) payload[key] = [];
+        payload[key].push(row);
+      }
+    }
+    await connection.end();
+    res.json(payload);
+  } catch (error) {
+    if (connection) {
+      try { await connection.end(); } catch (e) { /* ignore */ }
+    }
+    console.error('批量获取已确认考勤失败:', error);
+    res.status(500).json({ error: '获取考勤失败：' + error.message });
+  }
+});
+
 app.get('/api/daily-attendance', async (req, res) => {
   try {
     const { start, end, userId, page, pageSize } = req.query || {};
@@ -4383,6 +4581,128 @@ app.post('/api/task-efficiency', async (req, res) => {
   }
 });
 
+// 一次写入本次新算出的效率结果。已确认且本次不是确认动作的记录跳过。
+app.post('/api/task-efficiency/batch', async (req, res) => {
+  const items = Array.isArray(req.body?.items) ? req.body.items.slice(0, 2000) : [];
+  if (!items.length) {
+    return res.json({ success: true, saved: 0, skipped: 0, failed: 0 });
+  }
+
+  const convertToMySQLDateTime = (isoTimeStr) => {
+    if (!isoTimeStr) return null;
+    const date = new Date(isoTimeStr);
+    if (isNaN(date.getTime())) return null;
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  };
+
+  let connection;
+  let saved = 0;
+  let skipped = 0;
+  let failed = 0;
+  try {
+    connection = await mysql.createConnection(dbConfig);
+    for (const item of items) {
+      const taskId = Number(item?.taskId);
+      const phase = item?.phase ? String(item.phase) : '';
+      if (!Number.isInteger(taskId) || taskId <= 0 || !phase) {
+        failed++;
+        continue;
+      }
+      try {
+        const confirmedFlag = item.isConfirmed ? 1 : 0;
+        const [rows] = await connection.execute(
+          'SELECT id, is_confirmed FROM task_efficiency WHERE task_id = ? AND phase = ?',
+          [taskId, phase]
+        );
+        if (!rows || rows.length === 0) {
+          await connection.execute(
+            `
+            INSERT INTO task_efficiency (
+              task_id, phase, assignee_id,
+              standard_hours, actual_work_hours, exception_hours, assist_hours, efficiency,
+              phase_start_time, phase_end_time,
+              is_confirmed, confirmed_by, confirmed_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `,
+            [
+              taskId,
+              phase,
+              item.assigneeId || null,
+              item.standardHours != null ? item.standardHours : 0,
+              item.actualWorkHours != null ? item.actualWorkHours : 0,
+              item.exceptionHours != null ? item.exceptionHours : 0,
+              item.assistHours != null ? item.assistHours : 0,
+              item.efficiency != null ? item.efficiency : 0,
+              convertToMySQLDateTime(item.phaseStartTime),
+              convertToMySQLDateTime(item.phaseEndTime),
+              confirmedFlag,
+              confirmedFlag ? item.confirmedBy || null : null,
+              confirmedFlag ? new Date() : null
+            ]
+          );
+          saved++;
+        } else if (rows[0].is_confirmed && !confirmedFlag) {
+          skipped++;
+        } else {
+          await connection.execute(
+            `
+            UPDATE task_efficiency
+            SET
+              assignee_id = ?,
+              standard_hours = ?,
+              actual_work_hours = ?,
+              exception_hours = ?,
+              assist_hours = ?,
+              efficiency = ?,
+              phase_start_time = ?,
+              phase_end_time = ?,
+              is_confirmed = CASE WHEN ? = 1 THEN 1 ELSE is_confirmed END,
+              confirmed_by = CASE WHEN ? = 1 THEN COALESCE(confirmed_by, ?) ELSE confirmed_by END,
+              confirmed_at = CASE WHEN ? = 1 THEN COALESCE(confirmed_at, NOW()) ELSE confirmed_at END,
+              updated_at = NOW()
+            WHERE id = ?
+            `,
+            [
+              item.assigneeId || null,
+              item.standardHours != null ? item.standardHours : 0,
+              item.actualWorkHours != null ? item.actualWorkHours : 0,
+              item.exceptionHours != null ? item.exceptionHours : 0,
+              item.assistHours != null ? item.assistHours : 0,
+              item.efficiency != null ? item.efficiency : 0,
+              convertToMySQLDateTime(item.phaseStartTime),
+              convertToMySQLDateTime(item.phaseEndTime),
+              confirmedFlag,
+              confirmedFlag,
+              item.confirmedBy || null,
+              confirmedFlag,
+              rows[0].id
+            ]
+          );
+          saved++;
+        }
+      } catch (rowError) {
+        failed++;
+        console.error('批量保存单条效率失败:', taskId, phase, rowError);
+      }
+    }
+    await connection.end();
+    return res.json({ success: failed === 0, saved, skipped, failed });
+  } catch (error) {
+    if (connection) {
+      try { await connection.end(); } catch (e) { /* ignore */ }
+    }
+    console.error('批量保存任务效率快照失败:', error);
+    return res.status(500).json({ error: '保存任务效率快照失败: ' + error.message });
+  }
+});
+
 // 查询任务阶段效率结果（含是否已确认）
 // GET /api/task-efficiency?isConfirmed=1&phase=machining
 app.get('/api/task-efficiency', async (req, res) => {
@@ -4733,6 +5053,69 @@ app.get('/api/work-records', async (req, res) => {
   } catch (error) {
     console.error('获取报工记录失败:', error);
     res.status(500).json({ error: '获取报工记录失败：' + error.message, details: error.stack });
+  }
+});
+
+// 效率计算按负责人一次取回协助报工
+app.post('/api/work-records/assist-batch', async (req, res) => {
+  let connection;
+  try {
+    const userIds = normalizeIdList(req.body?.userIds);
+    const start = String(req.body?.start || '').slice(0, 10);
+    const end = String(req.body?.end || '').slice(0, 10);
+    if (!userIds.length || !/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+      res.json({});
+      return;
+    }
+    connection = await mysql.createConnection(dbConfig);
+    const payload = {};
+    userIds.forEach((id) => { payload[String(id)] = []; });
+    const chunkSize = 400;
+    const rangeEnd = end + ' 23:59:59';
+    const rangeStart = start + ' 00:00:00';
+    for (let i = 0; i < userIds.length; i += chunkSize) {
+      const chunk = userIds.slice(i, i + chunkSize);
+      const placeholders = chunk.map(() => '?').join(',');
+      let rows;
+      try {
+        [rows] = await connection.execute(`
+          SELECT wr.id, wr.task_id, t.name as task_name, wr.user_id, u.name as user_name,
+                 wr.work_type, wr.start_time, wr.end_time, wr.hours_worked,
+                 wr.quantity_completed, wr.approval_status, wr.created_at,
+                 wr.assist_start, wr.assist_end, wr.assist_phase
+          FROM work_reports wr
+          LEFT JOIN tasks t ON t.id = wr.task_id
+          LEFT JOIN users u ON u.id = wr.user_id
+          WHERE wr.work_type = 'assist'
+            AND wr.user_id IN (${placeholders})
+            AND wr.assist_start IS NOT NULL
+            AND wr.assist_start <= ?
+            AND (wr.assist_end IS NULL OR wr.assist_end >= ?)
+          ORDER BY wr.created_at DESC, wr.id DESC
+        `, [...chunk, rangeEnd, rangeStart]);
+      } catch (fieldError) {
+        const errorMsg = fieldError.message || '';
+        const errorCode = fieldError.code || '';
+        if (errorCode === 'ER_BAD_FIELD_ERROR' || errorMsg.includes('Unknown column') || errorMsg.includes('assist')) {
+          rows = [];
+        } else {
+          throw fieldError;
+        }
+      }
+      for (const row of rows || []) {
+        const key = String(row.user_id);
+        if (!payload[key]) payload[key] = [];
+        payload[key].push(row);
+      }
+    }
+    await connection.end();
+    res.json(payload);
+  } catch (error) {
+    if (connection) {
+      try { await connection.end(); } catch (e) { /* ignore */ }
+    }
+    console.error('批量获取协助记录失败:', error);
+    res.status(500).json({ error: '获取报工记录失败：' + error.message });
   }
 });
 
@@ -5319,6 +5702,45 @@ app.get('/api/tasks/:taskId/phases/:phaseKey/pause-logs', async (req, res) => {
     await connection.end();
     res.json(rows || []);
   } catch (error) {
+    res.status(500).json({ error: '查询暂停日志失败：' + error.message });
+  }
+});
+
+// 效率计算按任务一次取回暂停日志，客户端再按阶段和负责人筛选
+app.post('/api/tasks/pause-logs/by-tasks', async (req, res) => {
+  let connection;
+  try {
+    const ids = normalizeIdList(req.body?.ids);
+    if (!ids.length) {
+      res.json({});
+      return;
+    }
+    connection = await mysql.createConnection(dbConfig);
+    const payload = {};
+    ids.forEach((id) => { payload[String(id)] = []; });
+    const chunkSize = 400;
+    for (let i = 0; i < ids.length; i += chunkSize) {
+      const chunk = ids.slice(i, i + chunkSize);
+      const placeholders = chunk.map(() => '?').join(',');
+      const [rows] = await connection.execute(`
+        SELECT id, task_id, phase_key, user_id, paused_at, resumed_at, pause_note
+        FROM task_phase_pause_logs
+        WHERE task_id IN (${placeholders})
+        ORDER BY paused_at ASC
+      `, chunk);
+      for (const row of rows) {
+        const key = String(row.task_id);
+        if (!payload[key]) payload[key] = [];
+        payload[key].push(row);
+      }
+    }
+    await connection.end();
+    res.json(payload);
+  } catch (error) {
+    if (connection) {
+      try { await connection.end(); } catch (e) { /* ignore */ }
+    }
+    console.error('批量获取暂停日志失败:', error);
     res.status(500).json({ error: '查询暂停日志失败：' + error.message });
   }
 });
@@ -7197,6 +7619,56 @@ app.get('/api/exception-reports/by-task/:taskId', async (req, res) => {
     res.json(rows);
   } catch (error) {
     console.error('按任务获取异常报告失败:', error);
+    res.status(500).json({ error: '获取异常报告失败：' + error.message });
+  }
+});
+
+// 已确认任务恢复时按任务编号一次取回异常报告，避免逐条请求
+app.post('/api/exception-reports/by-tasks', async (req, res) => {
+  let connection;
+  try {
+    const ids = Array.isArray(req.body?.ids)
+      ? [...new Set(req.body.ids.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))].slice(0, 5000)
+      : [];
+    if (!ids.length) {
+      res.json({});
+      return;
+    }
+    connection = await mysql.createConnection(dbConfig);
+    const payload = {};
+    ids.forEach((id) => {
+      payload[String(id)] = [];
+    });
+    const chunkSize = 400;
+    for (let i = 0; i < ids.length; i += chunkSize) {
+      const chunk = ids.slice(i, i + chunkSize);
+      const placeholders = chunk.map(() => '?').join(',');
+      const [rows] = await connection.execute(`
+        SELECT
+          er.*,
+          t.name as task_name,
+          u.name as user_name,
+          approver.name as approver_name
+        FROM exception_reports er
+        LEFT JOIN tasks t ON er.task_id = t.id
+        LEFT JOIN users u ON er.user_id = u.id
+        LEFT JOIN users approver ON er.approved_by = approver.id
+        WHERE er.task_id IN (${placeholders})
+        ORDER BY er.submitted_at DESC
+      `, chunk);
+      for (const row of rows) {
+        const key = String(row.task_id);
+        if (!payload[key]) payload[key] = [];
+        payload[key].push(row);
+      }
+    }
+    await connection.end();
+    res.json(payload);
+  } catch (error) {
+    if (connection) {
+      try { await connection.end(); } catch (e) { /* ignore */ }
+    }
+    console.error('批量获取异常报告失败:', error);
     res.status(500).json({ error: '获取异常报告失败：' + error.message });
   }
 });
